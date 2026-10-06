@@ -29,6 +29,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma validate
+      - name: Validate phase status file
+        run: pnpm phase:validate
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm lint
