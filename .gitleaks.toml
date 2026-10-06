@@ -1,0 +1,13 @@
+# gitleaks configuration: default rules plus allowlisted local-development fixtures.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented local-development defaults (docker compose / CI service containers only)"
+paths = [
+  '''\.env\.example$''',
+  '''docker/seaweedfs/s3\.json$''',
+]
+regexes = [
+  '''postgresql://flexibx:flexibx@localhost''',
+]

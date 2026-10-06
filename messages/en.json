@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "title": "Flexibx — AI Marketing Manager",
+    "description": "An AI marketing manager that works 24/7: it understands your brand, plans your content, analyzes your results and recommends what to do next."
+  },
+  "common": {
+    "appName": "Flexibx",
+    "skipToContent": "Skip to content",
+    "language": {
+      "label": "Language",
+      "switchTo": "Switch to {language}",
+      "names": {
+        "ar": "العربية",
+        "en": "English"
+      }
+    },
+    "theme": {
+      "toggle": "Toggle light and dark theme"
+    }
+  },
+  "home": {
+    "eyebrow": "Arabic-first marketing platform",
+    "title": "An AI marketing manager that works for you 24/7",
+    "subtitle": "Flexibx builds a lasting understanding of your brand, turns it into content plans and campaigns, then learns from the results to make your next marketing better.",
+    "loopTitle": "A marketing loop that keeps improving",
+    "steps": {
+      "brand": {
+        "title": "Understand your brand",
+        "description": "The Brand Brain remembers your identity, audience and tone of voice, so you never explain your business twice."
+      },
+      "plan": {
+        "title": "Plan and create content",
+        "description": "30-day content plans, posts and ads in Arabic and English, ready for review and approval."
+      },
+      "publish": {
+        "title": "Schedule and publish",
+        "description": "A unified calendar that publishes at the right time to your social accounts."
+      },
+      "improve": {
+        "title": "Analyze and improve",
+        "description": "Clear recommendations: what happened, why it happened and what to do next, executable in one click."
+      }
+    },
+    "principle": "We measure success by better marketing results, not by how much content is generated."
+  },
+  "errorPage": {
+    "title": "Something went wrong",
+    "description": "Sorry about that. The problem has been logged, and you can try again.",
+    "retry": "Try again",
+    "reference": "Reference: {digest}"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The page may have moved, or the link is incorrect.",
+    "backHome": "Back to home"
+  },
+  "errors": {
+    "VALIDATION_FAILED": "Some of the information is invalid. Please review the highlighted fields.",
+    "UNAUTHENTICATED": "Please sign in to continue.",
+    "FORBIDDEN": "You don't have permission to do this.",
+    "NOT_FOUND": "We couldn't find what you're looking for.",
+    "CONFLICT": "This request conflicts with existing data. Refresh and try again.",
+    "PAYLOAD_TOO_LARGE": "The data you sent is larger than the allowed limit.",
+    "UNSUPPORTED_MEDIA_TYPE": "This file or content type isn't supported.",
+    "RATE_LIMITED": "Too many requests in a short time. Please wait a moment and try again.",
+    "TENANT_SCOPE_MISSING": "Something went wrong. Please try again later.",
+    "INTERNAL": "Something went wrong. Please try again later.",
+    "SERVICE_UNAVAILABLE": "The service is temporarily unavailable. Please try again shortly."
+  },
+  "validation": {
+    "required": "This field is required.",
+    "invalid_type": "This value has the wrong type.",
+    "too_small": "{origin, select, string {Must be at least {minimum} characters.} array {Select at least {minimum} items.} other {Must be at least {minimum}.}}",
+    "too_big": "{origin, select, string {Must be at most {maximum} characters.} array {Select at most {maximum} items.} other {Must be at most {maximum}.}}",
+    "invalid_format": "{format, select, email {Enter a valid email address.} url {Enter a valid URL.} uuid {Invalid identifier.} json {Malformed data.} other {Invalid format.}}",
+    "invalid_value": "This value isn't allowed.",
+    "not_multiple_of": "Must be a multiple of {divisor}.",
+    "unrecognized_keys": "Unknown fields: {keys}",
+    "invalid": "This value is invalid."
+  }
+}

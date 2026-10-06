@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "flexibx-dev",
+      "credentials": [{ "accessKey": "flexibx", "secretKey": "flexibx-dev-secret" }],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (next-themes toggles `.dark` on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * RTL-first styling rules:
+ * - Use logical utilities only: ms-/me-, ps-/pe-, start-/end-, text-start/end,
+ *   border-s/e, rounded-s/e. Physical left/right utilities are rejected by ESLint.
+ * - Mirror directional icons with `rtl:-scale-x-100` (see DirectionalIcon).
+ * - Document direction comes from <html dir> set on the server per locale.
+ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --font-sans: var(--app-font-sans);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.99 0.004 270);
+  --foreground: oklch(0.2 0.03 270);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.03 270);
+  --muted: oklch(0.96 0.008 270);
+  --muted-foreground: oklch(0.47 0.03 270);
+  --border: oklch(0.91 0.01 270);
+  --ring: oklch(0.55 0.19 275);
+  --primary: oklch(0.5 0.2 275);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.95 0.03 275);
+  --accent-foreground: oklch(0.32 0.12 275);
+  --destructive: oklch(0.58 0.22 27);
+}
+
+.dark {
+  --background: oklch(0.16 0.02 270);
+  --foreground: oklch(0.96 0.008 270);
+  --card: oklch(0.2 0.025 270);
+  --card-foreground: oklch(0.96 0.008 270);
+  --muted: oklch(0.24 0.025 270);
+  --muted-foreground: oklch(0.72 0.03 270);
+  --border: oklch(0.3 0.03 270);
+  --ring: oklch(0.7 0.16 275);
+  --primary: oklch(0.7 0.16 275);
+  --primary-foreground: oklch(0.16 0.02 270);
+  --accent: oklch(0.28 0.06 275);
+  --accent-foreground: oklch(0.9 0.05 275);
+  --destructive: oklch(0.68 0.2 27);
+}
+
+/* Typography per script: Arabic needs a taller line height for diacritics. */
+html:lang(ar) {
+  --app-font-sans: var(--font-arabic), var(--font-latin), system-ui, sans-serif;
+  --app-leading: 1.8;
+}
+
+html:lang(en) {
+  --app-font-sans: var(--font-latin), var(--font-arabic), system-ui, sans-serif;
+  --app-leading: 1.6;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    line-height: var(--app-leading);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+}

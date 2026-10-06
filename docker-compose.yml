@@ -1,0 +1,53 @@
+# Local development services. Ports bind to 127.0.0.1 only.
+#   docker compose up -d                     → PostgreSQL (all Phase 1 needs)
+#   docker compose --profile storage up -d   → + S3-compatible object storage
+# Credentials below are local development defaults only — never reuse them elsewhere.
+name: flexibx
+
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: flexibx
+      POSTGRES_PASSWORD: flexibx
+      POSTGRES_DB: flexibx
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexibx -d flexibx"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible storage (SeaweedFS; the MinIO image is no longer published on Docker
+  # Hub). Pin by digest for reproducibility: image: chrislusf/seaweedfs@sha256:<digest>
+  s3:
+    image: chrislusf/seaweedfs:latest
+    profiles: ["storage"]
+    restart: unless-stopped
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json"]
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - s3-data:/data
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+
+  s3-init:
+    image: chrislusf/seaweedfs:latest
+    profiles: ["storage"]
+    depends_on: [s3]
+    restart: "no"
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "sleep 5 && echo 's3.bucket.create -name flexibx-dev' | weed shell -master=s3:9333",
+      ]
+
+volumes:
+  postgres-data:
+  s3-data:

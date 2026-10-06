@@ -1,0 +1,13 @@
+# pnpm settings (single-package repo; no workspace packages).
+# Dependencies allowed to run install scripts. Everything else is blocked by pnpm 10.
+onlyBuiltDependencies:
+  - "@prisma/engines"
+  - esbuild
+  - prisma
+  - sharp
+
+# Install scripts intentionally skipped: next-intl's extractor tooling ships native
+# binaries as optional platform packages, so these scripts are not needed.
+ignoredBuiltDependencies:
+  - "@parcel/watcher"
+  - "@swc/core"

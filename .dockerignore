@@ -1,0 +1,21 @@
+# Never send secrets or local state into the build context.
+.env
+.env.*
+!.env.example
+
+.git
+.github
+node_modules
+.next
+out
+coverage
+playwright-report
+test-results
+blob-report
+src/generated
+*.tsbuildinfo
+*.log
+.DS_Store
+docs
+e2e
+tests
