@@ -46,7 +46,7 @@ export const KEY_ORDER = [
 ] as const;
 
 /** Patterns that look like secrets or credentials. Matching text is rejected outright. */
-const SECRET_PATTERNS: readonly { readonly name: string; readonly pattern: RegExp }[] = [
+export const SECRET_PATTERNS: readonly { readonly name: string; readonly pattern: RegExp }[] = [
   { name: "private key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
   { name: "AWS access key", pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { name: "API key (sk-…)", pattern: /\bsk-[A-Za-z0-9_-]{16,}/ },

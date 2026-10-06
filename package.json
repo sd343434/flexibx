@@ -28,7 +28,8 @@
     "db:validate": "prisma validate",
     "postinstall": "prisma generate",
     "dev:pretty": "next dev | pino-pretty",
-    "phase:validate": "tsx scripts/phase-status/validate.ts"
+    "phase:validate": "tsx scripts/phase-status/validate.ts",
+    "ai:review-input": "tsx scripts/ai-review/review-input.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1146.0",
