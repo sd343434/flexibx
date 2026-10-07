@@ -32,6 +32,23 @@ therefore correct and says nothing about the input version. `pnpm ai:review` ref
 send an input whose version is not the current one (`INPUT_SCHEMA_MISMATCH`, before any
 API call), and prints the input version and the phase implementation range it reviewed.
 
+### Interim reviews (`IN_PROGRESS`)
+
+A phase that is still `IN_PROGRESS` can be reviewed step by step: its status file declares
+the range of the finished steps (`implementation.base`/`head`), and the review covers only
+that range. There is no other way to choose the range: no CLI option and no override,
+so the human-reviewed status file stays the single source of truth.
+
+- The reviewer is told that an `IN_PROGRESS` status means an interim review: it judges
+  the correctness and security of the declared diff and does not treat features planned
+  for later steps as defects.
+- `APPROVE_NEXT_PHASE` is accepted only for `READY_FOR_REVIEW` and `COMPLETED`. For any
+  other status the orchestrator rejects it deterministically
+  (`DECISION_NOT_ALLOWED_FOR_STATUS`), whatever the model returns. A sound increment is
+  reported as `HUMAN_REVIEW_REQUIRED`; defects as `FIX_REQUIRED` or `BLOCKED`.
+- The status line printed by `pnpm ai:review` shows the phase number, its status and the
+  reviewed range, e.g. `phase 2 status IN_PROGRESS, phase implementation range <base>..<head>`.
+
 ## Files
 
 | File              | Purpose                                                                               |

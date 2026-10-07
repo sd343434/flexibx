@@ -102,6 +102,14 @@ After every update, run `pnpm phase:validate`.
 **`IN_PROGRESS`**: the phase is being implemented, or checks are incomplete or failing
 and still being worked on.
 
+An `IN_PROGRESS` phase may declare an `implementation` range for an **interim review** of
+the steps finished so far (for example `base` = the previous phase's last commit, `head` =
+the latest step's commit). The AI review then judges only that range. It can never
+approve the phase: `APPROVE_NEXT_PHASE` is rejected for any status other than
+`READY_FOR_REVIEW` or `COMPLETED`, and a sound increment is reported as
+`HUMAN_REVIEW_REQUIRED`. An interim review never changes the status; the phase stays
+`IN_PROGRESS`.
+
 **`READY_FOR_REVIEW`**: the implementation is finished and verified, and is waiting for
 human review. Requirements, enforced by the validator:
 

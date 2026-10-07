@@ -221,6 +221,77 @@ describe("accepted decisions", () => {
   });
 });
 
+describe("interim reviews (IN_PROGRESS)", () => {
+  const withStatus = (value: PhaseStatus["status"]) =>
+    inputFor({ phase: { state: "VALID", errors: [], status: { ...status, status: value } } });
+
+  it("rejects APPROVE_NEXT_PHASE for an IN_PROGRESS phase", async () => {
+    const { client } = fakeClient(JSON.stringify(approve));
+    expect(await runAiReview({ input: withStatus("IN_PROGRESS"), client, sleep: noSleep })).toEqual(
+      {
+        ok: false,
+        reason: "DECISION_NOT_ALLOWED_FOR_STATUS",
+        errors: [
+          "decision: APPROVE_NEXT_PHASE is not allowed when the phase status is IN_PROGRESS",
+        ],
+        model: "fake-model",
+        attempts: 1,
+      },
+    );
+  });
+
+  it("also never approves a BLOCKED phase", async () => {
+    const { client } = fakeClient(JSON.stringify(approve));
+    expect(
+      await runAiReview({ input: withStatus("BLOCKED"), client, sleep: noSleep }),
+    ).toMatchObject({
+      ok: false,
+      reason: "DECISION_NOT_ALLOWED_FOR_STATUS",
+    });
+  });
+
+  it.each([
+    ["HUMAN_REVIEW_REQUIRED", humanReview],
+    ["FIX_REQUIRED", fixRequired],
+    ["BLOCKED", blocked],
+  ])("accepts %s for an IN_PROGRESS phase", async (_name, review) => {
+    const { client } = fakeClient(JSON.stringify(review));
+    expect(await runAiReview({ input: withStatus("IN_PROGRESS"), client, sleep: noSleep })).toEqual(
+      {
+        ok: true,
+        review,
+        model: "fake-model",
+        attempts: 1,
+      },
+    );
+  });
+
+  it.each(["READY_FOR_REVIEW", "COMPLETED"] as const)(
+    "still accepts APPROVE_NEXT_PHASE for a %s phase",
+    async (value) => {
+      const { client } = fakeClient(JSON.stringify(approve));
+      expect(await runAiReview({ input: withStatus(value), client, sleep: noSleep })).toEqual({
+        ok: true,
+        review: approve,
+        model: "fake-model",
+        attempts: 1,
+      });
+    },
+  );
+
+  it("tells the reviewer about interim reviews and sends the status in the input", async () => {
+    expect(REVIEWER_INSTRUCTIONS).toContain(
+      "If phase.status.status is IN_PROGRESS, this is an INTERIM review",
+    );
+    expect(REVIEWER_INSTRUCTIONS).toContain(
+      "APPROVE_NEXT_PHASE is not allowed for an interim review",
+    );
+    const { client, requests } = fakeClient(JSON.stringify(humanReview));
+    await runAiReview({ input: withStatus("IN_PROGRESS"), client, sleep: noSleep });
+    expect(requests[0]?.input).toContain('"status": "IN_PROGRESS"');
+  });
+});
+
 describe("untrusted model output", () => {
   it("rejects a malformed response without retrying", async () => {
     const { client, requests } = fakeClient("Sure! Here is my review: {decision: APPROVE}");
@@ -638,7 +709,7 @@ describe("pnpm ai:review CLI (mocked reviewer)", () => {
     );
     expect(result.code).toBe(0);
     expect(result.stderr).toContain(
-      `ai-review: input schema_version ${String(REVIEW_INPUT_SCHEMA_VERSION)}, phase implementation range root..${first}\n`,
+      `ai-review: input schema_version ${String(REVIEW_INPUT_SCHEMA_VERSION)}, phase 1 status COMPLETED, phase implementation range root..${first}\n`,
     );
   });
 

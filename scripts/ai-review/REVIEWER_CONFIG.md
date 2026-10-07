@@ -65,11 +65,11 @@ When `AI_REVIEW_MODEL` is not set, the reviewer uses the project setting
 
 ## Exit codes
 
-| Code | Meaning                                                                                                                                                                                                                                      |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | A review was produced **and passed contract validation**. Validated JSON on stdout.                                                                                                                                                          |
-| `1`  | Reviewer or validation failure. A reason and sanitized errors are on stderr; nothing is on stdout. Reasons: `INPUT_SCHEMA_MISMATCH`, `PHASE_STATUS_NOT_VALID`, `UNSAFE_INPUT`, `API_ERROR`, `TIMEOUT`, `INVALID_RESPONSE`, `PHASE_MISMATCH`. |
-| `2`  | Missing or invalid configuration (`OPENAI_API_KEY` unset, invalid `AI_REVIEW_MODEL`). No request is made.                                                                                                                                    |
+| Code | Meaning                                                                                                                                                                                                                                                                         |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | A review was produced **and passed contract validation**. Validated JSON on stdout.                                                                                                                                                                                             |
+| `1`  | Reviewer or validation failure. A reason and sanitized errors are on stderr; nothing is on stdout. Reasons: `INPUT_SCHEMA_MISMATCH`, `PHASE_STATUS_NOT_VALID`, `UNSAFE_INPUT`, `API_ERROR`, `TIMEOUT`, `INVALID_RESPONSE`, `PHASE_MISMATCH`, `DECISION_NOT_ALLOWED_FOR_STATUS`. |
+| `2`  | Missing or invalid configuration (`OPENAI_API_KEY` unset, invalid `AI_REVIEW_MODEL`). No request is made.                                                                                                                                                                       |
 
 On failure there is no fallback prompt, no further retry, and nothing is executed.
 
