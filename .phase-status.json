@@ -1,14 +1,14 @@
 {
   "phase": 2,
   "status": "IN_PROGRESS",
-  "summary": "Phase 2 interim review — Step 2 of 12: Better Auth foundation (auth tables migration, server-side Better Auth configuration, /api/auth handler, enumeration-safe sign-up and sign-in, auth data boundaries and tests). Phase 2 is not complete; later steps add workspace access, UI, invitations, mailer and rate limiting.",
-  "files_changed": 19,
+  "summary": "Phase 2 interim review — Step 3 of 12: Better Auth foundation (Step 2) plus runtime auth and workspace access (Step 3: requireUser, requireWorkspaceAccess, TenantContext from membership only, withRoute CSRF origin check, withAction, safe next redirects, proxy-based rolling session cookie renewal). Phase 2 is not complete; later steps add workspace creation, UI, invitations, mailer and rate limiting.",
+  "files_changed": 40,
   "implementation": {
     "base": "228701e4076ad7f7b818e20a4ea0392c7afbd526",
-    "head": "8727e38b89948fbf44a1d06313f78e3228726ec7"
+    "head": "82fd5ab2845519ca762bac7a46a99f5c7419fa0e"
   },
   "tests": {
-    "passed": 468,
+    "passed": 541,
     "failed": 0
   },
   "lint": "PASS",
@@ -25,5 +25,5 @@
     "Gitleaks secret scanning runs only in CI."
   ],
   "next_phase": 3,
-  "recommended_next_action": "Run the interim AI review for Step 2, then a human reviews it and explicitly approves before Step 3 starts."
+  "recommended_next_action": "Human review of Step 3, then explicit approval before Step 4 starts."
 }
