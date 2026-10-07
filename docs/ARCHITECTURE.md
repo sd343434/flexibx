@@ -12,7 +12,7 @@ A single Next.js 16 application (no monorepo). Clear layering inside `src/`:
 
 ```
 src/
-├─ proxy.ts             Edge of page requests: locale, CSP nonce, session-cookie renewal. No authz.
+├─ proxy.ts             Edge of page requests: locale, CSP nonce, session-cookie renewal, last-workspace cookie. No authz.
 ├─ app/                 Routes only (pages, layouts, route handlers). Thin.
 │  ├─ [locale]/         Root layout (<html lang dir>), pages, error / not-found
 │  └─ api/health/       Liveness/readiness endpoint
@@ -149,13 +149,29 @@ Controls, from outermost to innermost:
      then redirects (next-intl `redirect`) to `/{locale}/w/{slug}`.
    - **Workspace selection**: `/{locale}/workspaces` lists the user's own memberships in
      non-deleted workspaces (`listMyWorkspaces`, a reviewed system-client path filtered to
-     the session user). Zero workspaces → `/workspaces/new`; exactly one → into it;
-     several → the list. `/{locale}/w/{slug}` is a minimal landing page that authorizes
-     through `requireWorkspaceAccess(slug, "workspace.view")` and renders 404 for any
-     workspace the user cannot open. The workspace layout, shell and switcher arrive in
-     Step 6. Without a session these pages redirect to the sign-in page with a `next`
-     return path (`requirePageUser`). All of them are dynamic and served with
-     `Cache-Control: private, no-cache, no-store`.
+     the session user). Zero workspaces → `/workspaces/new`; otherwise the last workspace
+     (see below) when it is still one of the user's memberships; exactly one → into it;
+     several → the list. `?list=1` always shows the list. Without a session these pages
+     redirect to the sign-in page with a `next` return path (`requirePageUser`). All of
+     them are dynamic and served with `Cache-Control: private, no-cache, no-store`.
+   - **Workspace app shell** (`app/[locale]/w/[workspaceSlug]/layout.tsx` + `page.tsx`):
+     the layout and every page call `loadWorkspace(locale, slug)` (React `cache`, so it
+     runs once per request). Layouts are not re-run on client navigation, so a page never
+     relies on its layout's check. `loadWorkspace` = `requirePageUser` →
+     `getWorkspaceShell` (`requireWorkspaceAccess(slug, "workspace.view")`, the row via
+     the guarded client, `listMyWorkspaces` for the switcher). Foreign, unknown,
+     soft-deleted and malformed slugs all render the same localized 404. The shell
+     (`components/shell/*`) is presentational: workspace name, a workspace switcher (the
+     user's own memberships; switching is plain navigation to `/{locale}/w/{slug}`, which
+     authorizes again), a user menu (name, email, role in this workspace, sign-out) and
+     workspace navigation that lists only pages that exist (Home). No workspace identity
+     or role lives in client state.
+   - **Last workspace** (decision 10, `server/workspaces/last-workspace.ts`): for
+     browsers with a session cookie, the proxy remembers the slug of the last visited
+     `/{locale}/w/{slug}` page in `flexibx.last_workspace` (HttpOnly, SameSite=Lax,
+     Secure on https, 90 days). It is a convenience only: `/workspaces` uses it just when
+     it names one of the user's current memberships (`getMyWorkspaceLanding`). A foreign,
+     deleted, unknown or malformed value is ignored, and it never grants access.
    - **Authentication pages** (`/{locale}/sign-up`, `/{locale}/sign-in`, route group
      `app/[locale]/(auth)`): their form actions call `signUpAction` / `signInAction` /
      `signOutAction` (`server/auth/auth-actions.ts`, `withAction`), which use

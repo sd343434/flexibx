@@ -104,7 +104,8 @@
       "submitting": "Creating…"
     },
     "home": {
-      "role": "Your role: {role}"
+      "role": "Your role: {role}",
+      "intro": "Your workspace is ready."
     },
     "roles": {
       "OWNER": "Owner",
@@ -113,6 +114,22 @@
       "EDITOR": "Editor",
       "VIEWER": "Viewer",
       "CLIENT": "Client"
+    }
+  },
+  "shell": {
+    "nav": {
+      "label": "Workspace navigation",
+      "home": "Home"
+    },
+    "switcher": {
+      "label": "Switch workspace",
+      "current": "current workspace",
+      "all": "All workspaces"
+    },
+    "userMenu": {
+      "label": "Account menu",
+      "signedInAs": "Signed in as",
+      "role": "Role in this workspace: {role}"
     }
   },
   "errors": {

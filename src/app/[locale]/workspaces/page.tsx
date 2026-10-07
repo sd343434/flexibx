@@ -6,20 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Link, redirect } from "@/i18n/navigation";
 import { requireLocale } from "@/i18n/params";
 import { requirePageUser } from "@/server/auth/session";
-import { listMyWorkspaces } from "@/server/tenancy/access";
-import { decideWorkspaceLanding } from "@/server/workspaces/landing";
+import { getMyWorkspaceLanding } from "@/server/workspaces/workspace-queries";
 
 import { SignOutButton } from "../(auth)/sign-out-button";
 
 interface WorkspacesPageProps {
   readonly params: Promise<{ locale: string }>;
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function WorkspacesPage({ params }: WorkspacesPageProps) {
+export default async function WorkspacesPage({ params, searchParams }: WorkspacesPageProps) {
   const locale = requireLocale((await params).locale);
   await requirePageUser(locale, `/${locale}/workspaces`);
 
-  const landing = decideWorkspaceLanding(await listMyWorkspaces());
+  // `?list=1` (the switcher's "all workspaces" link) shows the list instead of a default.
+  const showList = (await searchParams).list === "1";
+  const landing = await getMyWorkspaceLanding({ showList });
   if (landing.kind === "create") return redirect({ href: "/workspaces/new", locale });
   if (landing.kind === "open") return redirect({ href: `/w/${landing.slug}`, locale });
 
