@@ -408,7 +408,9 @@ function buildPatchEvidence(files: readonly FileChange[], patch: string | null):
     let diff = "";
     let truncated = false;
     for (const raw of chunk) {
-      const line = sanitizeText(raw);
+      // Diff lines are never shortened on their own: a cut line reads as broken source.
+      // A line that does not fit the per-file limit ends the file's diff (truncated: true).
+      const line = sanitizeText(raw, OUTPUT_LIMITS.patchCharsPerFile);
       if (diff.length + line.length + 1 > OUTPUT_LIMITS.patchCharsPerFile) {
         truncated = true;
         break;

@@ -409,6 +409,27 @@ describe("implementation evidence", () => {
     expect(output).toContain(REDACTED);
   });
 
+  it("keeps long source lines intact and flags a file whose line exceeds the per-file limit", () => {
+    const longLine = `export const classes = "${"x".repeat(600)}";`;
+    const hugeLine = `export const blob = "${"y".repeat(OUTPUT_LIMITS.patchCharsPerFile)}";`;
+    const implementation = verifiedImplementation(
+      collect(
+        createRepo({
+          implFiles: { "src/long.ts": `${longLine}\n`, "src/huge.ts": `${hugeLine}\n` },
+        }).dir,
+      ),
+    );
+    const long = implementation.patch.files.find((file) => file.path === "src/long.ts");
+    expect(long?.diff).toContain(`+${longLine}\n`);
+    expect(long?.diff).not.toContain("…");
+    expect(long?.truncated).toBe(false);
+
+    const huge = implementation.patch.files.find((file) => file.path === "src/huge.ts");
+    expect(huge?.truncated).toBe(true);
+    expect(huge?.diff).not.toContain("…");
+    expect(huge?.diff.length).toBeLessThanOrEqual(OUTPUT_LIMITS.patchCharsPerFile);
+  });
+
   it("bounds the diff per file and in total", () => {
     const big = Array.from(
       { length: 2000 },
