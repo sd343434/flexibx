@@ -3,6 +3,9 @@
 Status: **Phase 1 — foundation**. This document describes what exists, the rules every
 later phase must follow, and what is intentionally deferred.
 
+Phase 2 (authentication and runtime multi-tenancy) is executed step by step according to
+[`PHASE_2_PLAN.md`](PHASE_2_PLAN.md), the canonical Phase 2 plan.
+
 ## 1. Shape of the system
 
 A single Next.js 16 application (no monorepo). Clear layering inside `src/`:
