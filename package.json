@@ -30,7 +30,8 @@
     "dev:pretty": "next dev | pino-pretty",
     "phase:validate": "tsx scripts/phase-status/validate.ts",
     "ai:review-input": "tsx scripts/ai-review/review-input.ts",
-    "ai:review-validate": "tsx scripts/ai-review/review-validator.ts"
+    "ai:review-validate": "tsx scripts/ai-review/review-validator.ts",
+    "ai:review": "tsx scripts/ai-review/run-review.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1146.0",
@@ -63,6 +64,7 @@
     "dotenv": "18.0.5",
     "eslint": "10.12.0",
     "eslint-plugin-react-hooks": "7.1.1",
+    "openai": "7.30.0",
     "pino-pretty": "13.2.0",
     "prettier": "3.9.9",
     "prettier-plugin-tailwindcss": "0.8.1",

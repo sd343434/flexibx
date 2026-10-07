@@ -15,6 +15,14 @@ pnpm ai:review-input        # prints the review input JSON to stdout
 Exit codes: `0` input produced (check `phase.state`), `2` not a git repository or git
 unavailable.
 
+## External AI review
+
+`pnpm ai:review` sends this review input, plus fixed reviewer instructions, to OpenAI.
+It validates the response against `REVIEW_CONTRACT.md` and prints the advisory result.
+It needs `OPENAI_API_KEY=<your key>` in the process environment. See
+[`REVIEWER_CONFIG.md`](REVIEWER_CONFIG.md) for configuration, exit codes, and what is
+and isn't sent.
+
 ## Files
 
 | File              | Purpose                                                            |
