@@ -23,6 +23,18 @@ const files = sourceFiles(SRC)
   .filter((path) => !ALLOWED.some((prefix) => path.startsWith(prefix)));
 
 describe("auth data boundaries", () => {
+  it("only the auth boundary depends on Better Auth", () => {
+    const importers = sourceFiles(SRC)
+      .map((path) => relative(ROOT, path).split("\\").join("/"))
+      .filter((path) => !path.startsWith("src/generated/"))
+      .filter((path) => /from\s+["']better-auth/.test(readFileSync(join(ROOT, path), "utf8")))
+      .filter(
+        (path) =>
+          !path.startsWith("src/server/auth/") && path !== "src/app/api/auth/[...all]/route.ts",
+      );
+    expect(importers).toEqual([]);
+  });
+
   it("scans application sources", () => {
     expect(files.length).toBeGreaterThan(20);
   });

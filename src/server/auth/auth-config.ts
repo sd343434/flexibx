@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { isAPIError } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { nextCookies } from "better-auth/next-js";
 
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -51,6 +52,12 @@ export function createAuth(input: AuthConfigInput) {
     trustedOrigins: [new URL(input.baseURL).origin],
     database: prismaAdapter(input.db, { provider: "postgresql" }),
     disabledPaths: [...DISABLED_HTTP_PATHS],
+    // Must stay the LAST plugin. Server actions and route handlers that call auth.api.*
+    // get their session cookies written (and refreshed) through next/headers. In a
+    // Server Component render, where cookies cannot be written, it skips the rolling
+    // refresh so the database expiry never runs ahead of the browser cookie; page
+    // requests are refreshed by the proxy instead (see session-refresh.ts).
+    plugins: [nextCookies()],
     telemetry: { enabled: false },
     // Enabled with the trusted-IP rate limiting step; without a trusted client IP a
     // limiter is either ineffective or keyed on spoofable headers.

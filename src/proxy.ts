@@ -2,18 +2,21 @@ import createIntlMiddleware from "next-intl/middleware";
 import { NextRequest, type NextResponse } from "next/server";
 
 import { routing } from "./i18n/routing";
+import { refreshSessionCookiesForRequest } from "./server/auth/auth";
 import { buildContentSecurityPolicy } from "./security/csp";
 
 const handleI18nRouting = createIntlMiddleware(routing);
 
 /**
  * Edge of every page request. Responsibilities are deliberately limited to:
- *  1. locale negotiation / redirects (next-intl), and
- *  2. a per-request CSP nonce.
+ *  1. locale negotiation / redirects (next-intl),
+ *  2. a per-request CSP nonce, and
+ *  3. renewing the session cookie when Better Auth rolls the session, because Server
+ *     Components cannot write cookies (see src/server/auth/session-refresh.ts).
  * It performs NO authentication or authorization — that is enforced server-side in
  * route handlers and services (tenancy layer).
  */
-export default function proxy(request: NextRequest): NextResponse {
+export default async function proxy(request: NextRequest): Promise<NextResponse> {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = buildContentSecurityPolicy({
     nonce,
@@ -29,6 +32,9 @@ export default function proxy(request: NextRequest): NextResponse {
 
   const response = handleI18nRouting(new NextRequest(request, { headers }));
   response.headers.set("content-security-policy", csp);
+  for (const setCookie of await refreshSessionCookiesForRequest(request.headers.get("cookie"))) {
+    response.headers.append("set-cookie", setCookie);
+  }
   return response;
 }
 

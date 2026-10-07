@@ -9,7 +9,7 @@ A single Next.js 16 application (no monorepo). Clear layering inside `src/`:
 
 ```
 src/
-├─ proxy.ts             Edge of page requests: locale negotiation + CSP nonce. No authz.
+├─ proxy.ts             Edge of page requests: locale, CSP nonce, session-cookie renewal. No authz.
 ├─ app/                 Routes only (pages, layouts, route handlers). Thin.
 │  ├─ [locale]/         Root layout (<html lang dir>), pages, error / not-found
 │  └─ api/health/       Liveness/readiness endpoint
@@ -104,11 +104,31 @@ workspaces through `workspace_members`.
 
 Controls, from outermost to innermost:
 
-1. **Server-side authorization only.** The proxy does no authorization. In Phase 2,
-   `requireWorkspaceAccess(slug, action)` runs session → membership lookup → permission
-   check and produces a `TenantContext { userId, workspaceId, role }`. The workspace comes
-   from the URL (`/{locale}/w/{slug}/…`) and is resolved on the server; client-supplied
-   ids are never trusted.
+1. **Server-side authorization only.** The proxy does no authorization.
+   - `getCurrentUser()` / `requireUser()` (`server/auth/session.ts`) read the user from the
+     signed session cookie through Better Auth's `getSession` (expiry and revocation
+     included).
+   - **Rolling sessions.** Server Components cannot write cookies, so the session cookie
+     is renewed where it can be: the proxy asks Better Auth's own `get-session` endpoint
+     (in-process) on every page request that carries a session cookie and forwards only
+     the renewed or cleared session cookie (`server/auth/session-refresh.ts`; at most one
+     renewal per day). Better Auth's `nextCookies()` plugin writes cookies for server
+     actions and route handlers and skips the refresh inside a Server Component render,
+     so the database expiry never runs ahead of the browser cookie. The proxy still makes
+     no authorization decision; a refresh failure is logged and never blocks a page. They return a small frozen `AuthUser` with no session data.
+     No session → `UNAUTHENTICATED` (401).
+   - `requireWorkspaceAccess(slug, action?)` (`server/tenancy/access.ts`) runs session →
+     membership lookup by URL slug → optional `assertCan`, and is the only producer of a
+     `TenantContext { userId, workspaceId, role }` (a static test keeps
+     `createTenantContext` inside `server/tenancy/`). Workspace id and role come only
+     from the membership row; client-supplied ids, roles and headers are ignored. A
+     malformed, unknown, soft-deleted or foreign workspace all yield the same
+     `NOT_FOUND` (404); a member lacking the permission gets `FORBIDDEN` (403).
+   - API routes (`withRoute`) and server actions (`withAction`) call these primitives in
+     their handlers. `withRoute` also rejects cookie-bearing mutations that are not
+     same-origin with `APP_URL` (CSRF); Next.js performs the equivalent check for server
+     actions. `safeNextPath()` accepts only internal `/{locale}/…` paths for post-sign-in
+     redirects.
 2. **Permission matrix** (`server/tenancy/permissions.ts`): the only place that maps roles
    to actions. Services call `assertCan(ctx, action)`. `CLIENT` (an agency's customer) has
    a narrow set: view brand/content/campaigns/analytics and approve content.

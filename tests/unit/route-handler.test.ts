@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { AppError } from "@/server/errors/app-error";
-import { withRoute } from "@/server/http/route-handler";
+import { assertSameOriginMutation, withRoute } from "@/server/http/route-handler";
 
 const echo = withRoute({
   name: "test.echo",
@@ -105,5 +105,49 @@ describe("withRoute", () => {
       params: Promise.resolve({ id: "1" }),
     });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe("withRoute same-origin protection for cookie-authenticated mutations", () => {
+  const APP = "https://app.flexibx.test";
+  const check = (method: string, headers: Record<string, string>) => () => {
+    assertSameOriginMutation(new Request(`${APP}/api/x`, { method, headers }), () => APP);
+  };
+
+  it("allows safe methods and cookie-less requests", () => {
+    expect(check("GET", { cookie: "a=b", origin: "https://evil.example" })).not.toThrow();
+    expect(check("POST", { origin: "https://evil.example" })).not.toThrow();
+  });
+
+  it("allows same-origin mutations (Origin, or Referer when Origin is absent)", () => {
+    expect(check("POST", { cookie: "a=b", origin: APP })).not.toThrow();
+    expect(check("DELETE", { cookie: "a=b", referer: `${APP}/ar/w/acme` })).not.toThrow();
+  });
+
+  it.each([
+    ["a foreign Origin", { origin: "https://evil.example" }],
+    ["a foreign Referer", { referer: "https://evil.example/x" }],
+    ["no Origin or Referer", {}],
+    ["Origin: null", { origin: "null" }],
+    ["a cross-site fetch", { origin: APP, "sec-fetch-site": "cross-site" }],
+  ])("rejects a cookie-bearing mutation with %s", (_label, headers) => {
+    expect(check("POST", { cookie: "a=b", ...headers })).toThrow(AppError);
+  });
+
+  it("returns 403 from withRoute before the handler runs", async () => {
+    let ran = false;
+    const route = withRoute({
+      name: "test.mutate",
+      handler: () => {
+        ran = true;
+        return { ok: true };
+      },
+    });
+    const response = await route(
+      new Request(`${APP}/api/x`, { method: "POST", headers: { cookie: "a=b" } }),
+    );
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(ran).toBe(false);
   });
 });

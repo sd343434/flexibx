@@ -34,6 +34,10 @@ export default defineConfig({
           setupFiles: ["tests/integration/setup-env.ts"],
           // One shared test database: run files sequentially to keep tests deterministic.
           fileParallelism: false,
+          // Process these through Vite instead of loading them as raw Node ESM: next-intl's
+          // middleware imports `next/server` without an extension (Node cannot resolve it),
+          // and Better Auth's nextCookies() imports `next/headers.js`, which tests replace.
+          server: { deps: { inline: ["better-auth", "next-intl"] } },
           testTimeout: 20_000,
           hookTimeout: 60_000,
         },

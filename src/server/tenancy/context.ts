@@ -1,3 +1,5 @@
+import "server-only";
+
 import { AppError } from "../errors/app-error";
 import type { Role } from "./roles";
 
@@ -5,8 +7,9 @@ import type { Role } from "./roles";
  * Proof that the current user is a member of exactly one workspace with a given role.
  * Every service/repository function that touches workspace-owned data takes one.
  *
- * Phase 2 builds it on the server from: session → URL workspace slug → membership row
- * (`requireWorkspaceAccess`). It is never constructed from client-supplied values.
+ * Built on the server only by `requireWorkspaceAccess` (src/server/tenancy/access.ts) from:
+ * session → URL workspace slug → membership row. It is never constructed from
+ * client-supplied values; a static test keeps `createTenantContext` out of other code.
  */
 export interface TenantContext {
   readonly userId: string;

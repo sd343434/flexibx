@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { z } from "zod";
 
+import { getEnv } from "../env";
 import { AppError } from "../errors/app-error";
 import { errorResponse, toAppError } from "../errors/http";
 import { createRequestLogger, type Logger } from "../logger";
@@ -38,6 +39,35 @@ export interface RouteInput<Q, B, P> {
 
 export interface RouteContext {
   readonly params: Promise<Record<string, string | string[] | undefined>>;
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function requestOrigin(request: Request): string | null {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== "null") return origin;
+  const referer = request.headers.get("referer");
+  if (referer === null) return null;
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CSRF protection for cookie-authenticated mutations: an unsafe method that carries
+ * cookies must come from the app's own origin (APP_URL). Requests without cookies carry
+ * no ambient credentials and are left to the route's own authentication.
+ */
+export function assertSameOriginMutation(request: Request, appOrigin: () => string): void {
+  if (SAFE_METHODS.has(request.method.toUpperCase()) || !request.headers.has("cookie")) return;
+  const forbidden = (reason: string) =>
+    new AppError("FORBIDDEN", { message: "Cross-origin request rejected", metadata: { reason } });
+  if (request.headers.get("sec-fetch-site") === "cross-site") throw forbidden("cross-site");
+  const origin = requestOrigin(request);
+  if (origin === null) throw forbidden("missing-origin");
+  if (origin !== appOrigin()) throw forbidden("origin-mismatch");
 }
 
 function resolveRequestId(request: Request): string {
@@ -79,7 +109,9 @@ async function readJsonBody(request: Request, maxBytes: number): Promise<unknown
  * request id, Zod validation of query/body/params, body size limits, unified error
  * responses (no internals leaked), and structured latency logging.
  *
- * Authentication/authorization are added per route in Phase 2 via the tenancy layer.
+ * Cookie-bearing mutations must be same-origin (CSRF). Authentication/authorization run
+ * inside the handler via `requireUser()` / `requireWorkspaceAccess()`; their errors map to
+ * 401 / 404 / 403 like any other AppError.
  */
 export function withRoute<
   Q extends Schema | undefined = undefined,
@@ -95,6 +127,7 @@ export function withRoute<
 
     let response: Response;
     try {
+      assertSameOriginMutation(request, () => new URL(getEnv().APP_URL).origin);
       const query = (
         definition.query === undefined
           ? undefined
