@@ -2,24 +2,41 @@
 //
 // Safety properties (see README.md):
 //  - Read-only: only the allowlisted git read commands below and one file read.
-//  - No shell: git runs via execFileSync with fixed argument arrays.
-//  - Nothing from `.phase-status.json` is ever executed or passed to a command.
+//  - No shell: git runs via execFileSync with fixed argument builders. The only variable
+//    arguments are commit IDs that passed the full 40-hex check (or the literal HEAD).
+//  - Nothing from `.phase-status.json` is ever executed; it can only supply a commit ID,
+//    which must validate and then be verified against git history before use.
 //  - No network: none of the git commands contact a remote.
-//  - All strings are redacted for secrets; secret-looking paths are flagged, never read.
+//  - All strings are redacted for secrets; secret-looking paths are flagged, never read,
+//    and their diffs are never included.
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { MAX_FILE_BYTES, SECRET_PATTERNS, validatePhaseStatusText } from "../phase-status/schema";
+import {
+  COMMIT_ID_PATTERN,
+  MAX_FILE_BYTES,
+  SECRET_PATTERNS,
+  validatePhaseStatusText,
+} from "../phase-status/schema";
 
 import {
   REVIEW_INPUT_SCHEMA_VERSION,
+  type BoundaryFailure,
+  type CommitRef,
+  type CommitSummary,
   type FileChange,
   type GitCommandName,
+  type GitParams,
   type GitReader,
+  type PatchEvidence,
+  type PatchFile,
+  type PhaseImplementationEvidence,
   type PhaseSection,
+  type PostPhaseEvidence,
   type ReviewInput,
   type StatusFileReader,
+  type ValidationEvidence,
 } from "./types";
 
 export const STATUS_FILE = ".phase-status.json";
@@ -28,9 +45,25 @@ export const STATUS_FILE = ".phase-status.json";
 export const OUTPUT_LIMITS = {
   entries: 500,
   diffStatLines: 520,
+  commits: 200,
   text: 300,
   errors: 50,
+  /** Total characters of implementation diff included in the review input. */
+  patchChars: 160_000,
+  /** Maximum characters of diff included for any single file. */
+  patchCharsPerFile: 8_000,
 } as const;
+
+/** Git's well-known empty tree (SHA-1). Used as the diff base when a phase starts at the root. */
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** The only non-ID revision ever passed to git. */
+export const HEAD_REF = "HEAD" as CommitRef;
+
+/** Validates a full commit ID; anything else is rejected before it can reach git. */
+export function toCommitRef(value: string): CommitRef | null {
+  return COMMIT_ID_PATTERN.test(value) ? (value as CommitRef) : null;
+}
 
 /**
  * Global options applied to every git invocation. They stop repository configuration
@@ -51,33 +84,82 @@ const GIT_GLOBAL_ARGS = [
 /** Diff options: no external diff drivers or textconv filters (both can run programs). */
 const SAFE_DIFF = ["--no-ext-diff", "--no-textconv", "--no-color"];
 
-/** The complete allowlist. Every argument is a hard-coded literal. */
-export const GIT_COMMANDS: Readonly<Record<GitCommandName, readonly string[]>> = {
-  branch: ["rev-parse", "--abbrev-ref", "HEAD"],
-  head: ["rev-parse", "--verify", "HEAD"],
-  parent: ["rev-parse", "--verify", "--quiet", "HEAD~1"],
-  latestCommitStat: ["diff", ...SAFE_DIFF, "--stat=160,120", "HEAD~1..HEAD"],
-  latestCommitFiles: ["diff", ...SAFE_DIFF, "--name-status", "--no-renames", "HEAD~1..HEAD"],
-  rootCommitStat: [
-    "diff-tree",
-    ...SAFE_DIFF,
-    "--root",
-    "-r",
-    "--no-commit-id",
-    "--stat=160,120",
-    "HEAD",
+/** Lockfiles are summarized in the stat only; their diffs are noise. */
+const LOCKFILE_EXCLUDE = ":(exclude)pnpm-lock.yaml";
+
+function requireRef(value: CommitRef | null | undefined): CommitRef {
+  if (
+    value === undefined ||
+    value === null ||
+    (value !== HEAD_REF && toCommitRef(value) === null)
+  ) {
+    throw new Error("invalid commit reference");
+  }
+  return value;
+}
+
+/** `null` base means the repository root, represented by the empty tree. */
+function rangeFrom(params: GitParams): string {
+  return params.from === null || params.from === undefined ? EMPTY_TREE : requireRef(params.from);
+}
+
+/**
+ * The complete allowlist. Every argument is a hard-coded literal except validated
+ * commit references (40-hex IDs or the literal HEAD), checked by `requireRef`.
+ */
+export const GIT_COMMANDS: Readonly<
+  Record<GitCommandName, (params: GitParams) => readonly string[]>
+> = {
+  branch: () => ["rev-parse", "--abbrev-ref", "HEAD"],
+  head: () => ["rev-parse", "--verify", "HEAD"],
+  parent: () => ["rev-parse", "--verify", "--quiet", "HEAD~1"],
+  workingTreeStatus: () => ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"],
+  verifyCommit: (params) => [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${requireRef(params.commit)}^{commit}`,
   ],
-  rootCommitFiles: [
-    "diff-tree",
+  isAncestor: (params) => [
+    "merge-base",
+    "--is-ancestor",
+    requireRef(params.from),
+    requireRef(params.to),
+  ],
+  rangeLog: (params) => [
+    "log",
+    "--format=%H%x09%s",
+    `--max-count=${String(OUTPUT_LIMITS.commits + 1)}`,
+    params.from === null || params.from === undefined
+      ? requireRef(params.to)
+      : `${requireRef(params.from)}..${requireRef(params.to)}`,
+  ],
+  rangeStat: (params) => [
+    "diff",
     ...SAFE_DIFF,
-    "--root",
-    "-r",
-    "--no-commit-id",
+    "--stat=160,120",
+    rangeFrom(params),
+    requireRef(params.to),
+  ],
+  rangeFiles: (params) => [
+    "diff",
+    ...SAFE_DIFF,
     "--name-status",
     "--no-renames",
-    "HEAD",
+    rangeFrom(params),
+    requireRef(params.to),
   ],
-  workingTreeStatus: ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"],
+  rangePatch: (params) => [
+    "diff",
+    ...SAFE_DIFF,
+    "--no-renames",
+    "--unified=3",
+    rangeFrom(params),
+    requireRef(params.to),
+    "--",
+    ".",
+    LOCKFILE_EXCLUDE,
+  ],
 };
 
 /** Default git reader: fixed commands, no shell, sanitized environment, bounded output. */
@@ -92,15 +174,16 @@ export function createGitReader(cwd: string): GitReader {
     GIT_TERMINAL_PROMPT: "0",
     GIT_PAGER: "cat",
   };
-  return (command) => {
+  return (command, params = {}) => {
     try {
-      return execFileSync("git", [...GIT_GLOBAL_ARGS, ...GIT_COMMANDS[command]], {
+      const args = GIT_COMMANDS[command](params);
+      return execFileSync("git", [...GIT_GLOBAL_ARGS, ...args], {
         cwd,
         env,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: 10_000,
-        maxBuffer: 4 * 1024 * 1024,
+        timeout: 20_000,
+        maxBuffer: (command === "rangePatch" ? 16 : 4) * 1024 * 1024,
         shell: false,
       });
     } catch {
@@ -178,6 +261,15 @@ function parsePorcelain(output: string | null): FileChange[] {
   }));
 }
 
+function parseLog(output: string | null): CommitSummary[] {
+  return lines(output).flatMap((line) => {
+    const [hash = "", ...subject] = line.split("\t");
+    return toCommitRef(hash) === null
+      ? []
+      : [{ hash, subject: sanitizeText(subject.join("\t"), 200) }];
+  });
+}
+
 function bounded<T>(items: readonly T[], limit: number): { items: T[]; truncated: boolean } {
   return { items: items.slice(0, limit), truncated: items.length > limit };
 }
@@ -210,6 +302,217 @@ export function collectPhase(readStatusFile: StatusFileReader): PhaseSection {
   return { state: "INVALID", errors, status: null };
 }
 
+// ── Phase implementation boundary ────────────────────────────────────────────
+
+export type Boundary =
+  | { readonly ok: true; readonly base: CommitRef | null; readonly head: CommitRef }
+  | { readonly ok: false; readonly reason: BoundaryFailure };
+
+/**
+ * Resolves the phase implementation range declared in the (validated) status file and
+ * verifies it against git: head must exist and be an ancestor of HEAD; base (if any)
+ * must exist and be an ancestor of head. Any failure yields a fixed reason code.
+ */
+export function resolveBoundary(
+  git: GitReader,
+  phase: PhaseSection,
+  repoHead: string | null,
+): Boundary {
+  if (phase.state === "MISSING") return { ok: false, reason: "STATUS_MISSING" };
+  if (phase.state === "INVALID") return { ok: false, reason: "STATUS_INVALID" };
+  const declared = phase.status.implementation;
+  if (declared === null) return { ok: false, reason: "BOUNDARY_NOT_DECLARED" };
+  if (repoHead === null) return { ok: false, reason: "HEAD_UNAVAILABLE" };
+
+  const head = toCommitRef(declared.head);
+  if (head === null || git("verifyCommit", { commit: head }) === null) {
+    return { ok: false, reason: "COMMIT_NOT_FOUND" };
+  }
+  if (git("isAncestor", { from: head, to: HEAD_REF }) === null) {
+    return { ok: false, reason: "NOT_ANCESTOR_OF_HEAD" };
+  }
+
+  if (declared.base === null) return { ok: true, base: null, head };
+  const base = toCommitRef(declared.base);
+  if (base === null || git("verifyCommit", { commit: base }) === null) {
+    return { ok: false, reason: "BASE_NOT_FOUND" };
+  }
+  if (git("isAncestor", { from: base, to: head }) === null) {
+    return { ok: false, reason: "BASE_NOT_ANCESTOR" };
+  }
+  return { ok: true, base, head };
+}
+
+// ── Implementation evidence ──────────────────────────────────────────────────
+
+/** Review priority for diff inclusion: security/data-critical code first. */
+const PATCH_PRIORITY: readonly RegExp[] = [
+  /^prisma\//,
+  /^src\/server\//,
+  /^src\/(proxy\.ts|security\/)/,
+  /^next\.config\.ts$/,
+  /^\.github\/workflows\//,
+  /^(Dockerfile|docker-compose\.ya?ml|\.dockerignore)$|^docker\//,
+  /^(package\.json|pnpm-workspace\.yaml|prisma\.config\.ts|\.env\.example|\.gitignore|\.gitleaks\.toml|eslint\.config\.mjs|tsconfig\.json|vitest\.config\.ts|playwright\.config\.ts)$/,
+  /^src\//,
+  /^(tests|e2e)\//,
+  /^messages\//,
+];
+
+function patchRank(path: string): number {
+  const index = PATCH_PRIORITY.findIndex((pattern) => pattern.test(path));
+  return index === -1 ? PATCH_PRIORITY.length : index;
+}
+
+/** Splits a unified diff into per-file chunks keyed by path. */
+function splitPatch(patch: string | null): Map<string, string[]> {
+  const chunks = new Map<string, string[]>();
+  if (patch === null) return chunks;
+  let current: string[] | null = null;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const rest = line.slice("diff --git ".length).replace(/"/g, "");
+      // Without renames both sides name the same path: "a/<p> b/<p>" (length 2n + 5).
+      const path = rest.slice(2, 2 + (rest.length - 5) / 2);
+      current = [];
+      chunks.set(path, current);
+    }
+    current?.push(line);
+  }
+  return chunks;
+}
+
+function buildPatchEvidence(files: readonly FileChange[], patch: string | null): PatchEvidence {
+  const chunks = splitPatch(patch);
+  // Code-unit ordering (not localeCompare) keeps output identical across machines/locales.
+  const ordered = [...files].sort(
+    (a, b) =>
+      patchRank(a.path) - patchRank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+  );
+  const included: PatchFile[] = [];
+  const omitted: PatchEvidence["omitted"][number][] = [];
+  let used = 0;
+
+  for (const { path } of ordered) {
+    if (isSensitivePath(path)) {
+      omitted.push({ path, reason: "SENSITIVE" });
+      continue;
+    }
+    if (path === "pnpm-lock.yaml") {
+      omitted.push({ path, reason: "LOCKFILE" });
+      continue;
+    }
+    const chunk = chunks.get(path);
+    if (chunk === undefined) continue;
+
+    let diff = "";
+    let truncated = false;
+    for (const raw of chunk) {
+      const line = sanitizeText(raw);
+      if (diff.length + line.length + 1 > OUTPUT_LIMITS.patchCharsPerFile) {
+        truncated = true;
+        break;
+      }
+      diff += `${line}\n`;
+    }
+    if (used + diff.length > OUTPUT_LIMITS.patchChars) {
+      omitted.push({ path, reason: "BUDGET" });
+      continue;
+    }
+    used += diff.length;
+    included.push({ path, diff, truncated });
+  }
+
+  return {
+    files: included,
+    omitted,
+    char_budget: OUTPUT_LIMITS.patchChars,
+    per_file_char_limit: OUTPUT_LIMITS.patchCharsPerFile,
+  };
+}
+
+const VALIDATION_PATTERNS = {
+  unit_test_files: /^tests\/unit\/.+\.test\.tsx?$/,
+  integration_test_files: /^tests\/integration\/.+\.test\.tsx?$/,
+  e2e_test_files: /^e2e\/.+\.(spec|test)\.tsx?$/,
+  ci_files: /^\.github\/workflows\//,
+  docker_files: /^(Dockerfile|docker-compose\.ya?ml|\.dockerignore)$|^docker\//,
+  migration_files: /^prisma\/migrations\/.+\.sql$/,
+  security_relevant_files:
+    /^(src\/server\/(db|tenancy|audit|http|errors|storage|validation)\/|src\/server\/(env|env-schema|redact|logger)\.ts$|src\/security\/|src\/proxy\.ts$|next\.config\.ts$|prisma\/schema\.prisma$|prisma\/migrations\/|\.gitleaks\.toml$|\.gitignore$|\.dockerignore$)/,
+} as const satisfies Record<keyof ValidationEvidence, RegExp>;
+
+function buildValidationEvidence(files: readonly FileChange[]): ValidationEvidence {
+  const present = files.filter((file) => file.status !== "D").map((file) => file.path);
+  const pick = (pattern: RegExp) =>
+    present.filter((path) => pattern.test(path)).slice(0, OUTPUT_LIMITS.entries);
+  return {
+    unit_test_files: pick(VALIDATION_PATTERNS.unit_test_files),
+    integration_test_files: pick(VALIDATION_PATTERNS.integration_test_files),
+    e2e_test_files: pick(VALIDATION_PATTERNS.e2e_test_files),
+    ci_files: pick(VALIDATION_PATTERNS.ci_files),
+    docker_files: pick(VALIDATION_PATTERNS.docker_files),
+    migration_files: pick(VALIDATION_PATTERNS.migration_files),
+    security_relevant_files: pick(VALIDATION_PATTERNS.security_relevant_files),
+  };
+}
+
+function collectImplementation(git: GitReader, boundary: Boundary): PhaseImplementationEvidence {
+  if (!boundary.ok) return { state: "UNDETERMINED", reason: boundary.reason };
+  const range = { from: boundary.base, to: boundary.head };
+
+  const log = git("rangeLog", range);
+  const filesOut = git("rangeFiles", range);
+  if (log === null || filesOut === null)
+    return { state: "UNDETERMINED", reason: "HISTORY_UNAVAILABLE" };
+
+  const commits = bounded(parseLog(log), OUTPUT_LIMITS.commits);
+  const files = parseNameStatus(filesOut);
+  const boundedFiles = bounded(files, OUTPUT_LIMITS.entries);
+  const stat = bounded(
+    lines(git("rangeStat", range)).map((line) => sanitizeText(line.trimEnd(), 200)),
+    OUTPUT_LIMITS.diffStatLines,
+  );
+
+  return {
+    state: "VERIFIED",
+    base: boundary.base,
+    head: boundary.head,
+    commits: commits.items,
+    diff_stat: stat.items,
+    files: boundedFiles.items,
+    sensitive_paths: files.map((file) => file.path).filter(isSensitivePath),
+    patch: buildPatchEvidence(boundedFiles.items, git("rangePatch", range)),
+    validation: buildValidationEvidence(boundedFiles.items),
+    truncated: commits.truncated || boundedFiles.truncated || stat.truncated,
+  };
+}
+
+/** Application/runtime paths: post-phase changes here may alter what was reviewed. */
+const APPLICATION_PATH =
+  /^(src\/|prisma\/|messages\/|public\/|e2e\/|tests\/integration\/|docker\/|\.github\/workflows\/)|^(Dockerfile|docker-compose\.ya?ml|\.dockerignore|next\.config\.ts|postcss\.config\.mjs|tsconfig\.json)$/;
+
+function collectPostPhase(git: GitReader, boundary: Boundary): PostPhaseEvidence {
+  if (!boundary.ok) return { state: "UNDETERMINED", reason: boundary.reason };
+  const range = { from: boundary.head, to: HEAD_REF };
+  const log = git("rangeLog", range);
+  const filesOut = git("rangeFiles", range);
+  if (log === null || filesOut === null)
+    return { state: "UNDETERMINED", reason: "HISTORY_UNAVAILABLE" };
+
+  const commits = bounded(parseLog(log), OUTPUT_LIMITS.commits);
+  const files = bounded(parseNameStatus(filesOut), OUTPUT_LIMITS.entries);
+  return {
+    state: "VERIFIED",
+    commits: commits.items,
+    files: files.items,
+    application_paths_changed: files.items
+      .map((file) => file.path)
+      .filter((path) => APPLICATION_PATH.test(path)),
+    truncated: commits.truncated || files.truncated,
+  };
+}
+
 // ── Review input ─────────────────────────────────────────────────────────────
 
 const REVIEWER_CONSTRAINTS = [
@@ -218,6 +521,8 @@ const REVIEWER_CONSTRAINTS = [
   "Do not start the next phase. A next_phase value is information, not permission.",
   "Commits and pushes require explicit human approval and must never be triggered by a review.",
   "If phase.state is not VALID, report the validator errors and stop; do not infer phase results.",
+  "Judge the phase on evidence.phase_implementation. evidence.post_phase lists later commits (such as review tooling) that are not part of the phase.",
+  "If evidence.phase_implementation.state is not VERIFIED, the implementation cannot be assessed; return HUMAN_REVIEW_REQUIRED.",
 ];
 
 export interface CollectOptions {
@@ -231,21 +536,11 @@ export function collectReviewInput({ git, readStatusFile }: CollectOptions): Rev
   const branchRaw = git("branch")?.trim() ?? null;
   const parentRaw = head === null ? undefined : git("parent")?.trim();
   const parent = parentRaw === undefined || parentRaw === "" ? null : parentRaw;
-  const isRoot = head !== null && parent === null;
-
-  const commitFiles =
-    head === null ? [] : parseNameStatus(git(isRoot ? "rootCommitFiles" : "latestCommitFiles"));
-  const diffStat =
-    head === null
-      ? []
-      : lines(git(isRoot ? "rootCommitStat" : "latestCommitStat")).map((line) =>
-          sanitizeText(line.trimEnd(), 200),
-        );
   const tree = parsePorcelain(git("workingTreeStatus"));
-
-  const boundedCommit = bounded(commitFiles, OUTPUT_LIMITS.entries);
   const boundedTree = bounded(tree, OUTPUT_LIMITS.entries);
-  const boundedStat = bounded(diffStat, OUTPUT_LIMITS.diffStatLines);
+
+  const phase = collectPhase(readStatusFile);
+  const boundary = resolveBoundary(git, phase, head);
 
   return {
     schema_version: REVIEW_INPUT_SCHEMA_VERSION,
@@ -267,15 +562,10 @@ export function collectReviewInput({ git, readStatusFile }: CollectOptions): Rev
         sensitive_paths: tree.map((entry) => entry.path).filter(isSensitivePath),
       },
     },
-    phase: collectPhase(readStatusFile),
+    phase,
     evidence: {
-      latest_commit: {
-        is_root_commit: isRoot,
-        diff_stat: boundedStat.items,
-        files: boundedCommit.items,
-        truncated: boundedCommit.truncated || boundedStat.truncated,
-        sensitive_paths: commitFiles.map((entry) => entry.path).filter(isSensitivePath),
-      },
+      phase_implementation: collectImplementation(git, boundary),
+      post_phase: collectPostPhase(git, boundary),
     },
   };
 }

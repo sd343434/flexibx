@@ -33,6 +33,7 @@ export const KEY_ORDER = [
   "status",
   "summary",
   "files_changed",
+  "implementation",
   "tests",
   "lint",
   "typecheck",
@@ -117,6 +118,28 @@ const safeList = z
   });
 
 const phaseNumber = z.number().int().min(1).max(MAX_PHASE);
+
+/**
+ * A full, lowercase 40-character git commit ID. Abbreviations, ref names and anything
+ * else are rejected, so this value can never inject options or revisions into git.
+ */
+export const COMMIT_ID_PATTERN = /^[0-9a-f]{40}$/;
+const commitId = z
+  .string()
+  .regex(COMMIT_ID_PATTERN, "must be a full 40-character lowercase commit ID");
+
+/**
+ * The git range that implements the phase: (base, head]. `base` is the last commit
+ * before the phase (null when the phase starts at the repository root). Commits after
+ * `head` are post-phase work (e.g. review tooling) and are not part of the phase.
+ */
+const implementationRange = z
+  .object({ base: commitId.nullable(), head: commitId })
+  .strict()
+  .refine((range) => range.base !== range.head, {
+    message: "base and head must differ",
+    path: ["base"],
+  });
 const count = z.number().int().min(0).max(1_000_000);
 const checkResult = z.enum(CHECK_RESULTS);
 
@@ -126,6 +149,7 @@ const baseSchema = z
     status: z.enum(PHASE_STATUSES),
     summary: safeText(LIMITS.summary),
     files_changed: count,
+    implementation: implementationRange.nullable(),
     tests: z.object({ passed: count, failed: count }).strict(),
     lint: checkResult,
     typecheck: checkResult,
@@ -168,6 +192,11 @@ export const phaseStatusSchema = baseSchema.superRefine((status, ctx) => {
       issue(["tests", "failed"], `must be 0 when status is ${status.status}`);
     if (status.tests.passed === 0)
       issue(["tests", "passed"], `must be greater than 0 when status is ${status.status}`);
+    if (status.implementation === null)
+      issue(
+        ["implementation"],
+        `must declare the implementation commit range when status is ${status.status}`,
+      );
   }
 
   if (status.status === "BLOCKED" && status.risks.length === 0) {
@@ -179,8 +208,14 @@ export const phaseStatusSchema = baseSchema.superRefine((status, ctx) => {
 export function serializePhaseStatus(status: PhaseStatus): string {
   const ordered: Record<string, unknown> = {};
   for (const key of KEY_ORDER) {
-    ordered[key] =
-      key === "tests" ? { passed: status.tests.passed, failed: status.tests.failed } : status[key];
+    if (key === "tests")
+      ordered[key] = { passed: status.tests.passed, failed: status.tests.failed };
+    else if (key === "implementation")
+      ordered[key] =
+        status.implementation === null
+          ? null
+          : { base: status.implementation.base, head: status.implementation.head };
+    else ordered[key] = status[key];
   }
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }

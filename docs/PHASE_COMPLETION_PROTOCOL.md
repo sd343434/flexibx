@@ -16,6 +16,10 @@ recent one being worked on, reviewed or completed.
   "status": "READY_FOR_REVIEW",
   "summary": "Authentication and multi-tenancy runtime implemented and verified.",
   "files_changed": 42,
+  "implementation": {
+    "base": "cdb62dffcdea25181ac1fd0ca098c621537a277c",
+    "head": "<full 40-character ID of the last Phase 2 implementation commit>"
+  },
   "tests": {
     "passed": 150,
     "failed": 0
@@ -32,31 +36,58 @@ recent one being worked on, reviewed or completed.
 }
 ```
 
-(The example above wraps `risks` onto one line for readability. The real file must use
-the canonical format described in §6.)
+(The example above wraps `risks` onto one line for readability, and shows a placeholder
+for `head`. The real file must use real commit IDs and the canonical format described
+in §6.)
 
-| Field                                                 | Type                                                            | Meaning                                                                               |
-| ----------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `phase`                                               | integer 1–19                                                    | The phase this file describes                                                         |
-| `status`                                              | `IN_PROGRESS` \| `READY_FOR_REVIEW` \| `COMPLETED` \| `BLOCKED` | See §3                                                                                |
-| `summary`                                             | text, 1–500 chars                                               | What the phase delivered (or what blocks it)                                          |
-| `files_changed`                                       | integer ≥ 0                                                     | Files added, modified or deleted by the phase                                         |
-| `tests.passed` / `tests.failed`                       | integers ≥ 0                                                    | Totals across unit, integration and e2e suites                                        |
-| `lint`, `typecheck`, `build`, `migration`, `security` | `PASS` \| `FAIL` \| `NOT_RUN`                                   | Results of the required checks (§4)                                                   |
-| `breaking_changes`                                    | list of text (≤ 20 × 300 chars, unique)                         | Changes that break existing behavior, APIs, data or configuration                     |
-| `risks`                                               | list of text (≤ 20 × 300 chars, unique)                         | Known risks, limitations and open issues. For `BLOCKED`, the blockers                 |
-| `next_phase`                                          | integer or `null`                                               | Always `phase + 1`; `null` only for the final phase (19)                              |
-| `recommended_next_action`                             | text, 1–300 chars                                               | The next step **for a human** (e.g. "Review Phase 3 and approve or request changes.") |
+| Field                                                 | Type                                                            | Meaning                                                                                                                                                |
+| ----------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `phase`                                               | integer 1–19                                                    | The phase this file describes                                                                                                                          |
+| `status`                                              | `IN_PROGRESS` \| `READY_FOR_REVIEW` \| `COMPLETED` \| `BLOCKED` | See §3                                                                                                                                                 |
+| `summary`                                             | text, 1–500 chars                                               | What the phase delivered (or what blocks it)                                                                                                           |
+| `files_changed`                                       | integer ≥ 0                                                     | Files added, modified or deleted by the phase                                                                                                          |
+| `implementation`                                      | `{ "base": commit ID or null, "head": commit ID }` or `null`    | The git range (base, head] that implements the phase, as full 40-character lowercase commit IDs (§1a). Required for `READY_FOR_REVIEW` and `COMPLETED` |
+| `tests.passed` / `tests.failed`                       | integers ≥ 0                                                    | Totals across unit, integration and e2e suites                                                                                                         |
+| `lint`, `typecheck`, `build`, `migration`, `security` | `PASS` \| `FAIL` \| `NOT_RUN`                                   | Results of the required checks (§4)                                                                                                                    |
+| `breaking_changes`                                    | list of text (≤ 20 × 300 chars, unique)                         | Changes that break existing behavior, APIs, data or configuration                                                                                      |
+| `risks`                                               | list of text (≤ 20 × 300 chars, unique)                         | Known risks, limitations and open issues. For `BLOCKED`, the blockers                                                                                  |
+| `next_phase`                                          | integer or `null`                                               | Always `phase + 1`; `null` only for the final phase (19)                                                                                               |
+| `recommended_next_action`                             | text, 1–300 chars                                               | The next step **for a human** (e.g. "Review Phase 3 and approve or request changes.")                                                                  |
 
 Unknown keys are rejected. All text fields are single-line display text.
+
+### 1a. Implementation range
+
+`implementation` records **which commits implement the phase**, so that a review looks
+at the phase's own code rather than at whatever commit happens to be latest.
+
+- `head` is the last commit of the phase implementation.
+- `base` is the last commit **before** the phase: normally the previous phase's `head`.
+  It is `null` only when the phase starts at the repository's first commit (Phase 1).
+- Commits after `head`, such as review tooling, protocol updates or this status file
+  itself, are **post-phase** work. They are not part of the phase.
+- Values must be full 40-character lowercase commit IDs. Abbreviated IDs, branch names,
+  `HEAD`, revision syntax (`~`, `^`) and anything else are rejected, so the value can
+  never act as a git option or an arbitrary revision.
+- The range may be `null` while `IN_PROGRESS` or `BLOCKED`. It is required for
+  `READY_FOR_REVIEW` and `COMPLETED`.
+
+Phase 1 declares `{ "base": null, "head": "cdb62dffcdea25181ac1fd0ca098c621537a277c" }`.
+The four later commits (phase completion protocol, review input collector, reviewer
+contract, OpenAI reviewer) are post-phase review tooling.
+
+The AI review collector (`pnpm ai:review-input`) **verifies** the declared range against
+git before using it. See `scripts/ai-review/README.md`.
 
 ## 2. When Claude updates the file
 
 Claude updates `.phase-status.json`:
 
-1. **When starting a phase**: `status: IN_PROGRESS`, unrun checks set to `NOT_RUN`.
+1. **When starting a phase**: `status: IN_PROGRESS`, unrun checks set to `NOT_RUN`,
+   `implementation: null`.
 2. **When all validation checks have been run** at the end of the phase: record the
-   actual results, then set `READY_FOR_REVIEW` if every requirement in §3 is met.
+   actual results and the implementation range (§1a), then set `READY_FOR_REVIEW` if
+   every requirement in §3 is met.
    Otherwise keep `IN_PROGRESS`, or use `BLOCKED`.
 3. **When the phase becomes blocked**: `status: BLOCKED`, with the blockers in `risks`.
 4. **After the human explicitly approves the phase**: `status: COMPLETED`.
@@ -77,6 +108,7 @@ human review. Requirements, enforced by the validator:
 - `lint`, `typecheck`, `build` and `security` are `PASS`;
 - `migration` is `PASS`, or `NOT_RUN` only if the phase changes no database schema;
 - `tests.failed` is `0` and `tests.passed` is greater than `0`;
+- `implementation` declares the phase's commit range (§1a);
 - the summary, risks and breaking changes are complete and honest.
 
 `READY_FOR_REVIEW` does **not** mean approved, committed or pushed.

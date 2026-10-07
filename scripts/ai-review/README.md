@@ -23,33 +23,84 @@ It needs `OPENAI_API_KEY=<your key>` in the process environment. See
 [`REVIEWER_CONFIG.md`](REVIEWER_CONFIG.md) for configuration, exit codes, and what is
 and isn't sent.
 
+Two separate `schema_version` fields exist. The **review input** (what the collector
+produces and the reviewer is sent) is currently **version 2**
+(`REVIEW_INPUT_SCHEMA_VERSION`, `types.ts`). The **reviewer response** (what the model
+returns, defined in `REVIEW_CONTRACT.md`) is currently **version 1**
+(`REVIEW_SCHEMA_VERSION`, `review-schema.ts`). A response with `"schema_version": 1` is
+therefore correct and says nothing about the input version. `pnpm ai:review` refuses to
+send an input whose version is not the current one (`INPUT_SCHEMA_MISMATCH`, before any
+API call), and prints the input version and the phase implementation range it reviewed.
+
 ## Files
 
-| File              | Purpose                                                            |
-| ----------------- | ------------------------------------------------------------------ |
-| `types.ts`        | The `ReviewInput` shape and the closed set of allowed git commands |
-| `collect.ts`      | Collection, sanitization and deterministic serialization           |
-| `review-input.ts` | CLI entry point (`pnpm ai:review-input`)                           |
+| File              | Purpose                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------- |
+| `types.ts`        | The `ReviewInput` shape (schema version 2) and the closed set of allowed git commands |
+| `collect.ts`      | Collection, sanitization and deterministic serialization                              |
+| `review-input.ts` | CLI entry point (`pnpm ai:review-input`)                                              |
 
 ## What is collected
 
-| Section                  | Content                                                                                                                                                                                                                             | Source                                          |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `protocol`               | Protocol name and document, status file name, purpose, and the **constraints every reviewer must follow**                                                                                                                           | Hard-coded                                      |
-| `phase`                  | `state` (`VALID` / `INVALID` / `MISSING`), validator `errors`, and the full status when valid: phase, status, summary, tests, lint/typecheck/build/migration/security, risks, breaking changes, next phase, recommended next action | `.phase-status.json` via the protocol validator |
-| `repository`             | Current branch, `HEAD`, parent commit, working-tree status (clean flag, entries, flagged sensitive paths)                                                                                                                           | `git rev-parse`, `git status --porcelain`       |
-| `evidence.latest_commit` | `git diff --stat HEAD~1..HEAD` lines and the files changed by the latest commit (root commits handled)                                                                                                                              | `git diff` / `git diff-tree`                    |
+| Section                         | Content                                                                                                                                                                                                                                                                                                               | Source                                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `protocol`                      | Protocol name and document, status file name, purpose, and the **constraints every reviewer must follow**                                                                                                                                                                                                             | Hard-coded                                                                                                             |
+| `phase`                         | `state` (`VALID` / `INVALID` / `MISSING`), validator `errors`, and the full status when valid: phase, status, summary, tests, lint/typecheck/build/migration/security, risks, breaking changes, next phase, recommended next action                                                                                   | `.phase-status.json` via the protocol validator                                                                        |
+| `repository`                    | Current branch, `HEAD`, parent commit, working-tree status (clean flag, entries, flagged sensitive paths)                                                                                                                                                                                                             | `git rev-parse`, `git status --porcelain`                                                                              |
+| `evidence.phase_implementation` | The **verified** commit range of the phase: commits (hash, subject), `diff --stat`, changed files, a bounded and redacted implementation diff, and validation evidence (test files by suite, CI, Docker, migrations, security-relevant files). `UNDETERMINED` with a fixed reason code if the range can't be verified | `implementation` range from `.phase-status.json`, verified with `git rev-parse` / `merge-base`; `git log` / `git diff` |
+| `evidence.post_phase`           | Commits and files after the phase head up to `HEAD` (e.g. review tooling), and which of those files are application/runtime paths                                                                                                                                                                                     | `git log` / `git diff` over `head..HEAD`                                                                               |
 
 An `INVALID` status contributes **only** its sanitized validator errors, never its field
 values. Unverified text therefore never reaches the reviewer as if it were phase data.
+
+## How phase implementation evidence is determined
+
+The collector does **not** assume that the latest commit is the phase. The phase status
+file declares the phase's implementation range, and the collector verifies it:
+
+1. `.phase-status.json` must be `VALID`. Its `implementation` field gives
+   `{ base, head }` as full 40-character commit IDs; `base` is `null` when the phase
+   starts at the repository root (see `docs/PHASE_COMPLETION_PROTOCOL.md` §1a).
+2. The collector checks, using only git read commands:
+   - `head` exists as a commit, and is an ancestor of `HEAD`;
+   - `base` (if set) exists and is an ancestor of `head`.
+3. If every check passes, `phase_implementation` is `VERIFIED` and covers `(base, head]`.
+   A `null` base uses git's empty tree, so the diff covers everything up to `head`.
+4. Everything in `(head, HEAD]` becomes `post_phase`: listed for transparency, never
+   counted as phase work. `application_paths_changed` highlights post-phase changes to
+   `src/`, `prisma/`, `messages/`, `e2e/`, `tests/integration/`, Docker, CI and runtime
+   config, because those could change what was reviewed.
+5. If anything fails, both sections are `UNDETERMINED` with one fixed reason and no
+   evidence: `STATUS_MISSING`, `STATUS_INVALID`, `BOUNDARY_NOT_DECLARED`,
+   `HEAD_UNAVAILABLE`, `COMMIT_NOT_FOUND`, `NOT_ANCESTOR_OF_HEAD`, `BASE_NOT_FOUND`,
+   `BASE_NOT_ANCESTOR` or `HISTORY_UNAVAILABLE`. The reviewer is instructed to return
+   `HUMAN_REVIEW_REQUIRED` in that case.
+
+For Phase 1, the range is `base: null`, `head: cdb62df…`. The four later commits are
+post-phase review tooling (protocol, collector, contract, OpenAI reviewer).
+
+**Diff bounds.**
+
+- At most 160 000 characters of diff in total, and 8 000 per file. Every line goes
+  through secret redaction and is capped at 300 characters.
+- Files are included in a fixed priority order: `prisma/`, `src/server/`,
+  `src/proxy.ts` and `src/security/`, `next.config.ts`, CI, Docker, root config
+  (`package.json`, `prisma.config.ts`, `.gitignore`, `.gitleaks.toml`, …), the rest of
+  `src/`, tests, translations, then everything else. Ties are broken by path in
+  code-unit order.
+- Files that don't fit are listed in `patch.omitted` with reason `BUDGET`.
+  `pnpm-lock.yaml` is listed as `LOCKFILE` (stat only), and sensitive paths (`.env*`,
+  keys, `.npmrc`, …) as `SENSITIVE`. Their contents are never included.
+- Commits and file lists are capped (200 commits, 500 entries); a `truncated` flag shows
+  when a cap was hit.
 
 ## Safety guarantees
 
 **Read-only.**
 
 - The collector reads one file (`.phase-status.json`, size-checked to at most 64 KiB first)
-  and runs only the git read commands listed in `GIT_COMMANDS`: `rev-parse`, `diff`,
-  `diff-tree` and `status`.
+  and runs only the git read commands listed in `GIT_COMMANDS`: `rev-parse`, `status`,
+  `merge-base --is-ancestor`, `log` and `diff`.
 - It never commits, pushes, checks out, resets, stages, installs packages or starts
   services.
 - `git status` runs with `--no-optional-locks` / `GIT_OPTIONAL_LOCKS=0`, so it does not
@@ -58,10 +109,14 @@ values. Unverified text therefore never reaches the reviewer as if it were phase
 
 **No command execution from data.**
 
-- Every git argument is a hard-coded literal, and git is started with
+- Every git argument comes from a fixed builder in `GIT_COMMANDS`, and git is started with
   `execFileSync(..., { shell: false })`.
-- Nothing from `.phase-status.json`, file names or the environment is ever passed as a
-  command or argument.
+- The only variable arguments are commit IDs that match `^[0-9a-f]{40}$` (checked by the
+  protocol validator and again by the argument builders), or the literal `HEAD`.
+  Ref names, revision syntax and option-like values are rejected, and the git command
+  itself is never chosen by data.
+- Nothing else from `.phase-status.json`, file names or the environment is ever passed as
+  a command or argument.
 - Repository config cannot make these read commands run programs:
   - fsmonitor hooks are disabled (`core.fsmonitor=false`);
   - external diff drivers and textconv filters are disabled (`--no-ext-diff`,

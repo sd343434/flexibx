@@ -38,6 +38,10 @@ packages, changes branches, resets git or modifies application code.
 
 ## 2. Response schema (`schema_version: 1`)
 
+This `schema_version` is the **response** contract version (currently 1). It is
+separate from the review **input** `schema_version` (currently 2, see `README.md`),
+and the two change independently.
+
 ```json
 {
   "schema_version": 1,

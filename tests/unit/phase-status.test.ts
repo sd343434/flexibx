@@ -19,6 +19,7 @@ const base: PhaseStatus = {
   status: "READY_FOR_REVIEW",
   summary: "Authentication and multi-tenancy runtime implemented and verified.",
   files_changed: 42,
+  implementation: { base: "a".repeat(40), head: "b".repeat(40) },
   tests: { passed: 150, failed: 0 },
   lint: "PASS",
   typecheck: "PASS",
@@ -124,6 +125,52 @@ describe("validatePhaseStatusText — structure", () => {
   it("reports errors in a stable, sorted order", () => {
     const errors = errorsFor({ lint: "FAIL", build: "FAIL", status: "COMPLETED" });
     expect([...errors]).toEqual([...errors].sort());
+  });
+});
+
+describe("validatePhaseStatusText — implementation range", () => {
+  it("accepts a full commit range, and a null base for phases starting at the root", () => {
+    expect(validatePhaseStatusText(text()).valid).toBe(true);
+    expect(
+      validatePhaseStatusText(text({ implementation: { base: null, head: "c".repeat(40) } })).valid,
+    ).toBe(true);
+  });
+
+  it.each(["READY_FOR_REVIEW", "COMPLETED"])(
+    "%s requires a declared implementation range",
+    (status) => {
+      expect(errorsFor({ status, implementation: null })).toEqual([
+        `implementation: must declare the implementation commit range when status is ${status}`,
+      ]);
+    },
+  );
+
+  it("allows an undeclared range while IN_PROGRESS", () => {
+    expect(
+      validatePhaseStatusText(text({ status: "IN_PROGRESS", implementation: null })).valid,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["abbreviated", "cdb62df"],
+    ["uppercase", "B".repeat(40)],
+    ["ref name", "HEAD"],
+    ["revision syntax", `${"b".repeat(39)}~`],
+    ["option injection", "--output=/tmp/pwned"],
+    ["SHA-256 length", "b".repeat(64)],
+  ])("rejects a %s commit ID", (_name, head) => {
+    expect(errorsFor({ implementation: { base: null, head } })).toContain(
+      "implementation.head: must be a full 40-character lowercase commit ID",
+    );
+  });
+
+  it("rejects identical base and head, and unknown keys", () => {
+    expect(errorsFor({ implementation: { base: "b".repeat(40), head: "b".repeat(40) } })).toContain(
+      "implementation.base: base and head must differ",
+    );
+    expect(
+      errorsFor({ implementation: { base: null, head: "b".repeat(40), extra: 1 } }).join(),
+    ).toMatch(/Unrecognized key/);
   });
 });
 
