@@ -21,7 +21,7 @@ export function createTestDb(): TestDb {
 
 /** Empties every table. Only ever runs against the guarded `_test` database. */
 export async function resetDatabase(system: PrismaClient): Promise<void> {
-  await system.$executeRaw`TRUNCATE TABLE audit_logs, workspace_members, workspaces, users RESTART IDENTITY CASCADE`;
+  await system.$executeRaw`TRUNCATE TABLE sessions, accounts, verifications, audit_logs, workspace_members, workspaces, users RESTART IDENTITY CASCADE`;
 }
 
 let counter = 0;

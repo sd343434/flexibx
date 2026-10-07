@@ -26,9 +26,20 @@ export const TENANT_ROOT_MODEL = "Workspace";
  */
 export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients"] as const;
 
-/** Global (non-tenant) models and the relations through which they reach tenant data. */
+/**
+ * Authentication tables (Better Auth). Global/system data — never workspace-scoped and
+ * never reachable through the application client: only the auth layer touches them,
+ * through the system client. This also keeps raw session tokens out of app code.
+ */
+export const AUTH_MODELS: ReadonlySet<string> = new Set(["Session", "Account", "Verification"]);
+
+/**
+ * Global (non-tenant) models and the relations they must not reach through the
+ * application client: tenant data (queried through workspace-scoped models) and
+ * authentication data (auth layer only).
+ */
 export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly string[]>> = {
-  User: ["memberships", "auditLogs"],
+  User: ["memberships", "auditLogs", "sessions", "accounts"],
 };
 
 // Every operation that is not a create — all reads (findUnique/First/Many, count,
@@ -164,12 +175,20 @@ export function assertTenantSafe(model: string, operation: string, rawArgs: unkn
     return;
   }
 
+  if (AUTH_MODELS.has(model)) {
+    throw violation(
+      model,
+      operation,
+      "authentication tables are only accessible to the auth layer",
+    );
+  }
+
   const relations = GLOBAL_MODEL_TENANT_RELATIONS[model];
   if (relations !== undefined && touchesRelations(args, relations)) {
     throw violation(
       model,
       operation,
-      `tenant relations (${relations.join(", ")}) must be queried through their own workspace-scoped model`,
+      `protected relations (${relations.join(", ")}) must be queried through their own scoped model or the auth layer`,
     );
   }
 }

@@ -54,7 +54,39 @@ export const storageEnvSchema = z.object({
   S3_PUBLIC_BASE_URL: optional(z.url()),
 });
 
+/**
+ * Authentication settings, validated when the auth layer is first used.
+ * AUTH_SECRET signs session cookies. It must be generated independently and kept out of
+ * the database: rotating it invalidates every existing session cookie (users sign in again).
+ */
+export const authEnvSchema = z.object({
+  AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -base64 32)"),
+  // Trusted client-IP source. Unset (default): no IP is trusted or recorded, because
+  // forwarded headers are client-controlled unless a known proxy overwrites them.
+  AUTH_IP_HEADER: optional(
+    z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9-]{1,64}$/, "must be a single HTTP header name"),
+  ),
+  // Comma-separated IPs/CIDRs of the reverse proxies in front of the app (only with
+  // AUTH_IP_HEADER). Never a broad private range that also covers clients.
+  AUTH_TRUSTED_PROXIES: optional(
+    z
+      .string()
+      .transform((value) =>
+        value
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== ""),
+      )
+      .pipe(z.array(z.string().regex(/^[0-9a-f:.]+(\/\d{1,3})?$/i, "must be an IP or CIDR"))),
+  ),
+});
+
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
+export type AuthEnv = z.infer<typeof authEnvSchema>;
 export type StorageEnv = z.infer<typeof storageEnvSchema>;
 
 export class EnvValidationError extends Error {
@@ -80,6 +112,12 @@ type EnvSource = Readonly<Record<string, string | undefined>>;
 export function parseServerEnv(source: EnvSource): ServerEnv {
   const result = serverEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("server", result.error.issues);
+  return result.data;
+}
+
+export function parseAuthEnv(source: EnvSource): AuthEnv {
+  const result = authEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("auth", result.error.issues);
   return result.data;
 }
 

@@ -43,7 +43,8 @@ enum Locale {
   @@map("locale")
 }
 
-/// Platform user. Shape is compatible with Better Auth's core `user` model (Phase 2).
+/// Platform user, also Better Auth's `user` model. `isPlatformAdmin` and `locale` are
+/// never accepted from auth input (see src/server/auth/auth-config.ts).
 model User {
   id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email           String   @unique @db.Citext
@@ -57,6 +58,8 @@ model User {
 
   memberships WorkspaceMember[]
   auditLogs   AuditLog[]
+  sessions    Session[]
+  accounts    Account[]
 
   @@map("users")
 }
@@ -128,4 +131,65 @@ model AuditLog {
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([actorUserId])
   @@map("audit_logs")
+}
+
+// ── Authentication (Better Auth). Global/system tables: never workspace-scoped and
+// only accessed by the auth layer through the system client (see tenant-guard.ts). ──
+
+/// Database session. `token` is Better Auth's raw session token; the cookie carries
+/// `token.HMAC(token, AUTH_SECRET)`, so a database copy alone cannot forge a cookie.
+/// Application code must never read this table directly (enforced by the tenant guard
+/// and a static test).
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Credentials per provider. For email/password, `providerId = "credential"` and
+/// `password` holds the scrypt hash. OAuth columns are reserved (OAuth is not enabled).
+model Account {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id") @db.Uuid
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(3)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+/// Short-lived verification values (email verification, password reset).
+model Verification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([identifier])
+  @@map("verifications")
 }

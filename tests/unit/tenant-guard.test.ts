@@ -223,6 +223,33 @@ describe("assertTenantSafe — Workspace nested writes", () => {
   });
 });
 
+describe("assertTenantSafe — authentication tables", () => {
+  it.each(["Session", "Account", "Verification"])(
+    "blocks every %s operation on the application client",
+    (model) => {
+      for (const operation of [
+        "findMany",
+        "findUnique",
+        "findFirst",
+        "count",
+        "create",
+        "update",
+        "delete",
+        "deleteMany",
+        "upsert",
+      ]) {
+        rejects(model, operation, { where: { id: USER } });
+      }
+    },
+  );
+
+  it("blocks reaching sessions or accounts through User", () => {
+    rejects("User", "findUnique", { where: { id: USER }, include: { sessions: true } });
+    rejects("User", "findMany", { select: { id: true, accounts: true } });
+    rejects("User", "update", { where: { id: USER }, data: { sessions: { deleteMany: {} } } });
+  });
+});
+
 describe("assertTenantSafe — global models", () => {
   it("blocks reaching tenant data through User relations", () => {
     rejects("User", "findMany", { include: { memberships: true } });
