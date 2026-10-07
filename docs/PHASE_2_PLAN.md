@@ -1,8 +1,8 @@
 # Phase 2 execution plan — authentication and runtime multi-tenancy
 
 > **This is the canonical Phase 2 execution plan.** It is the source of truth for future
-> Claude implementation prompts. Phase 2 contains **exactly 12 steps**. Steps 1–3 are
-> complete; **Step 4 is the next implementation step**.
+> Claude implementation prompts. Phase 2 contains **exactly 12 steps**. Steps 1–4 are
+> complete; **Step 5 is the next implementation step**.
 >
 > - Any change to this plan (scope, order, decisions) requires explicit human approval.
 > - Updating this document never starts implementation. Each step begins only after an
@@ -22,8 +22,8 @@ Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) (current system and rule
 | 1    | Better Auth integration spike                  | Done — integration spike completed before Step 2; temporary spike artifacts removed |
 | 2    | Better Auth foundation                         | Complete — `8727e38`                                                                |
 | 3    | Runtime auth and workspace access              | Complete — `82fd5ab` (status `02f9530`)                                             |
-| 4    | Workspace creation and workspace selection     | **Next** — not started                                                              |
-| 5    | Authentication UI (sign-up, sign-in, sign-out) | Not started                                                                         |
+| 4    | Workspace creation and workspace selection     | Complete — `194e4f5`                                                                |
+| 5    | Authentication UI (sign-up, sign-in, sign-out) | **Next** — not started                                                              |
 | 6    | Workspace app shell and switching              | Not started                                                                         |
 | 7    | Member management                              | Not started                                                                         |
 | 8    | Mailer abstraction                             | Not started                                                                         |
@@ -33,7 +33,7 @@ Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) (current system and rule
 | 12   | Phase 2 hardening and completion               | Not started                                                                         |
 
 `.phase-status.json`: phase 2, `IN_PROGRESS`, interim range
-`228701e…` (end of Phase 1) `..82fd5ab…` (Step 3).
+`228701e…` (end of Phase 1) `..194e4f5…` (Step 4).
 
 ## 2. Scope
 
@@ -147,7 +147,7 @@ delivered before any commit.
 
 ---
 
-### Step 4 — Workspace creation and workspace selection _(next)_
+### Step 4 — Workspace creation and workspace selection _(complete — `194e4f5`)_
 
 - **Objective:** a signed-in user can create a workspace and reach the workspaces they
   belong to. Workspace creation is the precondition for every workspace-scoped page.
@@ -175,8 +175,12 @@ delivered before any commit.
 - **Explicitly out of scope:** sign-in UI, app shell, switcher, members, invitations,
   `AGENCY`/client creation (Phase 14), workspace settings/editing.
 - **Dependencies:** Steps 2–3.
+- **As implemented (approved):** `/{locale}/w/{workspaceSlug}` exists as a minimal
+  Step 4 bridge/landing page — the redirect target after creation and for a single
+  membership — authorized through `requireWorkspaceAccess`. Step 6 replaces it with the
+  workspace layout, home page and shell.
 
-### Step 5 — Authentication UI (sign-up, sign-in, sign-out)
+### Step 5 — Authentication UI (sign-up, sign-in, sign-out) _(next)_
 
 - **Objective:** users can register, sign in and sign out through localized pages.
 - **Scope:**
