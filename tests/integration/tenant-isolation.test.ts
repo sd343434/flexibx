@@ -63,6 +63,42 @@ describe("tenant guard on a real Prisma client", () => {
     );
   });
 
+  it("blocks deleting audit logs through a nested write on the workspace", async () => {
+    const tenant = await createTenant(system);
+    await system.auditLog.create({
+      data: {
+        workspaceId: tenant.workspaceId,
+        action: "workspace.created",
+        entityType: "workspace",
+      },
+    });
+    await expectCode(
+      db.workspace.update({
+        where: { id: tenant.workspaceId },
+        data: { auditLogs: { deleteMany: {} } },
+      }),
+      "TENANT_SCOPE_MISSING",
+    );
+    expect(await system.auditLog.count({ where: { workspaceId: tenant.workspaceId } })).toBe(1);
+  });
+
+  it("blocks moving another workspace's membership through a nested connect", async () => {
+    const alpha = await createTenant(system);
+    const beta = await createTenant(system);
+    const betaMember = await system.workspaceMember.findFirstOrThrow({
+      where: { workspaceId: beta.workspaceId },
+    });
+    await expectCode(
+      db.workspace.update({
+        where: { id: alpha.workspaceId },
+        data: { members: { connect: { id: betaMember.id } } },
+      }),
+      "TENANT_SCOPE_MISSING",
+    );
+    const after = await system.workspaceMember.findUniqueOrThrow({ where: { id: betaMember.id } });
+    expect(after.workspaceId).toBe(beta.workspaceId);
+  });
+
   it("blocks reaching memberships through the global User model", async () => {
     const tenant = await createTenant(system);
     await expectCode(

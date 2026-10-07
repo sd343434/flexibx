@@ -124,6 +124,10 @@ Controls, from outermost to innermost:
    - updates that change `workspaceId`;
    - any update/delete on append-only models (`AuditLog`);
    - `Workspace` reads/updates that do not target one `id`, and all `Workspace` hard deletes;
+   - nested writes from `Workspace` creates, updates and upserts to its workspace-owned
+     relations (`members`, `auditLogs`, `clients`). Prisma runs nested writes without
+     passing them through the extension, so these relations are changed only through
+     their own guarded top-level model operations;
    - reaching tenant relations through global models (e.g. `User.memberships`).
 
    It also applies inside interactive transactions.

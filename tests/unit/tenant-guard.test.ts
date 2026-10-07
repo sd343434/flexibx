@@ -143,6 +143,86 @@ describe("assertTenantSafe — Workspace (tenant root)", () => {
   });
 });
 
+describe("assertTenantSafe — Workspace nested writes", () => {
+  const OTHER = "9a3c2b1d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+  const relations = ["members", "auditLogs", "clients"] as const;
+  // Every nested write Prisma accepts on a to-many relation.
+  const nested: Record<string, unknown> = {
+    create: {},
+    createMany: { data: [] },
+    connect: { id: OTHER },
+    connectOrCreate: { where: { id: OTHER }, create: {} },
+    set: [],
+    disconnect: { id: OTHER },
+    update: { where: { id: OTHER }, data: {} },
+    updateMany: { where: {}, data: {} },
+    upsert: { where: { id: OTHER }, create: {}, update: {} },
+    delete: { id: OTHER },
+    deleteMany: {},
+  };
+  const cases = relations.flatMap((relation) =>
+    Object.entries(nested).map(
+      ([kind, value]) => [relation, kind, { [relation]: { [kind]: value } }] as const,
+    ),
+  );
+
+  it.each(cases)("rejects Workspace.update with %s.%s", (_relation, _kind, data) => {
+    rejects("Workspace", "update", { where: { id: WS }, data });
+    rejects("Workspace", "updateMany", { where: { id: WS }, data });
+  });
+
+  it.each(cases)("rejects Workspace.create with %s.%s", (_relation, _kind, data) => {
+    rejects("Workspace", "create", { data: { name: "n", slug: "new-ws", ...data } });
+  });
+
+  it.each(relations)(
+    "rejects Workspace.upsert with nested %s writes in either half",
+    (relation) => {
+      const data = { [relation]: { connect: { id: OTHER } } };
+      rejects("Workspace", "upsert", {
+        where: { id: WS },
+        create: { name: "n", slug: "new-ws", ...data },
+        update: {},
+      });
+      rejects("Workspace", "upsert", {
+        where: { id: WS },
+        create: { name: "n", slug: "new-ws" },
+        update: data,
+      });
+    },
+  );
+
+  it.each(relations)("rejects Workspace.createMany rows carrying %s", (relation) => {
+    const row = { name: "n", slug: "new-ws", [relation]: { connect: { id: OTHER } } };
+    rejects("Workspace", "createMany", { data: [{ name: "a", slug: "ws-a" }, row] });
+    rejects("Workspace", "createManyAndReturn", { data: row });
+  });
+
+  it("accepts plain field updates, soft deletion, reads, include and select", () => {
+    expect(() => {
+      assertTenantSafe("Workspace", "update", { where: { id: WS }, data: { name: "Renamed" } });
+      assertTenantSafe("Workspace", "updateMany", {
+        where: { id: WS, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+      assertTenantSafe("Workspace", "upsert", {
+        where: { id: WS },
+        create: { name: "n", slug: "new-ws" },
+        update: { timezone: "Asia/Dubai" },
+      });
+      assertTenantSafe("Workspace", "createMany", { data: [{ name: "a", slug: "ws-a" }] });
+      assertTenantSafe("Workspace", "findUnique", {
+        where: { id: WS },
+        include: { members: true, auditLogs: true, clients: true },
+      });
+      assertTenantSafe("Workspace", "findFirst", {
+        where: { id: WS },
+        select: { id: true, members: { select: { userId: true } } },
+      });
+    }).not.toThrow();
+  });
+});
+
 describe("assertTenantSafe — global models", () => {
   it("blocks reaching tenant data through User relations", () => {
     rejects("User", "findMany", { include: { memberships: true } });

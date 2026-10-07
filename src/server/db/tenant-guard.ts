@@ -18,6 +18,14 @@ export const TENANT_MODELS = {
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
 export const TENANT_ROOT_MODEL = "Workspace";
 
+/**
+ * Workspace-owned relations of the tenant root. Prisma runs nested writes inside the
+ * parent operation without passing them through this guard, so writes to the root may
+ * not touch these relations at all; they are changed only through their own guarded
+ * top-level model operations.
+ */
+export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients"] as const;
+
 /** Global (non-tenant) models and the relations through which they reach tenant data. */
 export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly string[]>> = {
   User: ["memberships", "auditLogs"],
@@ -80,6 +88,24 @@ function assertNoWorkspaceChange(model: string, operation: string, data: unknown
   }
 }
 
+function assertNoNestedTenantWrites(model: string, operation: string, payloads: unknown[]) {
+  for (const payload of payloads) {
+    const rows = Array.isArray(payload) ? payload : [payload];
+    for (const row of rows) {
+      const relation = isRecord(row)
+        ? TENANT_ROOT_RELATIONS.find((name) => name in row)
+        : undefined;
+      if (relation !== undefined) {
+        throw violation(
+          model,
+          operation,
+          `nested writes to ${relation} are not allowed; use the ${relation} model's own guarded operations`,
+        );
+      }
+    }
+  }
+}
+
 function touchesRelations(args: Args, relations: readonly string[]): boolean {
   return ["include", "select", "data"].some((key) => {
     const value = args[key];
@@ -126,6 +152,9 @@ export function assertTenantSafe(model: string, operation: string, rawArgs: unkn
         operation,
         "workspaces are soft-deleted (set deletedAt); hard deletes are blocked",
       );
+    }
+    if (CREATE_OPERATIONS.has(operation) || UPDATE_OPERATIONS.has(operation)) {
+      assertNoNestedTenantWrites(model, operation, [args.data, args.create, args.update]);
     }
     if (CREATE_OPERATIONS.has(operation)) return;
     const where = args.where;
