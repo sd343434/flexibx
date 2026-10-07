@@ -54,9 +54,38 @@
     "description": "The page may have moved, or the link is incorrect.",
     "backHome": "Back to home"
   },
-  "signInRequired": {
-    "title": "Sign in required",
-    "description": "Please sign in to continue."
+  "auth": {
+    "signIn": {
+      "title": "Sign in",
+      "description": "Sign in to manage your workspaces.",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Sign in",
+      "submitting": "Signing in…",
+      "registered": "Thanks. If you just created an account, you can sign in now with your email and password.",
+      "noAccount": "Don't have an account?",
+      "signUpLink": "Create one"
+    },
+    "signUp": {
+      "title": "Create an account",
+      "description": "Create your Flexibx account, then sign in to set up your workspace.",
+      "name": "Full name",
+      "email": "Email",
+      "password": "Password",
+      "passwordHint": "At least {minimum} characters.",
+      "submit": "Create account",
+      "submitting": "Creating account…",
+      "haveAccount": "Already have an account?",
+      "signInLink": "Sign in"
+    },
+    "signOut": {
+      "submit": "Sign out"
+    },
+    "errors": {
+      "invalidCredentials": "The email or password is incorrect.",
+      "invalidInput": "Some of the information is invalid. Please review the highlighted fields.",
+      "unavailable": "We couldn't complete this request. Please try again later."
+    }
   },
   "workspaces": {
     "list": {

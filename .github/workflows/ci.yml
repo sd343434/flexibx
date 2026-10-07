@@ -75,6 +75,9 @@ jobs:
       - run: pnpm build
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
+      # The auth e2e tests need a session secret; a fresh random one per run, never stored.
+      - name: Generate throwaway AUTH_SECRET
+        run: echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
       - run: pnpm e2e
       - name: Upload Playwright report
         if: failure()

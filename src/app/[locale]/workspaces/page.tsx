@@ -1,14 +1,15 @@
 import { Plus } from "lucide-react";
 import { getTranslations } from "next-intl/server";
 
-import { SignInRequired } from "@/components/common/sign-in-required";
 import { SiteHeader } from "@/components/common/site-header";
 import { Button } from "@/components/ui/button";
 import { Link, redirect } from "@/i18n/navigation";
 import { requireLocale } from "@/i18n/params";
-import { getCurrentUser } from "@/server/auth/session";
+import { requirePageUser } from "@/server/auth/session";
 import { listMyWorkspaces } from "@/server/tenancy/access";
 import { decideWorkspaceLanding } from "@/server/workspaces/landing";
+
+import { SignOutButton } from "../(auth)/sign-out-button";
 
 interface WorkspacesPageProps {
   readonly params: Promise<{ locale: string }>;
@@ -16,14 +17,7 @@ interface WorkspacesPageProps {
 
 export default async function WorkspacesPage({ params }: WorkspacesPageProps) {
   const locale = requireLocale((await params).locale);
-  if ((await getCurrentUser()) === null) {
-    return (
-      <>
-        <SiteHeader />
-        <SignInRequired />
-      </>
-    );
-  }
+  await requirePageUser(locale, `/${locale}/workspaces`);
 
   const landing = decideWorkspaceLanding(await listMyWorkspaces());
   if (landing.kind === "create") return redirect({ href: "/workspaces/new", locale });
@@ -32,7 +26,7 @@ export default async function WorkspacesPage({ params }: WorkspacesPageProps) {
   const t = await getTranslations({ locale, namespace: "workspaces" });
   return (
     <>
-      <SiteHeader />
+      <SiteHeader actions={<SignOutButton />} />
       <main id="main" className="mx-auto max-w-xl space-y-8 px-4 py-16 sm:px-6">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">{t("list.title")}</h1>

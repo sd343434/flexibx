@@ -1,12 +1,14 @@
 import { Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
+import type { ReactNode } from "react";
 
 import { Link } from "@/i18n/navigation";
 
 import { LocaleSwitcher } from "./locale-switcher";
 import { ThemeToggle } from "./theme-toggle";
 
-export function SiteHeader() {
+/** `actions`: extra controls for the end of the header (e.g. the sign-out button). */
+export function SiteHeader({ actions }: { readonly actions?: ReactNode } = {}) {
   const t = useTranslations("common");
 
   return (
@@ -21,6 +23,7 @@ export function SiteHeader() {
         <div className="flex items-center gap-1">
           <LocaleSwitcher />
           <ThemeToggle />
+          {actions}
         </div>
       </div>
     </header>

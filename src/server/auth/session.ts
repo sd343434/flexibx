@@ -1,13 +1,17 @@
 import "server-only";
 
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { cache } from "react";
+
+import type { Locale } from "@/i18n/config";
 
 import { AppError } from "../errors/app-error";
 import { isUuid } from "../tenancy/context";
 
 import { getAuth } from "./auth";
 import type { Auth } from "./auth-config";
+import { signInPath } from "./safe-redirect";
 
 /**
  * The signed-in user as application code sees it. Deliberately small: no session
@@ -59,5 +63,15 @@ export const getCurrentUser = cache(async (): Promise<AuthUser | null> =>
 export async function requireUser(): Promise<AuthUser> {
   const user = await getCurrentUser();
   if (user === null) throw new AppError("UNAUTHENTICATED");
+  return user;
+}
+
+/**
+ * For protected pages: the current user, or a redirect to the sign-in page that returns
+ * to `path` (an internal `/{locale}/…` path) afterwards.
+ */
+export async function requirePageUser(locale: Locale, path: string): Promise<AuthUser> {
+  const user = await getCurrentUser();
+  if (user === null) redirect(signInPath(locale, path));
   return user;
 }

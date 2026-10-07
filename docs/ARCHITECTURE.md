@@ -153,9 +153,24 @@ Controls, from outermost to innermost:
      several → the list. `/{locale}/w/{slug}` is a minimal landing page that authorizes
      through `requireWorkspaceAccess(slug, "workspace.view")` and renders 404 for any
      workspace the user cannot open. The workspace layout, shell and switcher arrive in
-     Step 6. Until the sign-in page exists (Step 5), these pages show a localized
-     "sign-in required" notice when there is no session. All of them are dynamic and
-     served with `Cache-Control: private, no-cache, no-store`.
+     Step 6. Without a session these pages redirect to the sign-in page with a `next`
+     return path (`requirePageUser`). All of them are dynamic and served with
+     `Cache-Control: private, no-cache, no-store`.
+   - **Authentication pages** (`/{locale}/sign-up`, `/{locale}/sign-in`, route group
+     `app/[locale]/(auth)`): their form actions call `signUpAction` / `signInAction` /
+     `signOutAction` (`server/auth/auth-actions.ts`, `withAction`), which use
+     `signUpWithEmail` / `signInWithEmail` / `signOutCurrentSession`. Better Auth's
+     `nextCookies()` writes and clears the session cookie; application code never handles
+     tokens. Sign-up answers every accepted request — new or already-registered email —
+     with the same redirect to sign-in (`?registered=1`, no automatic sign-in). Only
+     invalid input is reported, per field, and the password is never echoed. Every
+     sign-in failure shows the single `auth.errors.invalidCredentials` message;
+     outcomes map to `auth.errors.*` keys (`server/auth/auth-messages.ts`), never to
+     library text. After sign-in the user goes to `postSignInPath(next)`, which is
+     `safeNextPath` or `/{locale}/workspaces`. Signed-in users visiting the auth pages are
+     sent the same way. Sign-out deletes the current database session and expires its
+     cookie (other sessions of the user stay valid), then shows the sign-in page.
+     Email/password inputs are `dir="ltr"` in both locales.
 2. **Permission matrix** (`server/tenancy/permissions.ts`): the only place that maps roles
    to actions. Services call `assertCan(ctx, action)`. `CLIENT` (an agency's customer) has
    a narrow set: view brand/content/campaigns/analytics and approve content.

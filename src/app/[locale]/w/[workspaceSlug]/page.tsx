@@ -1,12 +1,13 @@
 import { notFound } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 
-import { SignInRequired } from "@/components/common/sign-in-required";
 import { SiteHeader } from "@/components/common/site-header";
 import { requireLocale } from "@/i18n/params";
-import { getCurrentUser } from "@/server/auth/session";
+import { requirePageUser } from "@/server/auth/session";
 import { isAppError } from "@/server/errors/app-error";
 import { getWorkspaceOverview } from "@/server/workspaces/workspace-queries";
+
+import { SignOutButton } from "../../(auth)/sign-out-button";
 
 interface WorkspacePageProps {
   readonly params: Promise<{ locale: string; workspaceSlug: string }>;
@@ -17,14 +18,7 @@ interface WorkspacePageProps {
 export default async function WorkspacePage({ params }: WorkspacePageProps) {
   const { locale: rawLocale, workspaceSlug } = await params;
   const locale = requireLocale(rawLocale);
-  if ((await getCurrentUser()) === null) {
-    return (
-      <>
-        <SiteHeader />
-        <SignInRequired />
-      </>
-    );
-  }
+  await requirePageUser(locale, `/${locale}/w/${encodeURIComponent(workspaceSlug)}`);
 
   const workspace = await getWorkspaceOverview(workspaceSlug).catch((error: unknown) => {
     // Unknown, deleted and foreign workspaces are indistinguishable: all render 404.
@@ -35,7 +29,7 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
 
   return (
     <>
-      <SiteHeader />
+      <SiteHeader actions={<SignOutButton />} />
       <main id="main" className="mx-auto max-w-xl space-y-4 px-4 py-16 sm:px-6">
         <h1 className="text-3xl font-bold" data-testid="workspace-name">
           {workspace.name}

@@ -87,3 +87,17 @@ export async function signInWithEmail(
   if (!response.ok) return { status: "INVALID_CREDENTIALS" };
   return { status: "SIGNED_IN", setCookie: response.headers.getSetCookie() };
 }
+
+/**
+ * Signs out the session carried by `headers` (cookie): Better Auth deletes the database
+ * session and expires the cookie. Without a valid session there is nothing to revoke,
+ * which is not an error for the caller.
+ */
+export async function signOutCurrentSession(auth: Auth, headers: Headers): Promise<void> {
+  const response = await auth.api.signOut({ headers, asResponse: true });
+  if (response.ok || response.status === 400 || response.status === 401) return;
+  throw new AppError("INTERNAL", {
+    message: "Sign-out failed",
+    metadata: { status: response.status },
+  });
+}

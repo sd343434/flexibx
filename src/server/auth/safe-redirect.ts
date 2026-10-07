@@ -37,3 +37,21 @@ export function safeNextPath(value: unknown, fallbackLocale: Locale): string {
 
   return `${url.pathname}${url.search}${url.hash}`;
 }
+
+/**
+ * Where to go after signing in: the sanitized `next` path when one was given and is
+ * safe, otherwise the workspace landing page `/{locale}/workspaces`.
+ */
+export function postSignInPath(next: unknown, locale: Locale): string {
+  const fallback = `/${locale}/workspaces`;
+  const safe = safeNextPath(next, locale);
+  return safe === `/${locale}` && next !== safe ? fallback : safe;
+}
+
+/** The sign-in page for `locale`, carrying an internal `next` path to return to. */
+export function signInPath(locale: Locale, next?: string): string {
+  const base = `/${locale}/sign-in`;
+  if (next === undefined) return base;
+  const safe = safeNextPath(next, locale);
+  return safe === next ? `${base}?next=${encodeURIComponent(safe)}` : base;
+}
