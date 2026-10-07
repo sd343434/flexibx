@@ -8,12 +8,15 @@ import { requireUser } from "../auth/session";
 import { getSystemDb } from "../db/client";
 import { AppError } from "../errors/app-error";
 
+import type { WorkspaceSummary } from "../workspaces/landing";
+import { listMembershipsForUser } from "../workspaces/member-repository";
+
 import { createTenantContext, type TenantContext } from "./context";
 import { assertCan, type Action } from "./permissions";
 import { isRole } from "./roles";
+import { normalizeWorkspaceSlug, WORKSPACE_SLUG_PATTERN } from "./slug";
 
-/** Same rule as the `workspaces.slug` CHECK constraint (Phase 1 migration). */
-export const WORKSPACE_SLUG_PATTERN = /^[a-z0-9-]{3,48}$/;
+export { WORKSPACE_SLUG_PATTERN } from "./slug";
 
 /**
  * One response for every workspace the user cannot open — malformed slug, unknown slug,
@@ -35,7 +38,7 @@ export async function resolveWorkspaceAccess(
   userId: string,
   slug: unknown,
 ): Promise<TenantContext> {
-  const normalized = typeof slug === "string" ? slug.trim().toLowerCase() : "";
+  const normalized = typeof slug === "string" ? normalizeWorkspaceSlug(slug) : "";
   if (!WORKSPACE_SLUG_PATTERN.test(normalized)) throw workspaceNotFound();
 
   const membership = await systemDb.workspaceMember.findFirst({
@@ -49,6 +52,26 @@ export async function resolveWorkspaceAccess(
     workspaceId: membership.workspaceId,
     role: membership.role,
   });
+}
+
+/**
+ * SYSTEM PATH (reviewed): the user's own memberships in non-deleted workspaces, oldest
+ * first. Filtered to `userId`, which callers take from the session only.
+ */
+export async function listWorkspacesForUser(
+  systemDb: PrismaClient,
+  userId: string,
+): Promise<WorkspaceSummary[]> {
+  const memberships = await listMembershipsForUser(systemDb, userId);
+  return memberships.flatMap(({ role, workspace }) =>
+    isRole(role) ? [{ name: workspace.name, slug: workspace.slug, role }] : [],
+  );
+}
+
+/** The current request's user's workspaces; throws UNAUTHENTICATED without a session. */
+export async function listMyWorkspaces(): Promise<WorkspaceSummary[]> {
+  const user = await requireUser();
+  return listWorkspacesForUser(getSystemDb(), user.id);
 }
 
 const resolveForRequest = cache(async (slug: string): Promise<TenantContext> => {

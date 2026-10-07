@@ -122,8 +122,8 @@ Controls, from outermost to innermost:
      No session → `UNAUTHENTICATED` (401).
    - `requireWorkspaceAccess(slug, action?)` (`server/tenancy/access.ts`) runs session →
      membership lookup by URL slug → optional `assertCan`, and is the only producer of a
-     `TenantContext { userId, workspaceId, role }` (a static test keeps
-     `createTenantContext` inside `server/tenancy/`). Workspace id and role come only
+     `TenantContext { userId, workspaceId, role }` for existing workspaces (a static test
+     keeps `createTenantContext` inside `server/tenancy/`). Workspace id and role come only
      from the membership row; client-supplied ids, roles and headers are ignored. A
      malformed, unknown, soft-deleted or foreign workspace all yield the same
      `NOT_FOUND` (404); a member lacking the permission gets `FORBIDDEN` (403).
@@ -132,6 +132,30 @@ Controls, from outermost to innermost:
      same-origin with `APP_URL` (CSRF); Next.js performs the equivalent check for server
      actions. `safeNextPath()` accepts only internal `/{locale}/…` paths for post-sign-in
      redirects.
+   - **Workspace creation** (`createWorkspace`, `server/tenancy/workspace-creation.ts`):
+     any signed-in user (email verification not required in Phase 2) creates a workspace
+     from `{ name, slug, defaultLocale }` only. The strict input schema
+     (`server/workspaces/workspace-input.ts`) rejects every other key. The server fixes
+     the rest: type `BUSINESS` (AGENCY/client workspaces are Phase 14), the session user
+     as creator, role `OWNER`. One transaction on the guarded client inserts the
+     workspace, the OWNER membership and the `workspace.created` audit entry (metadata:
+     `slug`, `type`, `defaultLocale`, `ownerRole`), so all three exist or none do. The
+     audit entry's `TenantContext` is built from the membership row the same transaction
+     inserted. Slugs are trimmed and lowercased, then checked with the database `CHECK`
+     rule (`server/tenancy/slug.ts`). A slug already in use, including by a soft-deleted
+     workspace, is reported as `CONFLICT` with a `slug` field error `slug_taken`. The
+     server action `createWorkspaceAction` (`withAction` + `requireUser()`) backs the
+     form at `/{locale}/workspaces/new`. The form reads only those three fields and
+     then redirects (next-intl `redirect`) to `/{locale}/w/{slug}`.
+   - **Workspace selection**: `/{locale}/workspaces` lists the user's own memberships in
+     non-deleted workspaces (`listMyWorkspaces`, a reviewed system-client path filtered to
+     the session user). Zero workspaces → `/workspaces/new`; exactly one → into it;
+     several → the list. `/{locale}/w/{slug}` is a minimal landing page that authorizes
+     through `requireWorkspaceAccess(slug, "workspace.view")` and renders 404 for any
+     workspace the user cannot open. The workspace layout, shell and switcher arrive in
+     Step 6. Until the sign-in page exists (Step 5), these pages show a localized
+     "sign-in required" notice when there is no session. All of them are dynamic and
+     served with `Cache-Control: private, no-cache, no-store`.
 2. **Permission matrix** (`server/tenancy/permissions.ts`): the only place that maps roles
    to actions. Services call `assertCan(ctx, action)`. `CLIENT` (an agency's customer) has
    a narrow set: view brand/content/campaigns/analytics and approve content.
@@ -156,7 +180,7 @@ Controls, from outermost to innermost:
    It also applies inside interactive transactions.
 
 5. **System client** (`getSystemDb()`): unguarded, for explicitly reviewed paths only
-   (listing the signed-in user's own memberships, health checks, seed, future purge
+   (resolving and listing the signed-in user's own memberships in `server/tenancy/access.ts`, health checks, seed, future purge
    jobs).
 6. **Raw SQL**: `$queryRawUnsafe` / `$executeRawUnsafe` are banned by ESLint. Tagged
    `$queryRaw` bypasses the guard, so it must be workspace-scoped by hand and reviewed.

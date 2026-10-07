@@ -54,6 +54,38 @@
     "description": "The page may have moved, or the link is incorrect.",
     "backHome": "Back to home"
   },
+  "signInRequired": {
+    "title": "Sign in required",
+    "description": "Please sign in to continue."
+  },
+  "workspaces": {
+    "list": {
+      "title": "Your workspaces",
+      "description": "Choose the workspace you want to open.",
+      "create": "Create a new workspace"
+    },
+    "new": {
+      "title": "Create a workspace",
+      "description": "A workspace holds your brand, content and team. You will be its owner.",
+      "name": "Workspace name",
+      "slug": "Workspace address",
+      "slugHint": "3–48 characters: lowercase English letters, digits and hyphens. It appears in your workspace link.",
+      "defaultLocale": "Default language",
+      "submit": "Create workspace",
+      "submitting": "Creating…"
+    },
+    "home": {
+      "role": "Your role: {role}"
+    },
+    "roles": {
+      "OWNER": "Owner",
+      "ADMIN": "Admin",
+      "MANAGER": "Manager",
+      "EDITOR": "Editor",
+      "VIEWER": "Viewer",
+      "CLIENT": "Client"
+    }
+  },
   "errors": {
     "VALIDATION_FAILED": "Some of the information is invalid. Please review the highlighted fields.",
     "UNAUTHENTICATED": "Please sign in to continue.",
@@ -76,6 +108,7 @@
     "invalid_value": "This value isn't allowed.",
     "not_multiple_of": "Must be a multiple of {divisor}.",
     "unrecognized_keys": "Unknown fields: {keys}",
-    "invalid": "This value is invalid."
+    "invalid": "This value is invalid.",
+    "slug_taken": "This address is already taken. Choose another one."
   }
 }

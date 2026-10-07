@@ -17,6 +17,8 @@ export const VALIDATION_CODES = [
   "not_multiple_of",
   "unrecognized_keys",
   "invalid",
+  // Domain codes raised by services (not by Zod).
+  "slug_taken",
 ] as const;
 
 export type ValidationCode = (typeof VALIDATION_CODES)[number];

@@ -26,6 +26,7 @@ const SAMPLE_PARAMS = {
   format: "email",
   divisor: 5,
   keys: "extra",
+  role: "Owner",
 };
 
 describe("locale configuration", () => {
