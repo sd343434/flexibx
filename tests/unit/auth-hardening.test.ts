@@ -28,6 +28,7 @@ import {
 } from "@/server/auth/rate-limit-policy";
 import { postSignInPath, safeNextPath, signInPath } from "@/server/auth/safe-redirect";
 import { isAppError } from "@/server/errors/app-error";
+import { hasRequiredEmailVerification, requireVerifiedEmail } from "@/server/auth/verified-email";
 import { resolveEmailVerificationRequired } from "@/server/env-schema";
 import { MemoryMailer, UnconfiguredMailer, type Mailer } from "@/server/mail/mailer";
 import { renderMail } from "@/server/mail/templates";
@@ -44,7 +45,6 @@ function build(overrides: Partial<Parameters<typeof createAuth>[0]> = {}) {
     baseURL: APP,
     appUrl: APP,
     isProduction: true,
-    requireEmailVerification: true,
     mailer: new MemoryMailer(),
     onSecurityEvent: () => Promise.resolve(),
     log: () => undefined,
@@ -65,11 +65,11 @@ describe("auth hardening configuration", () => {
     expect(options.verification.storeIdentifier).toBe("hashed");
   });
 
-  it("follows the verification policy and never signs in automatically", () => {
-    expect(options.emailAndPassword.requireEmailVerification).toBe(true);
-    expect(
-      build({ requireEmailVerification: false }).options.emailAndPassword.requireEmailVerification,
-    ).toBe(false);
+  it("never gates sign-in on email verification (C1), even in production, and never signs in automatically", () => {
+    expect(options.emailAndPassword.requireEmailVerification).toBe(false);
+    expect(build({ isProduction: false }).options.emailAndPassword.requireEmailVerification).toBe(
+      false,
+    );
     expect(options.emailAndPassword.autoSignIn).toBe(false);
     expect(options.emailVerification.autoSignInAfterVerification).toBe(false);
     expect(options.emailVerification.sendOnSignUp).toBe(true);
@@ -418,6 +418,33 @@ describe("verification policy", () => {
     expect(resolveEmailVerificationRequired("test", undefined)).toBe(false);
     expect(resolveEmailVerificationRequired("production", false)).toBe(false);
     expect(resolveEmailVerificationRequired("test", true)).toBe(true);
+  });
+
+  it("applies only to verified-only operations: unverified is refused when required, allowed otherwise", () => {
+    const required = { requireEmailVerification: true };
+    const optional = { requireEmailVerification: false };
+    const unverified = { emailVerified: false };
+    const verified = { emailVerified: true };
+    expect(hasRequiredEmailVerification(unverified, required)).toBe(false);
+    expect(hasRequiredEmailVerification(verified, required)).toBe(true);
+    expect(hasRequiredEmailVerification(unverified, optional)).toBe(true);
+    expect(hasRequiredEmailVerification(verified, optional)).toBe(true);
+    expect(() => {
+      requireVerifiedEmail(verified, required);
+    }).not.toThrow();
+    expect(() => {
+      requireVerifiedEmail(unverified, optional);
+    }).not.toThrow();
+    let error: unknown;
+    try {
+      requireVerifiedEmail(unverified, required);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(isAppError(error) && error.code).toBe("FORBIDDEN");
+    expect(isAppError(error) && error.fields.map((field) => field.code)).toEqual([
+      "email_not_verified",
+    ]);
   });
 });
 

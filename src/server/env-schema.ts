@@ -61,7 +61,8 @@ export const storageEnvSchema = z.object({
  */
 export const authEnvSchema = z.object({
   AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -base64 32)"),
-  // Email verification policy (decision C6). Unset: required in production, not in
+  // Email verification policy (decision C6) for verified-only operations; sign-in and
+  // workspace creation never need it (C1). Unset: required in production, not in
   // development/test. "true"/"false" overrides it explicitly.
   AUTH_REQUIRE_EMAIL_VERIFICATION: optional(
     z.enum(["true", "false"]).transform((value) => value === "true"),
@@ -103,7 +104,7 @@ export const mailEnvSchema = z.object({
 
 export type MailEnv = z.infer<typeof mailEnvSchema>;
 
-/** Whether an account must verify its email before signing in (decision C6). */
+/** Whether verified-only operations require a verified email (decision C6; never sign-in). */
 export function resolveEmailVerificationRequired(
   nodeEnv: string | undefined,
   configured: boolean | undefined,

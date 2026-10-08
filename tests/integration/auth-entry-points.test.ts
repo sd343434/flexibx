@@ -476,7 +476,7 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("Better Auth call sites", () => {
-  it("are exactly the checked entry points plus the two unlimited reads/sign-out", () => {
+  it("are exactly the checked entry points plus sign-out, the session reads and the checkpoint", () => {
     const sites: string[] = [];
     for (const file of sourceFiles(join(process.cwd(), "src"))) {
       const source = readFileSync(file, "utf8");

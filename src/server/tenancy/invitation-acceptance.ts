@@ -3,7 +3,9 @@ import "server-only";
 import type { PrismaClient } from "@/generated/prisma/client";
 
 import { recordAudit } from "../audit/audit-log";
+import { isEmailVerificationRequired } from "../auth/auth";
 import { requireUser, type AuthUser } from "../auth/session";
+import { hasRequiredEmailVerification, requireVerifiedEmail } from "../auth/verified-email";
 import { getDb, getSystemDb } from "../db/client";
 import type { GuardedPrismaClient } from "../db/prisma";
 import { AppError } from "../errors/app-error";
@@ -28,6 +30,8 @@ export type InvitationUser = Pick<AuthUser, "id" | "email">;
 
 export type InvitationPreview =
   | { readonly status: "invalid" }
+  /** Verification policy applies and the account's email is not verified (C6). */
+  | { readonly status: "email_unverified" }
   | { readonly status: "email_mismatch" }
   | { readonly status: "already_member"; readonly slug: string }
   | {
@@ -196,16 +200,27 @@ export async function acceptInvitation(
   return { slug: invitation.workspace.slug };
 }
 
-/** The accept page's view for the current session user. */
+/**
+ * The accept page's view for the current session user. Under the email-verification
+ * policy (C6) an unverified account sees only "email_unverified": the token is not even
+ * looked up, so it learns nothing about the invitation.
+ */
 export async function previewInvitationForCurrentUser(token: unknown): Promise<InvitationPreview> {
   const user = await requireUser();
+  const policy = { requireEmailVerification: isEmailVerificationRequired() };
+  if (!hasRequiredEmailVerification(user, policy)) return { status: "email_unverified" };
   return previewInvitation(getSystemDb(), user, token);
 }
 
-/** Accepts for the current session user (never a user id from input). */
+/**
+ * Accepts for the current session user (never a user id from input). Verified-only
+ * under the C6 policy: the invited address is the only proof of identity (C4), so an
+ * unverified account gets FORBIDDEN `email_not_verified` before the token is looked up.
+ */
 export async function acceptInvitationForCurrentUser(
   token: unknown,
 ): Promise<{ readonly slug: string }> {
   const user = await requireUser();
+  requireVerifiedEmail(user, { requireEmailVerification: isEmailVerificationRequired() });
   return acceptInvitation(getSystemDb(), getDb(), user, token);
 }

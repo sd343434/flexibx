@@ -1,8 +1,9 @@
 # Phase 2 execution plan — authentication and runtime multi-tenancy
 
 > **This is the canonical Phase 2 execution plan.** It is the source of truth for future
-> Claude implementation prompts. Phase 2 contains **exactly 12 steps**. Steps 1–4 are
-> complete; **Step 5 is the next implementation step**.
+> Claude implementation prompts. Phase 2 was planned as **12 steps**; by human instruction
+> they were executed as **9 implementation steps** (mapping in §1). All planned scope is
+> implemented; Phase 2 awaits the **human completion review** (C9).
 >
 > - Any change to this plan (scope, order, decisions) requires explicit human approval.
 > - Updating this document never starts implementation. Each step begins only after an
@@ -23,17 +24,21 @@ Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) (current system and rule
 | 2    | Better Auth foundation                         | Complete — `8727e38`                                                                |
 | 3    | Runtime auth and workspace access              | Complete — `82fd5ab` (status `02f9530`)                                             |
 | 4    | Workspace creation and workspace selection     | Complete — `194e4f5`                                                                |
-| 5    | Authentication UI (sign-up, sign-in, sign-out) | **Next** — not started                                                              |
-| 6    | Workspace app shell and switching              | Not started                                                                         |
-| 7    | Member management                              | Not started                                                                         |
-| 8    | Mailer abstraction                             | Not started                                                                         |
-| 9    | Invitations                                    | Not started                                                                         |
-| 10   | Email verification and password reset          | Not started                                                                         |
-| 11   | Authentication rate limiting                   | Not started                                                                         |
-| 12   | Phase 2 hardening and completion               | Not started                                                                         |
+| 5    | Authentication UI (sign-up, sign-in, sign-out) | Complete — `0328856`                                                                |
+| 6    | Workspace app shell and switching              | Complete — `8eaaf4a`                                                                |
+| 7    | Member management                              | Complete — `f12cea0` (executed Step 7, together with plan Steps 8–9)                |
+| 8    | Mailer abstraction                             | Complete — `f12cea0` (executed Step 7)                                              |
+| 9    | Invitations                                    | Complete — `f12cea0` (executed Step 7)                                              |
+| 10   | Email verification and password reset          | Complete — `d9a5bbd` (executed Step 8, together with plan Step 11)                  |
+| 11   | Authentication rate limiting                   | Complete — `d9a5bbd` (executed Step 8); limits approved as a human decision         |
+| 12   | Phase 2 hardening and completion               | Executed Step 9 — implemented, awaiting human review (not committed yet)            |
+
+Executed steps (human instructions) → plan steps: 1–6 → 1–6; 7 → 7, 8, 9; 8 → 10, 11;
+9 → 12. The plan's scope, decisions and step definitions below are unchanged.
 
 `.phase-status.json`: phase 2, `IN_PROGRESS`, interim range
-`228701e…` (end of Phase 1) `..194e4f5…` (Step 4).
+`228701e…` (end of Phase 1) `..d9a5bbd…` (executed Step 8). `READY_FOR_REVIEW` and
+`COMPLETED` are set only after the human approvals required by C9.
 
 ## 2. Scope
 
@@ -310,6 +315,10 @@ delivered before any commit.
     verification. The policy is configuration/environment driven, so environments
     remain distinguishable (not a hardcoded switch). The exact enforcement points are
     defined in this step.
+    **As implemented (human decision, Step 9):** sign-in and workspace creation never
+    require a verified email, in production too (C1 unchanged). The policy applies only
+    to verified-only operations; in Phase 2 that is accepting (and previewing) an
+    invitation, because the invited address is its only proof of identity (C4).
   - **Sessions (C7):** no session-management UI (session list/revoke is deferred). This
     step must guarantee: sign-out invalidates the current session; password change and
     reset invalidate the other sessions.
@@ -373,6 +382,11 @@ delivered before any commit.
   `READY_FOR_REVIEW` and for `COMPLETED`.
 - **Explicitly out of scope:** anything not in §2.
 - **Dependencies:** Steps 1–11.
+- **As executed (Step 9):** session expiry is verified by integration tests (expired
+  sessions rejected; the real proxy clears an expired session's cookie) rather than e2e:
+  the e2e suite has no database access, and expiring a browser session there would need
+  clock manipulation or new test infrastructure (deferred). Revocation is covered e2e
+  (password reset and change sign out other browsers).
 
 ## 5. Why this order
 

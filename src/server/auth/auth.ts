@@ -29,7 +29,6 @@ export function getAuth(): Auth {
       baseURL: env.AUTH_URL ?? env.APP_URL,
       appUrl: env.APP_URL,
       isProduction: env.NODE_ENV === "production",
-      requireEmailVerification: isEmailVerificationRequired(),
       mailer: getMailer(),
       // Platform-level audit entries (no workspace), on the guarded client.
       onSecurityEvent: async (action, userId) => {

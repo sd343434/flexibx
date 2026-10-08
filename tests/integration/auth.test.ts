@@ -226,7 +226,6 @@ describe("sessions", () => {
     const otherSecret = createAuth({
       db: system,
       appUrl: BASE,
-      requireEmailVerification: false,
       mailer: new MemoryMailer(),
       onSecurityEvent: () => Promise.resolve(),
       secret: `${SECRET}-rotated`,

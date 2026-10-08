@@ -80,9 +80,6 @@ export async function submitSignIn(
   const values = { email: text(formData.get("email")) };
   const result = await signInAction({ ...values, password: text(formData.get("password")) });
   if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code), values };
-  if (result.data.status === "EMAIL_NOT_VERIFIED") {
-    return { messageKey: AUTH_ERROR_MESSAGE_KEYS.emailNotVerified, values };
-  }
   if (result.data.status !== "SIGNED_IN") {
     return { messageKey: AUTH_ERROR_MESSAGE_KEYS.invalidCredentials, values };
   }

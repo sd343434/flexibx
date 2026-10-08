@@ -48,17 +48,9 @@ for (const { locale, dir, name, signOut } of LOCALES) {
     await expect(page.getByTestId("auth-error")).toBeVisible();
     expect(await sessionCookie(page)).toBeUndefined();
 
-    // The right password before verification: "verify your email", still no session.
-    await page.fill("#sign-in-password", PASSWORD);
-    await page.getByTestId("sign-in-submit").click();
-    await expect(page.getByTestId("verify-email-link")).toBeVisible();
-    expect(await sessionCookie(page)).toBeUndefined();
-
-    // Verify with the emailed link, then sign in: an HttpOnly, SameSite=Lax session
-    // cookie, then the workspace landing (a new user has none, so it continues to creation).
-    await verifyEmail(page, email);
-    await expect(page.locator("html")).toHaveAttribute("dir", dir);
-    await page.goto(`/${locale}/sign-in`);
+    // The right password signs in even before the email is verified (decision C1): an
+    // HttpOnly, SameSite=Lax session cookie, then the workspace landing (a new user has
+    // none, so it continues to creation).
     await signInHere(page, email);
     await expect(page).toHaveURL(`/${locale}/workspaces/new`);
     const cookie = await sessionCookie(page);

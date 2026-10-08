@@ -1,6 +1,7 @@
 // Phase 2, Step 8: account security through the real entry points — form actions,
 // the public auth route and Better Auth sessions — with the production policy
-// (verification required, trusted client-IP header) on the real database.
+// (verification required for verified-only operations, trusted client-IP header) on the
+// real database.
 import type * as NextNavigation from "next/navigation";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +19,9 @@ import { requireUser } from "@/server/auth/session";
 import { getSystemDb } from "@/server/db/client";
 import { getMailer } from "@/server/mail";
 import type { MemoryMailer } from "@/server/mail/mailer";
-import { acceptInvitationAction } from "@/server/workspaces/member-actions";
+import { previewInvitationForCurrentUser } from "@/server/tenancy/invitation-acceptance";
+import { acceptInvitationAction, inviteMemberAction } from "@/server/workspaces/member-actions";
+import { createWorkspaceAction } from "@/server/workspaces/workspace-actions";
 
 import ar from "../../messages/ar.json";
 import en from "../../messages/en.json";
@@ -140,26 +143,70 @@ beforeEach(() => {
   newBrowser();
 });
 
-describe("verification required (production policy)", () => {
-  it("Arabic: sign up → blocked until verified → verify → signed in", async () => {
+describe("verification policy in production (C1 / C6)", () => {
+  it("Arabic: an unverified account signs in and creates a workspace (C1); the link verifies once", async () => {
     const email = `ar-${Date.now().toString(36)}@example.com`;
     expect(await signUp("ar", email)).toBe("/ar/sign-in?registered=1");
 
-    const blocked = await submitSignIn("ar", null, form({ email, password: PASSWORD }));
-    expect(blocked?.messageKey).toBe("auth.errors.emailNotVerified");
-    expect(browser.jar.has(SESSION_COOKIE)).toBe(false);
-    expect(ar.auth.errors.emailNotVerified).toMatch(/[\u0600-\u06FF]/);
+    expect(
+      await redirectTarget(submitSignIn("ar", null, form({ email, password: PASSWORD }))),
+    ).toBe("/ar/workspaces");
+    expect(browser.jar.has(SESSION_COOKIE)).toBe(true);
+    expect(await requireUser()).toMatchObject({ email, emailVerified: false });
+
+    const slug = `ar-${String(counter)}-${Date.now().toString(36)}`;
+    expect(
+      await createWorkspaceAction({ name: "مساحة العمل", slug, defaultLocale: "ar" }),
+    ).toMatchObject({ ok: true, data: { slug } });
 
     const { url, token } = linkToken(email, "email_verification");
     expect(url.pathname).toBe("/ar/verify-email");
     expect(await submitVerifyEmail(null, form({ token }))).toEqual({ status: "verified" });
     // The link is single use.
     expect(await submitVerifyEmail(null, form({ token }))).toEqual({ status: "invalid" });
+    expect(await requireUser()).toMatchObject({ email, emailVerified: true });
+    expect(ar.invite.unverified).toMatch(/[\u0600-\u06FF]/);
+  });
 
+  it("accepting an invitation is verified-only: unverified sees nothing and cannot accept; verified can", async () => {
+    const owner = `owner-${String(counter)}-${Date.now().toString(36)}@example.com`;
+    await signUp("en", owner);
+    await redirectTarget(submitSignIn("en", null, form({ email: owner, password: PASSWORD })));
+    const slug = `inv-${String(counter)}-${Date.now().toString(36)}`;
+    await createWorkspaceAction({ name: "Team", slug, defaultLocale: "en" });
+    const invitee = `invitee-${String(counter)}-${Date.now().toString(36)}@example.com`;
+    const invited = await inviteMemberAction({
+      slug,
+      email: invitee,
+      role: "EDITOR",
+      locale: "en",
+    });
+    if (!invited.ok) throw new Error(`invite failed: ${invited.error.code}`);
+    const token = new URL(invited.data.acceptUrl).pathname.split("/").at(-1) ?? "";
+
+    newBrowser();
+    await signUp("en", invitee);
+    await redirectTarget(submitSignIn("en", null, form({ email: invitee, password: PASSWORD })));
+    expect(await requireUser()).toMatchObject({ email: invitee, emailVerified: false });
+
+    // Nothing about the invitation is revealed, and a real and an unknown token are refused
+    // identically, before any lookup.
+    expect(await previewInvitationForCurrentUser(token)).toEqual({ status: "email_unverified" });
+    const refused = {
+      ok: false,
+      error: { code: "FORBIDDEN", fields: [{ path: "email", code: "email_not_verified" }] },
+    };
+    expect(await acceptInvitationAction({ token })).toMatchObject(refused);
+    expect(await acceptInvitationAction({ token: "y".repeat(43) })).toMatchObject(refused);
+    expect(await system.workspaceMember.count({ where: { user: { email: invitee } } })).toBe(0);
     expect(
-      await redirectTarget(submitSignIn("ar", null, form({ email, password: PASSWORD }))),
-    ).toBe("/ar/workspaces");
-    expect((await requireUser()).email).toBe(email);
+      await system.workspaceInvitation.count({ where: { email: invitee, acceptedAt: null } }),
+    ).toBe(1);
+
+    await submitVerifyEmail(null, form({ token: linkToken(invitee, "email_verification").token }));
+    expect(await previewInvitationForCurrentUser(token)).toMatchObject({ status: "valid" });
+    expect(await acceptInvitationAction({ token })).toMatchObject({ ok: true, data: { slug } });
+    expect(await system.workspaceMember.count({ where: { user: { email: invitee } } })).toBe(1);
   });
 
   it("resend and forgot-password answer the same for every address", async () => {

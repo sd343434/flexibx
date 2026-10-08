@@ -14,7 +14,7 @@ publishing, billing…) arrive in later phases — see [docs/ARCHITECTURE.md](do
 
 | Area       | Choice                                                                        |
 | ---------- | ----------------------------------------------------------------------------- |
-| Runtime    | Node.js 22 (≥ 22.12), pnpm 10.28                                              |
+| Runtime    | Node.js 22 (≥ 22.13), pnpm 10.28                                              |
 | Web        | Next.js 16 (App Router, standalone output), React 19, TypeScript 6 (strict)   |
 | UI         | Tailwind CSS 4, shadcn/ui-style primitives (Radix), next-themes, lucide icons |
 | i18n       | next-intl 4 — `/ar` (RTL, default) and `/en` (LTR)                            |
@@ -28,7 +28,7 @@ publishing, billing…) arrive in later phases — see [docs/ARCHITECTURE.md](do
 
 ### Prerequisites
 
-- Node.js **22.12+** (`nvm use` reads `.nvmrc`) and pnpm **10.28** (`corepack enable`)
+- Node.js **22.13+** (`nvm use` reads `.nvmrc`) and pnpm **10.28** (`corepack enable`)
 - PostgreSQL 16 — via Docker (below) or a local install
 - Docker (optional) for local services
 
@@ -36,6 +36,7 @@ publishing, billing…) arrive in later phases — see [docs/ARCHITECTURE.md](do
 
 ```bash
 cp .env.example .env              # local defaults; never commit .env
+# then set AUTH_SECRET in .env to a fresh value: openssl rand -base64 32
 docker compose up -d              # PostgreSQL on 127.0.0.1:5432 (+ flexibx_test database)
 pnpm install                      # also runs `prisma generate`
 pnpm db:deploy                    # apply migrations to the dev database
@@ -78,17 +79,22 @@ All variables are validated with Zod (`src/server/env-schema.ts`) on first use; 
 configuration fails fast with the variable **names** (never values). Development uses a
 single `.env` file (Prisma loads it via `dotenv`, Next.js natively).
 
-| Variable                                                                                                                         | Required                  | Purpose                                                                        |
-| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------ |
-| `NODE_ENV`                                                                                                                       | – (default `development`) | `development` / `test` / `production`                                          |
-| `APP_URL`                                                                                                                        | yes                       | Canonical app origin (`http(s)://…`)                                           |
-| `LOG_LEVEL`                                                                                                                      | – (default `info`)        | pino level (`silent` … `trace`)                                                |
-| `DATABASE_URL`                                                                                                                   | yes                       | PostgreSQL connection string                                                   |
-| `TEST_DATABASE_URL`                                                                                                              | tests only                | Integration-test database; name **must end in `_test`** (tables are truncated) |
-| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL` | when storage is used      | Object storage (validated lazily by the storage service)                       |
-| `AUTH_SECRET`, `AUTH_URL`                                                                                                        | reserved (Phase 2)        | Better Auth                                                                    |
-| `ENCRYPTION_KEY`                                                                                                                 | reserved (Phase 8)        | AES-256-GCM key for social tokens (32 bytes, base64)                           |
-| `REDIS_URL`                                                                                                                      | reserved (jobs phase)     | BullMQ                                                                         |
+| Variable                                                                                                                         | Required                     | Purpose                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                                                                                                       | – (default `development`)    | `development` / `test` / `production`                                                                             |
+| `APP_URL`                                                                                                                        | yes                          | Canonical app origin (`http(s)://…`)                                                                              |
+| `LOG_LEVEL`                                                                                                                      | – (default `info`)           | pino level (`silent` … `trace`)                                                                                   |
+| `DATABASE_URL`                                                                                                                   | yes                          | PostgreSQL connection string                                                                                      |
+| `TEST_DATABASE_URL`                                                                                                              | tests only                   | Integration-test database; name **must end in `_test`** (tables are truncated)                                    |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL` | when storage is used         | Object storage (validated lazily by the storage service)                                                          |
+| `AUTH_SECRET`                                                                                                                    | yes (auth)                   | Signs session cookies; ≥ 32 chars (`openssl rand -base64 32`), never in the database                              |
+| `AUTH_URL`                                                                                                                       | – (default `APP_URL`)        | Better Auth base URL                                                                                              |
+| `AUTH_IP_HEADER`                                                                                                                 | production                   | Trusted client-IP header set by your proxy; unset = no header trusted (shared rate-limit buckets)                 |
+| `AUTH_TRUSTED_PROXIES`                                                                                                           | with `AUTH_IP_HEADER`        | Comma-separated proxy IPs/CIDRs                                                                                   |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION`                                                                                                | – (default: production only) | Verified-only operations (invitation acceptance); never sign-in. `true`/`false` overrides                         |
+| `MAIL_TRANSPORT`, `MAIL_OUTBOX_DIR`                                                                                              | e2e only                     | `test-outbox` writes emails to `MAIL_OUTBOX_DIR`; unset = log (dev), memory (test), explicit failure (production) |
+| `ENCRYPTION_KEY`                                                                                                                 | reserved (Phase 8)           | AES-256-GCM key for social tokens (32 bytes, base64)                                                              |
+| `REDIS_URL`                                                                                                                      | reserved (jobs phase)        | BullMQ                                                                                                            |
 
 Only `NEXT_PUBLIC_*` variables reach the browser; Phase 1 defines none. The values in
 `.env.example`, `docker-compose.yml` and CI are **local/throwaway defaults** — production

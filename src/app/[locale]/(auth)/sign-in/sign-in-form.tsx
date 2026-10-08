@@ -5,7 +5,6 @@ import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Link } from "@/i18n/navigation";
 
 import { submitSignIn, type AuthFormState } from "../actions";
 
@@ -40,15 +39,6 @@ export function SignInForm({ next, notice }: SignInFormProps) {
           data-testid="auth-error"
         >
           <p>{tRoot(state.messageKey)}</p>
-          {state.messageKey === "auth.errors.emailNotVerified" ? (
-            <Link
-              href="/verify-email"
-              className="font-medium underline underline-offset-4"
-              data-testid="verify-email-link"
-            >
-              {t("verifyEmailLink")}
-            </Link>
-          ) : null}
         </div>
       )}
       {next === undefined ? null : <input type="hidden" name="next" value={next} />}

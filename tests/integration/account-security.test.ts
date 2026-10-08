@@ -36,16 +36,12 @@ const PASSWORD = "correct horse battery";
 const NEW_PASSWORD = "a brand new passphrase";
 const COOKIE = "flexibx.session_token";
 
-/** Lenient (development-like) and strict (production policy) instances, one database. */
+/** The production Better Auth configuration (sign-in never depends on verification, C1). */
 const lenient = createTestAuth(system, SECRET, { ipHeader: TEST_IP_HEADER });
-const strict = createTestAuth(system, SECRET, {
-  ipHeader: TEST_IP_HEADER,
-  requireEmailVerification: true,
-});
 
 beforeEach(async () => {
   await resetDatabase(system);
-  for (const test of [lenient, strict]) {
+  for (const test of [lenient]) {
     test.mailer.clear();
     test.events.length = 0;
   }
@@ -140,35 +136,32 @@ describe("email verification", () => {
     expect(audit).not.toContain(token);
   });
 
-  it("is required by the strict policy: sign-in after the correct password only", async () => {
-    const email = await account(strict);
-    expect(await signIn(strict, email, "wrong password!!")).toEqual({
+  it("never gates sign-in (C1): an unverified account signs in, and verifying updates the session user", async () => {
+    const email = await account(lenient);
+    expect((await system.user.findUniqueOrThrow({ where: { email } })).emailVerified).toBe(false);
+    // Failures stay the single generic answer; nothing reveals the verification state.
+    expect(await signIn(lenient, email, "wrong password!!")).toEqual({
       status: "INVALID_CREDENTIALS",
     });
-    expect(await signIn(strict, email)).toEqual({ status: "EMAIL_NOT_VERIFIED" });
-    expect(await signIn(strict, "nobody@example.com")).toEqual({
+    expect(await signIn(lenient, "nobody@example.com")).toEqual({
       status: "INVALID_CREDENTIALS",
     });
     expect(await system.session.count()).toBe(0);
 
-    // A session that exists anyway (created before the policy applied) is not a user.
     const cookie = sessionCookie(await signIn(lenient, email));
     const headers = new Headers({ cookie });
-    expect(
-      await resolveCurrentUser(lenient.auth, headers, { requireEmailVerification: false }),
-    ).not.toBeNull();
-    expect(
-      await resolveCurrentUser(strict.auth, headers, { requireEmailVerification: true }),
-    ).toBeNull();
+    expect(await resolveCurrentUser(lenient.auth, headers)).toMatchObject({
+      email,
+      emailVerified: false,
+    });
 
-    const token = lastToken(strict, email, "email_verification");
-    expect(await verifyEmailToken(deps(strict), { token })).toEqual({ status: "VERIFIED" });
-    expect((await system.user.findUniqueOrThrow({ where: { email } })).emailVerified).toBe(true);
-    expect(strict.events.map((event) => event.action)).toEqual(["user.email_verified"]);
-    expect((await signIn(strict, email)).status).toBe("SIGNED_IN");
-    expect(
-      await resolveCurrentUser(strict.auth, headers, { requireEmailVerification: true }),
-    ).not.toBeNull();
+    const token = lastToken(lenient, email, "email_verification");
+    expect(await verifyEmailToken(deps(lenient), { token })).toEqual({ status: "VERIFIED" });
+    expect(lenient.events.map((event) => event.action)).toEqual(["user.email_verified"]);
+    expect(await resolveCurrentUser(lenient.auth, headers)).toMatchObject({
+      email,
+      emailVerified: true,
+    });
   });
 
   it("a token works once; replayed, expired, forged, malformed and foreign tokens fail alike", async () => {

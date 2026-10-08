@@ -12,8 +12,10 @@ import {
   verifyEmail,
 } from "./fixtures";
 
-// Account security end to end (Phase 2, Step 8) on the production build: verification
-// required, emails captured by the test outbox, rate limits per client.
+// Account security end to end (Phase 2, Step 8) on the production build: production
+// verification policy (sign-in and workspace creation never need a verified email, C1;
+// verified-only operations do, C6), emails captured by the test outbox, rate limits per
+// client.
 
 const NEW_PASSWORD = "a brand new passphrase";
 
@@ -21,15 +23,20 @@ for (const { locale, dir } of [
   { locale: "ar", dir: "rtl" },
   { locale: "en", dir: "ltr" },
 ] as const) {
-  test(`verification: blocked until verified, single-use link, in /${locale} (${dir})`, async ({
+  test(`unverified sign-in and workspace creation, then a single-use verification link, in /${locale} (${dir})`, async ({
     page,
   }) => {
     const email = uniqueEmail(`verify-${locale}`);
     await signUp(page, locale, email);
     await signInHere(page, email);
-    await expect(page.getByTestId("auth-error")).toBeVisible();
-    await page.getByTestId("verify-email-link").click();
-    await expect(page).toHaveURL(`/${locale}/verify-email`);
+    await expect(page).toHaveURL(`/${locale}/workspaces/new`);
+    const slug = `unverified-${locale}-${Date.now().toString(36)}`;
+    await page.fill("#workspace-name", `Unverified ${slug}`);
+    await page.fill("#workspace-slug", slug);
+    await page.getByTestId("create-workspace-submit").click();
+    await expect(page).toHaveURL(`/${locale}/w/${slug}`);
+
+    await page.goto(`/${locale}/verify-email`);
     await expect(page.locator("html")).toHaveAttribute("dir", dir);
     await expect(page.locator("#resend-verification-email")).toHaveAttribute("dir", "ltr");
 
@@ -48,11 +55,6 @@ for (const { locale, dir } of [
     await replay.getByTestId("verify-email-submit").click();
     await expect(replay.getByTestId("verify-email-invalid")).toBeVisible();
     await replay.close();
-
-    await page.goto(`/${locale}/sign-in?verified=1`);
-    await expect(page.getByTestId("verified")).toBeVisible();
-    await signInHere(page, email);
-    await expect(page).toHaveURL(`/${locale}/workspaces/new`);
   });
 }
 

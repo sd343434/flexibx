@@ -61,6 +61,16 @@ export default async function InvitePage({ params }: InvitePageProps) {
         </Button>
       </div>
     );
+  } else if (preview.status === "email_unverified") {
+    body = (
+      <div className="space-y-4" data-testid="invitation-email-unverified">
+        <h2 className="text-xl font-semibold">{t("unverifiedTitle")}</h2>
+        <p className="text-muted-foreground">{t("unverified")}</p>
+        <Button asChild variant="outline">
+          <Link href="/verify-email">{t("verifyEmail")}</Link>
+        </Button>
+      </div>
+    );
   } else if (preview.status === "email_mismatch") {
     body = (
       <div className="space-y-4" data-testid="invitation-email-mismatch">

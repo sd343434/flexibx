@@ -75,8 +75,9 @@ for (const { locale, dir, notSent } of [
     expect(mailCount(email, "workspace_invitation")).toBe(1);
     const path = new URL(link).pathname;
 
-    // The invitee opens the link signed out, creates an account, verifies the email
-    // address and comes back.
+    // The invitee opens the link signed out, creates an account and signs in before
+    // verifying (C1): accepting needs a verified address (C6), so the page asks for it and
+    // reveals nothing about the workspace. After verifying, the invitation opens.
     const invitee = await newClientPage(browser);
     await invitee.goto(path);
     await expect(invitee).toHaveURL(`/${locale}/sign-in?next=${encodeURIComponent(path)}`);
@@ -86,12 +87,14 @@ for (const { locale, dir, notSent } of [
     await invitee.fill("#sign-up-password", PASSWORD);
     await invitee.getByTestId("sign-up-submit").click();
     await expect(invitee).toHaveURL(new RegExp(`/${locale}/sign-in\\?registered=1&next=`));
-    await verifyEmail(invitee, email);
-    await invitee.goto(path);
-    await expect(invitee).toHaveURL(`/${locale}/sign-in?next=${encodeURIComponent(path)}`);
     await signInHere(invitee, email);
     await expect(invitee).toHaveURL(path);
     await expect(invitee.locator("html")).toHaveAttribute("dir", dir);
+    await expect(invitee.getByTestId("invitation-email-unverified")).toBeVisible();
+    await expect(invitee.getByTestId("accept-invitation")).toHaveCount(0);
+    await expect(invitee.getByText(`Team ${slug}`)).toHaveCount(0);
+    await verifyEmail(invitee, email);
+    await invitee.goto(path);
     await expect(invitee.getByTestId("invitation-valid")).toBeVisible();
     await invitee.getByTestId("accept-invitation").click();
     await expect(invitee).toHaveURL(`/${locale}/w/${slug}`);

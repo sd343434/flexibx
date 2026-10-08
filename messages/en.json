@@ -67,8 +67,7 @@
       "signUpLink": "Create one",
       "forgotPassword": "Forgot your password?",
       "passwordReset": "Your password has been changed. Sign in with your new password.",
-      "verified": "Your email address is verified. You can sign in now.",
-      "verifyEmailLink": "Send a new verification link"
+      "verified": "Your email address is verified. You can sign in now."
     },
     "signUp": {
       "title": "Create an account",
@@ -90,7 +89,6 @@
       "invalidInput": "Some of the information is invalid. Please review the highlighted fields.",
       "unavailable": "We couldn't complete this request. Please try again later.",
       "rateLimited": "Too many attempts. Please wait a few minutes and try again.",
-      "emailNotVerified": "Please verify your email address before signing in. Check your inbox, or send a new verification link.",
       "wrongPassword": "The current password is incorrect."
     },
     "verifyEmail": {
@@ -259,6 +257,9 @@
     "invalid": "This invitation is invalid, has expired or has already been used. Ask the person who invited you for a new one.",
     "mismatchTitle": "Different account",
     "mismatch": "This invitation was sent to a different email address. Sign out and sign in with the invited address.",
+    "unverifiedTitle": "Verify your email first",
+    "unverified": "To accept an invitation, first verify your email address with the link we sent you, then open this invitation link again.",
+    "verifyEmail": "Verify your email",
     "alreadyMemberTitle": "You're already a member",
     "alreadyMember": "You already belong to this workspace.",
     "openWorkspace": "Open workspace",
@@ -315,6 +316,7 @@
     "invitation_pending": "An invitation for this email is already pending. Revoke it to send a new one.",
     "last_owner": "The workspace must keep at least one owner.",
     "invitation_invalid": "This invitation is invalid, has expired or has already been used.",
-    "invitation_email_mismatch": "This invitation was sent to a different email address."
+    "invitation_email_mismatch": "This invitation was sent to a different email address.",
+    "email_not_verified": "Verify your email address first."
   }
 }

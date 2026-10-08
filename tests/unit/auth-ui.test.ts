@@ -22,7 +22,6 @@ describe("authErrorMessageKey", () => {
     expect(authErrorMessageKey("INVALID_CREDENTIALS")).toBe("auth.errors.invalidCredentials");
     expect(authErrorMessageKey("VALIDATION_FAILED")).toBe("auth.errors.invalidInput");
     expect(authErrorMessageKey("RATE_LIMITED")).toBe("auth.errors.rateLimited");
-    expect(authErrorMessageKey("EMAIL_NOT_VERIFIED")).toBe("auth.errors.emailNotVerified");
     expect(authErrorMessageKey("INVALID_PASSWORD")).toBe("auth.errors.wrongPassword");
     const mapped = new Set(["VALIDATION_FAILED", "RATE_LIMITED"]);
     for (const code of ERROR_CODE_LIST.filter((candidate) => !mapped.has(candidate))) {

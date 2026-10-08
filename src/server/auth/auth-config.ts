@@ -140,12 +140,6 @@ export interface AuthConfigInput {
   /** APP_URL: the origin of every link in an email. */
   readonly appUrl: string;
   readonly isProduction: boolean;
-  /**
-   * Email verification policy (decision C6): when true, an account cannot sign in until
-   * its email is verified. Resolved from AUTH_REQUIRE_EMAIL_VERIFICATION (default: true
-   * in production, false otherwise).
-   */
-  readonly requireEmailVerification: boolean;
   readonly mailer: Mailer;
   /** Records a security event (audit). Must not throw; failures are logged by the caller. */
   readonly onSecurityEvent: (action: SecurityEventAction, userId: string) => Promise<void>;
@@ -256,7 +250,10 @@ export function createAuth(input: AuthConfigInput) {
     },
     emailAndPassword: {
       enabled: true,
-      requireEmailVerification: input.requireEmailVerification,
+      // Sign-in never depends on email verification (decision C1: an unverified account
+      // signs in and may create a workspace). The verification policy (C6) is enforced
+      // only by the operations that need a verified address (verified-email.ts).
+      requireEmailVerification: false,
       // A new account is not signed in automatically, so sign-up responds identically
       // whether or not the email already exists.
       autoSignIn: false,

@@ -31,10 +31,10 @@ export interface RateLimitRule {
 }
 
 /**
- * STATUS: PROPOSED — PENDING HUMAN APPROVAL. These values are the Step 8 proposal, not a
- * final decision; change them only here (the tests derive from this table).
+ * STATUS: APPROVED — HUMAN DECISION (Phase 2). Changing a value needs a new human
+ * decision; change them only here (the tests derive from this table).
  *
- * Proposed limits (Phase 2, Step 8). Rationale per bucket:
+ * Approved limits (Phase 2, Step 8). Rationale per bucket:
  * - sign-in: 10/min per client stops online guessing from one source; 10 per 15 min per
  *   account slows distributed guessing against one account. Trade-off: an attacker can
  *   lock one account's sign-in for 15 minutes (accepted; no account lockout state).

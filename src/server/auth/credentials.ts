@@ -45,9 +45,7 @@ export interface SignUpResult {
 
 export type SignInResult =
   | { readonly status: "SIGNED_IN"; readonly setCookie: readonly string[] }
-  | { readonly status: "INVALID_CREDENTIALS" }
-  /** Correct password, but the email is not verified yet (only when verification is required). */
-  | { readonly status: "EMAIL_NOT_VERIFIED" };
+  | { readonly status: "INVALID_CREDENTIALS" };
 
 const EXISTING_USER_CODES = new Set([
   "USER_ALREADY_EXISTS",
@@ -108,8 +106,8 @@ async function registerAccount(
 
 /**
  * Signs in. Every failure — malformed input, unknown email, wrong password — returns
- * the single INVALID_CREDENTIALS result. EMAIL_NOT_VERIFIED is only possible after the
- * correct password (Better Auth checks it first), so it reveals nothing to a guesser.
+ * the single INVALID_CREDENTIALS result. An unverified email does not block sign-in
+ * (decision C1); verified-only operations check it themselves (verified-email.ts).
  * Limited per client and per account (RATE_LIMITED). On success the caller forwards
  * `setCookie`.
  */
@@ -133,9 +131,6 @@ export async function signInWithEmail(
     asResponse: true,
   });
   if (response.ok) return { status: "SIGNED_IN", setCookie: response.headers.getSetCookie() };
-  if (response.status === 403 && (await errorCode(response)) === "EMAIL_NOT_VERIFIED") {
-    return { status: "EMAIL_NOT_VERIFIED" };
-  }
   return { status: "INVALID_CREDENTIALS" };
 }
 

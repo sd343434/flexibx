@@ -9,7 +9,7 @@ import type { Locale } from "@/i18n/config";
 import { AppError } from "../errors/app-error";
 import { isUuid } from "../tenancy/context";
 
-import { getAuth, isEmailVerificationRequired } from "./auth";
+import { getAuth } from "./auth";
 import type { Auth } from "./auth-config";
 import { signInPath } from "./safe-redirect";
 
@@ -30,22 +30,19 @@ export interface AuthUser {
 /**
  * Resolves the user from the request's signed session cookie through Better Auth's
  * own `getSession` (database lookup, expiry and 7-day rolling refresh included).
- * Returns null when there is no valid session — and, when email verification is
- * required (decision C6), for an unverified account: every page, action and route that
- * needs a user therefore needs a verified one. Sign-in already refuses unverified
- * accounts; this also covers sessions created before the policy applied.
+ * Returns null when there is no valid session. An unverified account is a signed-in
+ * user like any other (decision C1); operations that need a verified address check
+ * `emailVerified` themselves (`requireVerifiedEmail`, decision C6).
  * Exported for tests; application code uses `getCurrentUser` / `requireUser`.
  */
 export async function resolveCurrentUser(
   auth: Auth,
   requestHeaders: Headers,
-  options: { readonly requireEmailVerification: boolean },
 ): Promise<AuthUser | null> {
   const result = await auth.api.getSession({ headers: requestHeaders });
   if (result === null) return null;
   const { user } = result;
   if (!isUuid(user.id)) return null;
-  if (options.requireEmailVerification && !user.emailVerified) return null;
   return Object.freeze({
     id: user.id,
     email: user.email,
@@ -61,9 +58,7 @@ export async function resolveCurrentUser(
  * deduplicates within a single render; it is not a cross-request session cache).
  */
 export const getCurrentUser = cache(async (): Promise<AuthUser | null> =>
-  resolveCurrentUser(getAuth(), await headers(), {
-    requireEmailVerification: isEmailVerificationRequired(),
-  }),
+  resolveCurrentUser(getAuth(), await headers()),
 );
 
 /** The current request's user; throws UNAUTHENTICATED (401) when there is none. */

@@ -32,7 +32,6 @@ export function createTestAuth(
     baseURL: TEST_BASE_URL,
     appUrl: TEST_BASE_URL,
     isProduction: false,
-    requireEmailVerification: false,
     mailer,
     onSecurityEvent: (action, userId) => {
       events.push({ action, userId });

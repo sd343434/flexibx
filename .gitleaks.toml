@@ -11,3 +11,18 @@ paths = [
 regexes = [
   '''postgresql://flexibx:flexibx@localhost''',
 ]
+
+# Test fixtures deliberately assembled from string fragments at runtime
+# (["route", "test", "only", "secret", "…"].join("-"), fake("token ghp_", "…")), so no
+# key-shaped literal exists in the source. Scoped to the generic-api-key rule, only under
+# tests/, and only when the match spans two quoted fragments (both conditions must hold):
+# a real key pasted as one literal is still reported, in tests and everywhere else.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Fragment-assembled fake secrets in tests"
+condition = "AND"
+regexTarget = "match"
+paths = ['''^tests/''']
+regexes = ['''"\s*,\s*"''']

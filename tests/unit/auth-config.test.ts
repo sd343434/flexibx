@@ -20,7 +20,6 @@ function build(overrides: Partial<Parameters<typeof createAuth>[0]> = {}) {
     baseURL: "http://localhost:3000",
     appUrl: "http://localhost:3000",
     isProduction: false,
-    requireEmailVerification: false,
     mailer: new MemoryMailer(),
     onSecurityEvent: () => Promise.resolve(),
     log: () => undefined,

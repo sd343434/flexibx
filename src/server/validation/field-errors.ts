@@ -24,6 +24,7 @@ export const VALIDATION_CODES = [
   "last_owner",
   "invitation_invalid",
   "invitation_email_mismatch",
+  "email_not_verified",
 ] as const;
 
 export type ValidationCode = (typeof VALIDATION_CODES)[number];
