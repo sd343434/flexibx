@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 
 import { API_CONTENT_SECURITY_POLICY } from "./src/security/csp";
+import { INVITATION_URL_PATTERN } from "./src/server/redact";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
@@ -28,6 +29,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  // `next dev` prints every request URL (and server-action calls on it). URLs that can
+  // carry a one-time invitation token are left out; `next start` has no request log.
+  logging: { incomingRequests: { ignore: [INVITATION_URL_PATTERN] } },
   headers() {
     return Promise.resolve([
       { source: "/:path*", headers: securityHeaders },

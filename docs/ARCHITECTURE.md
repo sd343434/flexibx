@@ -164,14 +164,64 @@ Controls, from outermost to innermost:
      (`components/shell/*`) is presentational: workspace name, a workspace switcher (the
      user's own memberships; switching is plain navigation to `/{locale}/w/{slug}`, which
      authorizes again), a user menu (name, email, role in this workspace, sign-out) and
-     workspace navigation that lists only pages that exist (Home). No workspace identity
-     or role lives in client state.
+     workspace navigation that lists only pages that exist and the role may open (Home;
+     Members for roles with `member.view`). No workspace identity or role lives in
+     client state.
    - **Last workspace** (decision 10, `server/workspaces/last-workspace.ts`): for
      browsers with a session cookie, the proxy remembers the slug of the last visited
      `/{locale}/w/{slug}` page in `flexibx.last_workspace` (HttpOnly, SameSite=Lax,
      Secure on https, 90 days). It is a convenience only: `/workspaces` uses it just when
      it names one of the user's current memberships (`getMyWorkspaceLanding`). A foreign,
      deleted, unknown or malformed value is ignored, and it never grants access.
+   - **Members** (`/{locale}/w/{slug}/members`, `server/workspaces/member-service.ts`):
+     every role with `member.view` sees the member list (CLIENT does not); OWNER and
+     ADMIN (`member.updateRole` / `member.remove`) change roles and remove members. The
+     existing `canAssignRole` ceiling applies to both the member's current role and the
+     new one, so an ADMIN cannot touch an OWNER. Grantable roles are ADMIN, MANAGER,
+     EDITOR and VIEWER (`GRANTABLE_ROLES`): nobody can be made OWNER (no ownership
+     transfer) and CLIENT is not offered in BUSINESS workspaces. Nobody changes their own
+     role or removes themselves (they leave instead). Any member may leave, except the
+     last OWNER. Each mutation runs in one transaction that first locks the workspace row
+     (`lockWorkspaceMemberships`, `SELECT … FOR UPDATE`) and re-reads the actor's
+     current role, so a demotion since the request started is respected and two
+     concurrent changes can never leave a workspace without an OWNER. Member ids from
+     other workspaces are `NOT_FOUND`. Audit: `member.role_changed`, `member.removed`,
+     `member.left`.
+   - **Invitations** (`workspace_invitations`, tenant-owned, registered in the tenant
+     guard): OWNER/ADMIN invite an email with a grantable role. The token is 32 random
+     bytes (base64url) shown once to the inviter as a link built from `APP_URL`
+     (`/{locale}/invite/{token}`); only its SHA-256 hex is stored. Invitations expire
+     after 7 days. The database adds: one pending invitation per (workspace, email)
+     (partial unique index), `role <> 'OWNER'`, a hex-only hash and "accepted or
+     revoked, never both". An expired pending invitation is replaced by a new one;
+     inviting a member or an address with a live invitation is a `CONFLICT` on `email`.
+     Inviters see the pending list and can revoke (link stops working at once). Audit:
+     `member.invited`, `invitation.revoked` (email and role, never the token or its
+     hash).
+   - **Accepting** (`server/tenancy/invitation-acceptance.ts`, a reviewed system path):
+     the invitee has no `TenantContext` yet, so the token hash is looked up with the
+     system client. Everything after that runs in one guarded transaction scoped to the
+     invitation's workspace: lock, conditional claim (`UPDATE … WHERE accepted_at IS
+NULL AND revoked_at IS NULL AND expires_at > now`; zero rows → invalid), membership
+     insert, `invitation.accepted` + `member.added` audit. Unknown, malformed, expired,
+     revoked, used and deleted-workspace tokens are all the same `NOT_FOUND`
+     (`invitation_invalid`). The signed-in email must equal the invited one (case
+     insensitive); other accounts get `invitation_email_mismatch` and see no workspace
+     details. An existing member gets `CONFLICT` and the invitation stays open. The page
+     requires a session first: anonymous visitors go to sign-in with `next` set to the
+     invitation (sign-up keeps it), in the same locale. It is `noindex` and
+     `no-referrer`. The application logger redacts the token after `/invite/` (also
+     URL-encoded, as in `?next=%2Far%2Finvite%2F…`) in any logged string, and
+     `next.config.ts` keeps every URL matching `INVITATION_URL_PATTERN` out of the
+     `next dev` request log (`next start` logs no request URLs).
+   - **Mailer** (`server/mail/`): `Mailer.send({ to, locale, template, data })` with
+     localized templates (`messages/*.json` → `emails`) whose interpolated values are
+     HTML-escaped. Transports: `MemoryMailer` (tests), `LogMailer` (development: logs
+     template, locale and a masked recipient — never the subject, body or link) and
+     `UnconfiguredMailer` (production: every send throws `SERVICE_UNAVAILABLE`,
+     `mailer_not_configured`). No real provider exists yet, so no environment reports an
+     email as sent: the invitation is committed first and the inviter is told "no email
+     was sent" and shown the link to share manually.
    - **Authentication pages** (`/{locale}/sign-up`, `/{locale}/sign-in`, route group
      `app/[locale]/(auth)`): their form actions call `signUpAction` / `signInAction` /
      `signOutAction` (`server/auth/auth-actions.ts`, `withAction`), which use
@@ -203,7 +253,7 @@ Controls, from outermost to innermost:
    - any update/delete on append-only models (`AuditLog`);
    - `Workspace` reads/updates that do not target one `id`, and all `Workspace` hard deletes;
    - nested writes from `Workspace` creates, updates and upserts to its workspace-owned
-     relations (`members`, `auditLogs`, `clients`). Prisma runs nested writes without
+     relations (`members`, `auditLogs`, `clients`, `invitations`). Prisma runs nested writes without
      passing them through the extension, so these relations are changed only through
      their own guarded top-level model operations;
    - reaching tenant relations through global models (e.g. `User.memberships`).
@@ -211,8 +261,9 @@ Controls, from outermost to innermost:
    It also applies inside interactive transactions.
 
 5. **System client** (`getSystemDb()`): unguarded, for explicitly reviewed paths only
-   (resolving and listing the signed-in user's own memberships in `server/tenancy/access.ts`, health checks, seed, future purge
-   jobs).
+   (resolving and listing the signed-in user's own memberships in `server/tenancy/access.ts`,
+   looking up an invitation by token hash in `server/tenancy/invitation-acceptance.ts`,
+   health checks, seed, future purge jobs).
 6. **Raw SQL**: `$queryRawUnsafe` / `$executeRawUnsafe` are banned by ESLint. Tagged
    `$queryRaw` bypasses the guard, so it must be workspace-scoped by hand and reviewed.
 7. **Storage**: object keys are server-generated as `workspaces/{workspaceId}/{category}/{uuid}.{ext}`;
@@ -276,6 +327,14 @@ inheritance, so isolation stays simple and auditable.
 - Styles allow `'unsafe-inline'`, because Next.js and next/font inject style tags. Scripts
   never do.
 - Rate limiting is not yet in place (Phase 2 for auth, Phase 6 for AI and API).
+- Invitations (Phase 2, step 7): invitation creation and acceptance are not rate
+  limited. An OWNER/ADMIN could create many invitations (bounded per address by the
+  pending-unique index; each needs a distinct email), and a client could submit many
+  accept attempts. Guessing a token is not practical (256-bit tokens, constant-shape
+  responses), but per-user and per-IP limits belong to the auth-hardening step (Step 8).
+- Email verification is Step 8: until then, someone who registers the invited address
+  without owning it AND obtains the link could accept. The link is shown only to the
+  inviter and shared by them, which limits this; verification will close it.
 
 ## 8. Observability
 

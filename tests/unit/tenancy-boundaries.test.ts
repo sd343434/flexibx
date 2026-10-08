@@ -57,6 +57,7 @@ describe("tenancy boundaries", () => {
       "src/server/auth/auth.ts",
       "src/server/health/health-service.ts",
       "src/server/tenancy/access.ts",
+      "src/server/tenancy/invitation-acceptance.ts",
     ]);
   });
 });

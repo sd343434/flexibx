@@ -56,10 +56,11 @@ model User {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships WorkspaceMember[]
-  auditLogs   AuditLog[]
-  sessions    Session[]
-  accounts    Account[]
+  memberships        WorkspaceMember[]
+  auditLogs          AuditLog[]
+  sessions           Session[]
+  accounts           Account[]
+  invitationsCreated WorkspaceInvitation[]
 
   @@map("users")
 }
@@ -86,8 +87,9 @@ model Workspace {
 
   parent    Workspace?        @relation("WorkspaceClients", fields: [parentWorkspaceId], references: [id], onDelete: Restrict)
   clients   Workspace[]       @relation("WorkspaceClients")
-  members   WorkspaceMember[]
-  auditLogs AuditLog[]
+  members     WorkspaceMember[]
+  auditLogs   AuditLog[]
+  invitations WorkspaceInvitation[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -109,6 +111,32 @@ model WorkspaceMember {
   @@index([workspaceId, role])
   @@index([userId])
   @@map("workspace_members")
+}
+
+/// Tenant-owned: an invitation to join a workspace with a role. Only the SHA-256 hash
+/// of the one-time token is stored; the plaintext exists once, in the link shown to the
+/// inviter. Pending = not accepted, not revoked (expiry is checked by the application).
+/// Raw SQL in the migration adds: one pending invitation per (workspace, email), no
+/// OWNER invitations, hex token hash, and "accepted XOR revoked or neither".
+model WorkspaceInvitation {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String        @map("workspace_id") @db.Uuid
+  email           String        @db.Citext
+  role            WorkspaceRole
+  tokenHash       String        @unique @map("token_hash") @db.Char(64)
+  invitedByUserId String?       @map("invited_by_user_id") @db.Uuid
+  expiresAt       DateTime      @map("expires_at") @db.Timestamptz(3)
+  acceptedAt      DateTime?     @map("accepted_at") @db.Timestamptz(3)
+  revokedAt       DateTime?     @map("revoked_at") @db.Timestamptz(3)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation(fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([invitedByUserId])
+  @@map("workspace_invitations")
 }
 
 /// Append-only audit trail. `workspaceId` is null for platform-level events.

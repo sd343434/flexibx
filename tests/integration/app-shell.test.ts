@@ -319,11 +319,11 @@ describe("last-workspace cookie", () => {
 // ── rendered shell ───────────────────────────────────────────────────────────
 
 describe("rendered shell", () => {
-  async function shellHtml(locale: "ar" | "en") {
+  async function shellHtml(locale: "ar" | "en", role: WorkspaceRole = WorkspaceRole.EDITOR) {
     const other = await signedInUser("Other");
     const me = await signedInUser("Reem Saleh");
     await workspace("alpha-team", [{ userId: me.id, role: WorkspaceRole.OWNER }], "Alpha");
-    await workspace("beta-team", [{ userId: me.id, role: WorkspaceRole.EDITOR }], "Beta");
+    await workspace("beta-team", [{ userId: me.id, role }], "Beta");
     await workspace("foreign-team", [{ userId: other.id, role: WorkspaceRole.OWNER }], "Foreign");
     actAs(me);
     const shell = await getWorkspaceShell("beta-team");
@@ -335,6 +335,7 @@ describe("rendered shell", () => {
           workspace: shell.workspace,
           workspaces: shell.workspaces,
           user: shell.user,
+          nav: shell.nav,
           signOut: createElement("button", { "data-testid": "sign-out" }, "sign-out-slot"),
           children: createElement("p", null, "page body"),
         }),
@@ -381,10 +382,18 @@ describe("rendered shell", () => {
     }
   });
 
-  it("the navigation lists only pages that exist", async () => {
-    const { html } = await shellHtml("en");
-    const nav = /<nav aria-label="Workspace navigation"[\s\S]*?<\/nav>/.exec(html)?.[0] ?? "";
-    expect(nav.match(/<a /g)).toHaveLength(1);
-    expect(nav).toContain('href="/en/w/beta-team"');
+  it("the navigation lists only pages that exist and the role may open", async () => {
+    const navOf = (html: string) =>
+      /<nav aria-label="Workspace navigation"[\s\S]*?<\/nav>/.exec(html)?.[0] ?? "";
+    const editor = navOf((await shellHtml("en")).html);
+    expect(editor.match(/<a /g)).toHaveLength(2);
+    expect(editor).toContain('href="/en/w/beta-team"');
+    expect(editor).toMatch(/data-testid="nav-members"[^>]*href="\/en\/w\/beta-team\/members"/);
+
+    // CLIENT has no member.view: no Members entry.
+    await resetDatabase(system);
+    const client = navOf((await shellHtml("en", WorkspaceRole.CLIENT)).html);
+    expect(client.match(/<a /g)).toHaveLength(1);
+    expect(client).not.toContain("/members");
   });
 });

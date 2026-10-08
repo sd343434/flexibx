@@ -21,6 +21,7 @@ export default async function WorkspaceLayout({ children, params }: WorkspaceLay
       workspace={shell.workspace}
       workspaces={shell.workspaces}
       user={shell.user}
+      nav={shell.nav}
       signOut={<SignOutButton />}
     >
       {children}

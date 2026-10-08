@@ -119,7 +119,8 @@
   "shell": {
     "nav": {
       "label": "Workspace navigation",
-      "home": "Home"
+      "home": "Home",
+      "members": "Members"
     },
     "switcher": {
       "label": "Switch workspace",
@@ -130,6 +131,89 @@
       "label": "Account menu",
       "signedInAs": "Signed in as",
       "role": "Role in this workspace: {role}"
+    }
+  },
+  "members": {
+    "title": "Members",
+    "description": "People who can open this workspace and what they can do.",
+    "count": "{count, plural, one {# member} other {# members}}",
+    "you": "You",
+    "joined": "Joined {date}",
+    "forbidden": "Your role doesn't include viewing the member list.",
+    "list": {
+      "label": "Workspace members",
+      "role": "Role",
+      "changeRole": "Change role for {name}",
+      "save": "Save role",
+      "saving": "Saving…",
+      "remove": "Remove",
+      "removeConfirm": "Remove {name} from this workspace?",
+      "removeSubmit": "Yes, remove",
+      "removing": "Removing…",
+      "cancel": "Cancel"
+    },
+    "invite": {
+      "title": "Invite a member",
+      "description": "Invitations expire after 7 days and can be used once, only by the invited email address.",
+      "email": "Email",
+      "role": "Role",
+      "submit": "Create invitation",
+      "submitting": "Creating…",
+      "created": "Invitation created for {email}.",
+      "sent": "An invitation email was sent.",
+      "notSentDevelopment": "No email was sent: email delivery is not configured in this environment (development).",
+      "notSentNotConfigured": "No email was sent: no email provider is configured.",
+      "notSentFailed": "No email was sent: the email could not be delivered.",
+      "shareLink": "Copy this link and share it with the invitee yourself. It is shown only once.",
+      "linkLabel": "Invitation link",
+      "copy": "Copy link",
+      "copied": "Copied"
+    },
+    "pending": {
+      "title": "Pending invitations",
+      "empty": "No pending invitations.",
+      "expires": "Expires {date}",
+      "expired": "Expired",
+      "invitedBy": "Invited by {name}",
+      "revoke": "Revoke",
+      "revokeConfirm": "Revoke the invitation for {email}? The link will stop working.",
+      "revokeSubmit": "Yes, revoke",
+      "revoking": "Revoking…"
+    },
+    "leave": {
+      "title": "Leave workspace",
+      "description": "You will lose access to this workspace until someone invites you again.",
+      "lastOwner": "You are the only owner, so you can't leave this workspace.",
+      "submit": "Leave workspace",
+      "confirm": "Leave this workspace?",
+      "confirmSubmit": "Yes, leave",
+      "leaving": "Leaving…"
+    }
+  },
+  "invite": {
+    "title": "Workspace invitation",
+    "valid": "{inviter} invited you to join {workspace} as {role}.",
+    "validNoInviter": "You were invited to join {workspace} as {role}.",
+    "expires": "This invitation expires on {date}.",
+    "signedInAs": "Signed in as {email}",
+    "accept": "Accept and join",
+    "accepting": "Joining…",
+    "invalidTitle": "Invitation unavailable",
+    "invalid": "This invitation is invalid, has expired or has already been used. Ask the person who invited you for a new one.",
+    "mismatchTitle": "Different account",
+    "mismatch": "This invitation was sent to a different email address. Sign out and sign in with the invited address.",
+    "alreadyMemberTitle": "You're already a member",
+    "alreadyMember": "You already belong to this workspace.",
+    "openWorkspace": "Open workspace",
+    "goToWorkspaces": "Go to your workspaces"
+  },
+  "emails": {
+    "invitation": {
+      "subject": "You're invited to join {workspace} on Flexibx",
+      "intro": "{inviter} invited you to join the workspace {workspace} on Flexibx as {role}.",
+      "action": "Accept the invitation",
+      "expiry": "This invitation expires on {date} and can be used once.",
+      "ignore": "If you weren't expecting this invitation, you can ignore this email."
     }
   },
   "errors": {
@@ -155,6 +239,11 @@
     "not_multiple_of": "Must be a multiple of {divisor}.",
     "unrecognized_keys": "Unknown fields: {keys}",
     "invalid": "This value is invalid.",
-    "slug_taken": "This address is already taken. Choose another one."
+    "slug_taken": "This address is already taken. Choose another one.",
+    "already_member": "This person is already a member of the workspace.",
+    "invitation_pending": "An invitation for this email is already pending. Revoke it to send a new one.",
+    "last_owner": "The workspace must keep at least one owner.",
+    "invitation_invalid": "This invitation is invalid, has expired or has already been used.",
+    "invitation_email_mismatch": "This invitation was sent to a different email address."
   }
 }

@@ -19,6 +19,11 @@ export const VALIDATION_CODES = [
   "invalid",
   // Domain codes raised by services (not by Zod).
   "slug_taken",
+  "already_member",
+  "invitation_pending",
+  "last_owner",
+  "invitation_invalid",
+  "invitation_email_mismatch",
 ] as const;
 
 export type ValidationCode = (typeof VALIDATION_CODES)[number];

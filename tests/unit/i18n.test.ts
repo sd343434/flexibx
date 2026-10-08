@@ -27,6 +27,12 @@ const SAMPLE_PARAMS = {
   divisor: 5,
   keys: "extra",
   role: "Owner",
+  count: 2,
+  date: "1 January 2027",
+  email: "reem@example.com",
+  inviter: "Reem",
+  name: "Reem",
+  workspace: "Acme",
 };
 
 describe("locale configuration", () => {

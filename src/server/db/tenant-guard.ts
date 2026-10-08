@@ -12,6 +12,7 @@ import { AppError } from "../errors/app-error";
  */
 export const TENANT_MODELS = {
   WorkspaceMember: { workspaceId: "required", appendOnly: false },
+  WorkspaceInvitation: { workspaceId: "required", appendOnly: false },
   AuditLog: { workspaceId: "nullable", appendOnly: true },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
@@ -24,7 +25,7 @@ export const TENANT_ROOT_MODEL = "Workspace";
  * not touch these relations at all; they are changed only through their own guarded
  * top-level model operations.
  */
-export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients"] as const;
+export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients", "invitations"] as const;
 
 /**
  * Authentication tables (Better Auth). Global/system data — never workspace-scoped and
@@ -39,7 +40,7 @@ export const AUTH_MODELS: ReadonlySet<string> = new Set(["Session", "Account", "
  * authentication data (auth layer only).
  */
 export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly string[]>> = {
-  User: ["memberships", "auditLogs", "sessions", "accounts"],
+  User: ["memberships", "auditLogs", "sessions", "accounts", "invitationsCreated"],
 };
 
 // Every operation that is not a create — all reads (findUnique/First/Many, count,

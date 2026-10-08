@@ -106,6 +106,30 @@ describe("assertTenantSafe — workspace-owned models", () => {
   });
 });
 
+describe("assertTenantSafe — WorkspaceInvitation", () => {
+  it("is registered as a required-scope tenant model", () => {
+    rejects("WorkspaceInvitation", "findUnique", { where: { tokenHash: "a".repeat(64) } });
+    rejects("WorkspaceInvitation", "findFirst", { where: { email: "a@b.c" } });
+    rejects("WorkspaceInvitation", "updateMany", { where: { id: USER }, data: {} });
+    rejects("WorkspaceInvitation", "deleteMany", {});
+    rejects("WorkspaceInvitation", "create", { data: { email: "a@b.c" } });
+    rejects("WorkspaceInvitation", "create", { data: { workspaceId: null } });
+    rejects("WorkspaceInvitation", "update", {
+      where: { workspaceId: WS, id: USER },
+      data: { workspaceId: USER },
+    });
+    expect(() => {
+      assertTenantSafe("WorkspaceInvitation", "findFirst", {
+        where: { workspaceId: WS, tokenHash: "a".repeat(64) },
+      });
+      assertTenantSafe("WorkspaceInvitation", "updateMany", {
+        where: { workspaceId: WS, id: USER },
+        data: { revokedAt: new Date() },
+      });
+    }).not.toThrow();
+  });
+});
+
 describe("assertTenantSafe — AuditLog", () => {
   it("is append-only", () => {
     for (const operation of ["update", "updateMany", "upsert", "delete", "deleteMany"]) {
@@ -145,7 +169,7 @@ describe("assertTenantSafe — Workspace (tenant root)", () => {
 
 describe("assertTenantSafe — Workspace nested writes", () => {
   const OTHER = "9a3c2b1d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
-  const relations = ["members", "auditLogs", "clients"] as const;
+  const relations = ["members", "auditLogs", "clients", "invitations"] as const;
   // Every nested write Prisma accepts on a to-many relation.
   const nested: Record<string, unknown> = {
     create: {},
@@ -254,6 +278,7 @@ describe("assertTenantSafe — global models", () => {
   it("blocks reaching tenant data through User relations", () => {
     rejects("User", "findMany", { include: { memberships: true } });
     rejects("User", "findUnique", { where: { id: USER }, select: { auditLogs: true } });
+    rejects("User", "findUnique", { where: { id: USER }, include: { invitationsCreated: true } });
     rejects("User", "update", {
       where: { id: USER },
       data: { memberships: { create: { workspaceId: WS, role: "OWNER" } } },
