@@ -20,6 +20,26 @@ export const AUDIT_ACTIONS = [
   "user.password_reset_requested",
   "user.password_reset",
   "user.password_changed",
+  // Marketing Core (Phase 3).
+  "brand.created",
+  "brand.updated",
+  "audience.created",
+  "audience.updated",
+  "audience.deleted",
+  "goal.created",
+  "goal.updated",
+  "pillar.created",
+  "pillar.updated",
+  "campaign.created",
+  "campaign.updated",
+  "campaign.archived",
+  "content.created",
+  "content.updated",
+  "content.status_changed",
+  "content.deleted",
+  "asset.created",
+  "asset.updated",
+  "asset.deleted",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

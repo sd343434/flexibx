@@ -154,6 +154,21 @@ export function parseMailEnv(source: EnvSource): MailEnv {
   return result.data;
 }
 
+/**
+ * Storage backend. `s3` (default) is the only real backend. `test-memory` keeps objects
+ * in the server process for automated end-to-end runs without object storage (like
+ * MAIL_TRANSPORT=test-outbox): objects vanish on restart — never for a real deployment.
+ */
+export const storageDriverSchema = z.object({
+  STORAGE_DRIVER: optional(z.enum(["s3", "test-memory"])),
+});
+
+export function parseStorageDriver(source: EnvSource): "s3" | "test-memory" {
+  const result = storageDriverSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("storage", result.error.issues);
+  return result.data.STORAGE_DRIVER ?? "s3";
+}
+
 export function parseStorageEnv(source: EnvSource): StorageEnv {
   const result = storageEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("storage", result.error.issues);

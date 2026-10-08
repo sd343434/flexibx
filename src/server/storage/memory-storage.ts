@@ -6,6 +6,7 @@ import {
   type SignedUpload,
   type SignedUploadOptions,
   type StorageService,
+  type StoredObjectData,
 } from "./storage";
 
 interface StoredObject {
@@ -20,7 +21,11 @@ function settle<T>(fn: () => T): Promise<T> {
   });
 }
 
-/** In-memory implementation for tests. Applies the same key and upload rules as S3. */
+/**
+ * In-memory implementation for tests and automated end-to-end runs
+ * (STORAGE_DRIVER=test-memory — never a real deployment). Applies the same key and upload
+ * rules as S3.
+ */
 export class MemoryStorageService implements StorageService {
   readonly objects = new Map<string, StoredObject>();
 
@@ -69,5 +74,15 @@ export class MemoryStorageService implements StorageService {
   publicUrl(key: string): string | null {
     assertValidKey(key);
     return null;
+  }
+
+  getObject(key: string): Promise<StoredObjectData | null> {
+    return settle(() => {
+      assertValidKey(key);
+      const stored = this.objects.get(key);
+      return stored === undefined
+        ? null
+        : { body: stored.body.slice(), contentType: stored.contentType };
+    });
   }
 }

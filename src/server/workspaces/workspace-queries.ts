@@ -16,6 +16,29 @@ import { GRANTABLE_ROLES } from "./member-input";
 import { listMembers } from "./member-repository";
 import { getWorkspace } from "./workspace-service";
 
+/** Navigation entries the role may open (pages re-check on the server). */
+export interface ShellNavAccess {
+  readonly content: boolean;
+  readonly calendar: boolean;
+  readonly campaigns: boolean;
+  readonly brand: boolean;
+  readonly media: boolean;
+  readonly activity: boolean;
+  readonly members: boolean;
+}
+
+export function shellNavAccess(role: Role): ShellNavAccess {
+  return {
+    content: can(role, "content.view"),
+    calendar: can(role, "content.view"),
+    campaigns: can(role, "campaign.view"),
+    brand: can(role, "brand.view"),
+    media: can(role, "content.view"),
+    activity: can(role, "audit.view"),
+    members: can(role, "member.view"),
+  };
+}
+
 export interface WorkspaceOverview {
   readonly name: string;
   readonly slug: string;
@@ -40,7 +63,7 @@ export interface WorkspaceShell {
   /** The user's own memberships, for the switcher. */
   readonly workspaces: readonly WorkspaceSummary[];
   /** Which navigation entries the current role may open. */
-  readonly nav: { readonly members: boolean };
+  readonly nav: ShellNavAccess;
 }
 
 /**
@@ -54,7 +77,7 @@ export async function getWorkspaceShell(slug: string): Promise<WorkspaceShell> {
     user: { name: user.name, email: user.email },
     workspace,
     workspaces,
-    nav: { members: can(workspace.role, "member.view") },
+    nav: shellNavAccess(workspace.role),
   };
 }
 

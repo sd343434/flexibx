@@ -1,16 +1,35 @@
 "use client";
 
-import { House, Users } from "lucide-react";
+import {
+  CalendarDays,
+  FileText,
+  History,
+  House,
+  Images,
+  Megaphone,
+  Palette,
+  Users,
+} from "lucide-react";
 
 import { Link, usePathname } from "@/i18n/navigation";
 
 export interface ShellNavItem {
-  readonly id: "home" | "members";
+  readonly id:
+    "home" | "content" | "calendar" | "campaigns" | "brand" | "media" | "activity" | "members";
   readonly href: string;
   readonly label: string;
 }
 
-const ICONS = { home: House, members: Users } as const;
+const ICONS = {
+  home: House,
+  content: FileText,
+  calendar: CalendarDays,
+  campaigns: Megaphone,
+  brand: Palette,
+  media: Images,
+  activity: History,
+  members: Users,
+} as const;
 
 /**
  * Workspace navigation. The items (and which ones the role may see) are decided on the

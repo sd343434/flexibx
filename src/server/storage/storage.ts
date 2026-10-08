@@ -22,6 +22,13 @@ export interface StorageService {
   ): Promise<string>;
   /** Public URL if a public base URL (CDN) is configured, otherwise null (private bucket). */
   publicUrl(key: string): string | null;
+  /** The object's bytes, or null when it does not exist (served through access-checked routes). */
+  getObject(key: string): Promise<StoredObjectData | null>;
+}
+
+export interface StoredObjectData {
+  readonly body: Uint8Array;
+  readonly contentType: string | null;
 }
 
 export interface SignedUploadOptions {
@@ -68,6 +75,8 @@ export const STORAGE_CATEGORIES = {
     contentTypes: ["image/png", "image/jpeg", "image/webp"],
   },
   "generated-videos": { maxBytes: 500 * MiB, contentTypes: ["video/mp4", "video/webm"] },
+  // Marketing Core media library (Phase 3): raster images only (no SVG: it can carry script).
+  "content-media": { maxBytes: 10 * MiB, contentTypes: ["image/png", "image/jpeg", "image/webp"] },
 } as const satisfies Record<
   string,
   { maxBytes: number; contentTypes: readonly AllowedContentType[] }

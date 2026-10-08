@@ -14,6 +14,17 @@ export const TENANT_MODELS = {
   WorkspaceMember: { workspaceId: "required", appendOnly: false },
   WorkspaceInvitation: { workspaceId: "required", appendOnly: false },
   AuditLog: { workspaceId: "nullable", appendOnly: true },
+  // Marketing Core (Phase 3).
+  Brand: { workspaceId: "required", appendOnly: false },
+  Audience: { workspaceId: "required", appendOnly: false },
+  MarketingGoal: { workspaceId: "required", appendOnly: false },
+  ContentPillar: { workspaceId: "required", appendOnly: false },
+  Campaign: { workspaceId: "required", appendOnly: false },
+  CampaignGoal: { workspaceId: "required", appendOnly: false },
+  CampaignPillar: { workspaceId: "required", appendOnly: false },
+  ContentItem: { workspaceId: "required", appendOnly: false },
+  MediaAsset: { workspaceId: "required", appendOnly: false },
+  ContentItemAsset: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -25,7 +36,22 @@ export const TENANT_ROOT_MODEL = "Workspace";
  * not touch these relations at all; they are changed only through their own guarded
  * top-level model operations.
  */
-export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients", "invitations"] as const;
+export const TENANT_ROOT_RELATIONS = [
+  "members",
+  "auditLogs",
+  "clients",
+  "invitations",
+  "brand",
+  "audiences",
+  "marketingGoals",
+  "contentPillars",
+  "campaigns",
+  "campaignGoals",
+  "campaignPillars",
+  "contentItems",
+  "mediaAssets",
+  "contentItemAssets",
+] as const;
 
 /**
  * Authentication tables (Better Auth). Global/system data — never workspace-scoped and
@@ -45,7 +71,15 @@ export const AUTH_MODELS: ReadonlySet<string> = new Set([
  * authentication data (auth layer only).
  */
 export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly string[]>> = {
-  User: ["memberships", "auditLogs", "sessions", "accounts", "invitationsCreated"],
+  User: [
+    "memberships",
+    "auditLogs",
+    "sessions",
+    "accounts",
+    "invitationsCreated",
+    "contentCreated",
+    "mediaUploaded",
+  ],
 };
 
 // Every operation that is not a create — all reads (findUnique/First/Many, count,

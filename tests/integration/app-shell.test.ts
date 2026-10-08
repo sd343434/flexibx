@@ -368,9 +368,12 @@ describe("rendered shell", () => {
     );
     expect(html).toContain('href="/ar/workspaces?list=1"');
     expect(html).not.toMatch(/href="\/en\/w\//);
+    // Every shell label the EDITOR's shell shows (Activity needs audit.view).
+    const hidden = new Set([ar.shell.nav.activity]);
     for (const label of Object.values(ar.shell).flatMap((group) => Object.values(group))) {
-      if (!label.includes("{")) expect(html).toContain(label);
+      if (!label.includes("{") && !hidden.has(label)) expect(html).toContain(label);
     }
+    expect(html).not.toContain(ar.shell.nav.activity);
     for (const english of [
       "Switch workspace",
       "All workspaces",
@@ -385,15 +388,33 @@ describe("rendered shell", () => {
   it("the navigation lists only pages that exist and the role may open", async () => {
     const navOf = (html: string) =>
       /<nav aria-label="Workspace navigation"[\s\S]*?<\/nav>/.exec(html)?.[0] ?? "";
+    const entries = (html: string) =>
+      [...html.matchAll(/data-testid="nav-([a-z]+)"/g)].map((match) => match[1]);
     const editor = navOf((await shellHtml("en")).html);
-    expect(editor.match(/<a /g)).toHaveLength(2);
+    // EDITOR: every Marketing Core section and Members; no Activity (audit.view).
+    expect(entries(editor)).toEqual([
+      "home",
+      "content",
+      "calendar",
+      "campaigns",
+      "brand",
+      "media",
+      "members",
+    ]);
     expect(editor).toContain('href="/en/w/beta-team"');
     expect(editor).toMatch(/data-testid="nav-members"[^>]*href="\/en\/w\/beta-team\/members"/);
+    expect(editor).toMatch(/data-testid="nav-content"[^>]*href="\/en\/w\/beta-team\/content"/);
 
-    // CLIENT has no member.view: no Members entry.
+    // CLIENT has no member.view and no audit.view: no Members or Activity entry.
     await resetDatabase(system);
     const client = navOf((await shellHtml("en", WorkspaceRole.CLIENT)).html);
-    expect(client.match(/<a /g)).toHaveLength(1);
+    expect(entries(client)).toEqual(["home", "content", "calendar", "campaigns", "brand", "media"]);
     expect(client).not.toContain("/members");
+    expect(client).not.toContain("/activity");
+
+    // ADMIN also sees Activity.
+    await resetDatabase(system);
+    const admin = navOf((await shellHtml("en", WorkspaceRole.ADMIN)).html);
+    expect(entries(admin)).toContain("activity");
   });
 });

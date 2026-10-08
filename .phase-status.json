@@ -1,14 +1,11 @@
 {
-  "phase": 2,
-  "status": "COMPLETED",
-  "summary": "Phase 2 completed (human approval, C9): Better Auth foundation, runtime auth and workspace access, workspace creation, auth UI, workspace shell, members, invitations and mailer, email verification (verified-only operations, C1/C6), password reset and change, auth rate limiting, final hardening. All checks passed locally and in CI run 15.",
-  "files_changed": 136,
-  "implementation": {
-    "base": "228701e4076ad7f7b818e20a4ea0392c7afbd526",
-    "head": "8000e31715bcf9414369cedaa14519bfc5bae9e0"
-  },
+  "phase": 3,
+  "status": "IN_PROGRESS",
+  "summary": "Phase 3 Marketing Core OS implemented and verified locally, not yet committed: brand, audiences, goals, content pillars, campaigns, content workflow, calendar, media library, dashboard, activity; tenant-isolated, permission-checked, audited, Arabic RTL and English LTR. Awaiting human commit review.",
+  "files_changed": 69,
+  "implementation": null,
   "tests": {
-    "passed": 873,
+    "passed": 935,
     "failed": 0
   },
   "lint": "PASS",
@@ -16,15 +13,16 @@
   "build": "PASS",
   "migration": "PASS",
   "security": "PASS",
-  "breaking_changes": [],
-  "risks": [
-    "Better Auth stores raw session tokens in the sessions table; accepted with controls (HMAC-signed cookie, AUTH_SECRET outside the database, auth tables unreachable from application code).",
-    "No production email provider yet (C3): users can sign in and create workspaces in production, but nobody can verify an address, so nobody can accept an invitation until a provider is added.",
-    "An unverified account can be registered for an address its creator does not own and used to sign in and create workspaces (C1); it cannot accept invitations, and the real owner can reclaim it by password reset.",
-    "Without AUTH_IP_HEADER, IP-keyed rate limits fall back to one shared bucket per entry point; production deployments must configure the trusted client-IP header.",
-    "The account-keyed sign-in limit lets an attacker slow one account's sign-in for 15 minutes (no lockout state; accepted trade-off).",
-    "AUTH_SECRET is validated on first auth use rather than at boot, so a missing value makes auth requests fail closed."
+  "breaking_changes": [
+    "The workspace home page is now the marketing dashboard, and the shell navigation lists the Marketing Core sections the role may open."
   ],
-  "next_phase": 3,
-  "recommended_next_action": "Phase 2 is complete. Phase 3 starts only with an explicit human instruction."
+  "risks": [
+    "Media uploads have no per-user rate limit; each workspace is capped at 500 images of at most 10 MiB.",
+    "Images are served as uploaded (no re-encoding or EXIF stripping) under nosniff and a sandboxing CSP.",
+    "SCHEDULED is a planning state only; nothing is published automatically (no job runner until a later phase).",
+    "Missing records inside a workspace render a soft 404 (HTTP 200 with the not-found page) because workspace pages stream a loading state.",
+    "Media delete removes the stored object after the database commit; if that call fails the object is orphaned (logged, unreachable)."
+  ],
+  "next_phase": 4,
+  "recommended_next_action": "Review the uncommitted Phase 3 changes and approve a commit, or request changes."
 }

@@ -29,6 +29,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  // Media uploads (images up to 10 MiB, src/server/marketing/media-service.ts) are the
+  // only large server-action bodies; the service enforces the exact per-file limit.
+  experimental: { serverActions: { bodySizeLimit: "11mb" } },
   // `next dev` prints every request URL (and server-action calls on it). URLs that can
   // carry a one-time invitation token are left out; `next start` has no request log.
   logging: { incomingRequests: { ignore: [INVITATION_URL_PATTERN] } },

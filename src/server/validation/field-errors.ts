@@ -25,9 +25,26 @@ export const VALIDATION_CODES = [
   "invitation_invalid",
   "invitation_email_mismatch",
   "email_not_verified",
+  // Marketing Core (Phase 3).
+  "date_range",
+  "budget_pair",
+  "reference_not_found",
+  "reference_archived",
+  "invalid_transition",
+  "content_locked",
+  "campaign_locked",
+  "schedule_required",
+  "schedule_in_past",
+  "image_invalid",
+  "file_required",
+  "stale_status",
 ] as const;
 
 export type ValidationCode = (typeof VALIDATION_CODES)[number];
+
+export function isValidationCode(value: unknown): value is ValidationCode {
+  return typeof value === "string" && (VALIDATION_CODES as readonly string[]).includes(value);
+}
 
 type Params = Record<string, string | number>;
 
@@ -93,10 +110,14 @@ function toFieldError(issue: z.core.$ZodIssue, rootInput: unknown): FieldError {
     }
     case "unrecognized_keys":
       return base("unrecognized_keys", { keys: issue.keys.join(", ") });
+    case "custom": {
+      // A refinement may name its own code (e.g. `date_range`) through `params.code`.
+      const code: unknown = issue.params?.code;
+      return base(isValidationCode(code) ? code : "invalid");
+    }
     case "invalid_union":
     case "invalid_key":
     case "invalid_element":
-    case "custom":
       return base("invalid");
   }
 }

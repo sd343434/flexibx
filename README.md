@@ -87,6 +87,7 @@ single `.env` file (Prisma loads it via `dotenv`, Next.js natively).
 | `DATABASE_URL`                                                                                                                   | yes                          | PostgreSQL connection string                                                                                      |
 | `TEST_DATABASE_URL`                                                                                                              | tests only                   | Integration-test database; name **must end in `_test`** (tables are truncated)                                    |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL` | when storage is used         | Object storage (validated lazily by the storage service)                                                          |
+| `STORAGE_DRIVER`                                                                                                                 | – (default `s3`)             | `test-memory` keeps media uploads in the server process for e2e runs only (lost on restart); never in production  |
 | `AUTH_SECRET`                                                                                                                    | yes (auth)                   | Signs session cookies; ≥ 32 chars (`openssl rand -base64 32`), never in the database                              |
 | `AUTH_URL`                                                                                                                       | – (default `APP_URL`)        | Better Auth base URL                                                                                              |
 | `AUTH_IP_HEADER`                                                                                                                 | production                   | Trusted client-IP header set by your proxy; unset = no header trusted (shared rate-limit buckets)                 |
@@ -118,8 +119,9 @@ must use its own secrets from a secret manager.
 ```bash
 pnpm test                 # unit: env, errors, validation, route wrapper, permissions,
                           #       tenant guard, storage, CSP, i18n key parity
-pnpm test:integration     # PostgreSQL: constraints, tenant isolation, audit log, /api/health
-pnpm build && pnpm e2e    # Chromium: /ar RTL, /en LTR, locale detection, 404s, theme, headers
+pnpm test:integration     # PostgreSQL: constraints, tenant isolation, audit log, auth, members,
+                          #       marketing services, workflow, media route, /api/health
+pnpm build && pnpm e2e    # Chromium: /ar RTL, /en LTR, auth, members, marketing flows, headers
 ```
 
 Playwright uses `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` if set, otherwise the Chromium
@@ -147,3 +149,6 @@ build; gitleaks secret scan.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, multi-tenancy, i18n/RTL,
   security model, and what is deferred to later phases.
+- [docs/PHASE_3_MARKETING_CORE_OS.md](docs/PHASE_3_MARKETING_CORE_OS.md) — Marketing Core
+  (brand, audiences, goals, pillars, campaigns, content workflow, calendar, media,
+  dashboard): domain model, permissions, isolation and what is deferred.

@@ -1,7 +1,8 @@
 # Flexibx architecture
 
-Status: **Phase 1 — foundation** (completed) and **Phase 2 — authentication and runtime
-multi-tenancy** (implemented; awaiting the human Phase 2 completion review, C9). This
+Status: **Phase 1 — foundation** (completed), **Phase 2 — authentication and runtime
+multi-tenancy** (completed) and **Phase 3 — Marketing Core OS** (implemented; in progress,
+see §10 and [`PHASE_3_MARKETING_CORE_OS.md`](PHASE_3_MARKETING_CORE_OS.md)). This
 document describes what exists, the rules every later phase must follow, and what is
 intentionally deferred.
 
@@ -464,11 +465,47 @@ usage and cost tracking are deferred (see below).
 | OAuth (Google), 2FA and passkeys, session list/revoke UI, account deletion, email change, ownership transfer | later (not Phase 2)     |
 | Real production email provider (Phase 2 fails explicitly without one, C3)                                    | later (not Phase 2)     |
 | `AGENCY` / client workspaces                                                                                 | 14                      |
-| Product navigation beyond the Phase 2 shell                                                                  | 3                       |
-| Brand, products, audience and personas, plus logo upload (using `StorageService`)                            | 3–4                     |
+| Products catalogue, brand logo upload (the Phase 3 media library can be reused)                              | 4                       |
+| Video/large uploads (presigned direct uploads), image processing (thumbnails, EXIF stripping)                | media pipeline (12+)    |
 | AI provider abstraction, Brand Brain, AI usage/cost tracking                                                 | 5–6                     |
-| Redis + BullMQ worker (`src/worker/`), scheduled publishing                                                  | 9, or earlier if needed |
+| Redis + BullMQ worker (`src/worker/`), scheduled publishing (Phase 3 `SCHEDULED` is planning only)           | 9, or earlier if needed |
 | Social integrations and token encryption (`ENCRYPTION_KEY`)                                                  | 8                       |
 | Analytics, insights, ads, agent, agency dashboards, billing (Stripe), admin panel                            | 10–16                   |
 | Sentry, PostHog, dashboards                                                                                  | 18–19                   |
 | Postgres RLS, CSP review, controlled purge job                                                               | 18                      |
+
+## 10. Marketing Core OS (Phase 3)
+
+Phase 3 adds the marketing domain on top of the Phase 2 runtime. The full description is
+[`PHASE_3_MARKETING_CORE_OS.md`](PHASE_3_MARKETING_CORE_OS.md); the rules that later
+phases must keep are:
+
+- **Domain.** `Brand` (one per workspace), `Audience`, `MarketingGoal`, `ContentPillar`,
+  `Campaign` (+ `CampaignGoal`, `CampaignPillar`), `ContentItem` (+ `ContentItemAsset`)
+  and `MediaAsset`. All are workspace-owned, in `TENANT_MODELS`, reachable only through
+  their own guarded operations (`TENANT_ROOT_RELATIONS`), and code lives in
+  `src/server/marketing/` (pure rules: `inputs.ts`, `workflow.ts`, `time.ts`, `image.ts`).
+- **Same-workspace references are enforced twice:** services resolve every related id
+  inside the current workspace (foreign = `reference_not_found`), and database triggers
+  reject cross-workspace references and any change of `workspace_id`.
+- **Workflow.** Clients send a content transition name, never a status; each transition
+  has one permission (`workflow.ts`), runs as a status-conditional update (no lost
+  updates) and is audited with `from`/`to`. Only drafts are editable; `PUBLISHED` is final
+  and manual (no external publishing yet).
+- **Permissions.** No new roles or actions: brand/audiences/pillars use `brand.*`,
+  goals/campaigns `campaign.*`, content and media `content.*`, the activity history
+  `audit.view`. The navigation shows only the sections a role may open.
+- **Media.** Images only (PNG/JPEG/WebP ≤ 10 MiB), type and dimensions sniffed from the
+  bytes, server-built keys under `workspaces/{id}/content-media/`, served only by
+  `GET /api/w/{slug}/media/{assetId}` with `nosniff` and a sandboxing CSP. Never public
+  URLs. `STORAGE_DRIVER=test-memory` exists for end-to-end runs only.
+- **Time.** Instants are stored in UTC and entered/shown in the workspace time zone
+  (`workspaces.timezone`), DST-aware; calendar weeks start on Sunday.
+- **Audit.** Every marketing mutation is audited in its transaction with field names and
+  status changes only, never business text.
+- **Accepted for Phase 3 (not blockers):** media uploads are bounded by a per-workspace
+  quota (500 images × 10 MiB) but have no per-user throttling yet — to be evaluated with
+  abuse protection and production hardening in the Production/Growth phase. Orphaned
+  storage objects after a failed post-commit delete, the soft 404 inside a member's
+  workspace, and `SCHEDULED` being planning-only are accepted as documented in
+  [`PHASE_3_MARKETING_CORE_OS.md` §12](PHASE_3_MARKETING_CORE_OS.md).

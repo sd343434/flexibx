@@ -61,6 +61,8 @@ model User {
   sessions           Session[]
   accounts           Account[]
   invitationsCreated WorkspaceInvitation[]
+  contentCreated     ContentItem[]
+  mediaUploaded      MediaAsset[]
 
   @@map("users")
 }
@@ -85,11 +87,23 @@ model Workspace {
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  parent    Workspace?        @relation("WorkspaceClients", fields: [parentWorkspaceId], references: [id], onDelete: Restrict)
-  clients   Workspace[]       @relation("WorkspaceClients")
+  parent      Workspace?            @relation("WorkspaceClients", fields: [parentWorkspaceId], references: [id], onDelete: Restrict)
+  clients     Workspace[]           @relation("WorkspaceClients")
   members     WorkspaceMember[]
   auditLogs   AuditLog[]
   invitations WorkspaceInvitation[]
+
+  // Marketing Core (Phase 3). Changed only through their own guarded models.
+  brand             Brand?
+  audiences         Audience[]
+  marketingGoals    MarketingGoal[]
+  contentPillars    ContentPillar[]
+  campaigns         Campaign[]
+  campaignGoals     CampaignGoal[]
+  campaignPillars   CampaignPillar[]
+  contentItems      ContentItem[]
+  mediaAssets       MediaAsset[]
+  contentItemAssets ContentItemAsset[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -234,4 +248,329 @@ model RateLimit {
 
   @@index([lastRequest])
   @@map("rate_limits")
+}
+
+// ── Marketing Core (Phase 3) ──────────────────────────────────────────────────
+// Every model below is workspace-owned: a NOT NULL workspace_id, registered in the
+// tenant guard, and every relation between two of them is checked by a database
+// trigger to stay inside one workspace (see the migration). Platform-independent:
+// nothing here knows about a social network.
+
+enum BrandLanguage {
+  AR
+  EN
+  BILINGUAL
+
+  @@map("brand_language")
+}
+
+enum BuyingIntent {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@map("buying_intent")
+}
+
+enum MarketingGoalType {
+  AWARENESS
+  ENGAGEMENT
+  LEADS
+  SALES
+  RETENTION
+  TRAFFIC
+  GROWTH
+  OTHER
+
+  @@map("marketing_goal_type")
+}
+
+enum MarketingGoalStatus {
+  ACTIVE
+  PAUSED
+  ACHIEVED
+  ARCHIVED
+
+  @@map("marketing_goal_status")
+}
+
+enum ContentPillarStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@map("content_pillar_status")
+}
+
+enum CampaignStatus {
+  DRAFT
+  PLANNED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+
+  @@map("campaign_status")
+}
+
+enum ContentType {
+  POST
+  REEL
+  STORY
+  VIDEO
+  CAROUSEL
+  ARTICLE
+  EMAIL
+  OTHER
+
+  @@map("content_type")
+}
+
+enum ContentStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+
+  @@map("content_status")
+}
+
+/// One brand profile per workspace: the source the future AI Brand Brain will read.
+model Brand {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String        @unique @map("workspace_id") @db.Uuid
+  name             String        @db.VarChar(120)
+  description      String?       @db.VarChar(2000)
+  website          String?       @db.VarChar(2048)
+  industry         String?       @db.VarChar(120)
+  market           String?       @db.VarChar(200)
+  language         BrandLanguage @default(AR)
+  mission          String?       @db.VarChar(2000)
+  positioning      String?       @db.VarChar(2000)
+  valueProposition String?       @map("value_proposition") @db.VarChar(2000)
+  toneOfVoice      String?       @map("tone_of_voice") @db.VarChar(1000)
+  personality      String?       @db.VarChar(1000)
+  keywords         String[]      @default([])
+  forbiddenWords   String[]      @default([]) @map("forbidden_words")
+  ctaStyle         String?       @map("cta_style") @db.VarChar(500)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("brands")
+}
+
+/// A marketing audience profile (not a CRM contact list).
+model Audience {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String        @map("workspace_id") @db.Uuid
+  name              String        @db.VarChar(120)
+  description       String?       @db.VarChar(2000)
+  /// Free-form descriptive attributes: [{ "label": "...", "value": "..." }] (validated).
+  attributes        Json          @default("[]")
+  painPoints        String[]      @default([]) @map("pain_points")
+  needs             String[]      @default([])
+  interests         String[]      @default([])
+  buyingIntent      BuyingIntent? @map("buying_intent")
+  objections        String[]      @default([])
+  preferredChannels String[]      @default([]) @map("preferred_channels")
+  notes             String?       @db.VarChar(4000)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentPillars ContentPillar[]
+  campaigns      Campaign[]
+  contentItems   ContentItem[]
+
+  @@index([workspaceId, name])
+  @@map("audiences")
+}
+
+model MarketingGoal {
+  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String              @map("workspace_id") @db.Uuid
+  type        MarketingGoalType
+  title       String              @db.VarChar(160)
+  description String?             @db.VarChar(2000)
+  kpi         String?             @db.VarChar(160)
+  target      Decimal?            @db.Decimal(14, 2)
+  startDate   DateTime?           @map("start_date") @db.Date
+  endDate     DateTime?           @map("end_date") @db.Date
+  status      MarketingGoalStatus @default(ACTIVE)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignGoals CampaignGoal[]
+  contentItems  ContentItem[]
+
+  @@index([workspaceId, status])
+  @@map("marketing_goals")
+}
+
+model ContentPillar {
+  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String              @map("workspace_id") @db.Uuid
+  name        String              @db.VarChar(120)
+  description String?             @db.VarChar(2000)
+  objective   String?             @db.VarChar(1000)
+  audienceId  String?             @map("audience_id") @db.Uuid
+  status      ContentPillarStatus @default(ACTIVE)
+  /// Ordering inside the workspace (lower first).
+  position    Int                 @default(0)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  audience        Audience?        @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  campaignPillars CampaignPillar[]
+  contentItems    ContentItem[]
+
+  @@index([workspaceId, status, position])
+  @@index([audienceId])
+  @@map("content_pillars")
+}
+
+model Campaign {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String         @map("workspace_id") @db.Uuid
+  name              String         @db.VarChar(160)
+  description       String?        @db.VarChar(2000)
+  objective         String?        @db.VarChar(1000)
+  startDate         DateTime?      @map("start_date") @db.Date
+  endDate           DateTime?      @map("end_date") @db.Date
+  status            CampaignStatus @default(DRAFT)
+  audienceId        String?        @map("audience_id") @db.Uuid
+  /// Planning metadata only (minor units + ISO 4217); no ad platform, no billing.
+  budgetAmountMinor BigInt?        @map("budget_amount_minor")
+  budgetCurrency    String?        @map("budget_currency") @db.Char(3)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  audience     Audience?        @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  goals        CampaignGoal[]
+  pillars      CampaignPillar[]
+  contentItems ContentItem[]
+
+  @@index([workspaceId, status, startDate])
+  @@index([audienceId])
+  @@map("campaigns")
+}
+
+model CampaignGoal {
+  workspaceId String   @map("workspace_id") @db.Uuid
+  campaignId  String   @map("campaign_id") @db.Uuid
+  goalId      String   @map("goal_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  goal      MarketingGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, goalId])
+  @@index([workspaceId])
+  @@index([goalId])
+  @@map("campaign_goals")
+}
+
+model CampaignPillar {
+  workspaceId String   @map("workspace_id") @db.Uuid
+  campaignId  String   @map("campaign_id") @db.Uuid
+  pillarId    String   @map("pillar_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  pillar    ContentPillar @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, pillarId])
+  @@index([workspaceId])
+  @@index([pillarId])
+  @@map("campaign_pillars")
+}
+
+/// A platform-independent piece of marketing content and its workflow state.
+model ContentItem {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String        @map("workspace_id") @db.Uuid
+  title           String        @db.VarChar(200)
+  body            String        @default("") @db.VarChar(10000)
+  type            ContentType   @default(POST)
+  status          ContentStatus @default(DRAFT)
+  campaignId      String?       @map("campaign_id") @db.Uuid
+  pillarId        String?       @map("pillar_id") @db.Uuid
+  audienceId      String?       @map("audience_id") @db.Uuid
+  goalId          String?       @map("goal_id") @db.Uuid
+  /// Planned time while a draft; the committed time once SCHEDULED.
+  scheduledAt     DateTime?     @map("scheduled_at") @db.Timestamptz(3)
+  publishedAt     DateTime?     @map("published_at") @db.Timestamptz(3)
+  notes           String?       @db.VarChar(4000)
+  metadata        Json          @default("{}")
+  createdByUserId String?       @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  pillar    ContentPillar?     @relation(fields: [pillarId], references: [id], onDelete: SetNull)
+  audience  Audience?          @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  goal      MarketingGoal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  createdBy User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  assets    ContentItemAsset[]
+
+  @@index([workspaceId, status, updatedAt(sort: Desc)])
+  @@index([workspaceId, scheduledAt])
+  @@index([workspaceId, updatedAt(sort: Desc)])
+  @@index([campaignId])
+  @@index([pillarId])
+  @@index([audienceId])
+  @@index([goalId])
+  @@index([createdByUserId])
+  @@map("content_items")
+}
+
+/// An uploaded file. Bytes live in object storage under a server-generated key.
+model MediaAsset {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String   @map("workspace_id") @db.Uuid
+  /// Display name only (sanitized); never used for storage paths.
+  filename         String   @db.VarChar(255)
+  contentType      String   @map("content_type") @db.VarChar(100)
+  sizeBytes        Int      @map("size_bytes")
+  storageKey       String   @unique @map("storage_key") @db.VarChar(512)
+  width            Int?
+  height           Int?
+  altText          String?  @map("alt_text") @db.VarChar(500)
+  metadata         Json     @default("{}")
+  uploadedByUserId String?  @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy   User?              @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  contentLinks ContentItemAsset[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([uploadedByUserId])
+  @@map("media_assets")
+}
+
+model ContentItemAsset {
+  workspaceId   String   @map("workspace_id") @db.Uuid
+  contentItemId String   @map("content_item_id") @db.Uuid
+  mediaAssetId  String   @map("media_asset_id") @db.Uuid
+  position      Int      @default(0)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  mediaAsset  MediaAsset  @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@id([contentItemId, mediaAssetId])
+  @@index([workspaceId])
+  @@index([mediaAssetId])
+  @@map("content_item_assets")
 }

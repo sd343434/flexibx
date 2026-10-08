@@ -15,6 +15,7 @@ import {
   type SignedUpload,
   type SignedUploadOptions,
   type StorageService,
+  type StoredObjectData,
 } from "./storage";
 
 /** S3-compatible implementation (AWS S3, MinIO, Cloudflare R2). Bucket is private by default. */
@@ -100,5 +101,24 @@ export class S3StorageService implements StorageService {
   publicUrl(key: string): string | null {
     assertValidKey(key);
     return this.publicBaseUrl === undefined ? null : `${this.publicBaseUrl}/${key}`;
+  }
+
+  async getObject(key: string): Promise<StoredObjectData | null> {
+    assertValidKey(key);
+    try {
+      const result = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      if (result.Body === undefined) return null;
+      return {
+        body: await result.Body.transformToByteArray(),
+        contentType: result.ContentType ?? null,
+      };
+    } catch (error) {
+      if (error instanceof Error && (error.name === "NoSuchKey" || error.name === "NotFound")) {
+        return null;
+      }
+      throw error;
+    }
   }
 }

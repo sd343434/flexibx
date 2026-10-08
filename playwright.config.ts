@@ -39,14 +39,16 @@ export default defineConfig({
   webServer: {
     command: "pnpm start",
     // Production build with production policy: email verification required (default),
-    // emails written to the test outbox instead of sent, and a trusted client-IP header
-    // so rate limits are per test client.
+    // emails written to the test outbox instead of sent, media kept in memory, and a
+    // trusted client-IP header so rate limits are per test client.
     env: {
       PORT: PORT.toString(),
       HOSTNAME: "127.0.0.1",
       MAIL_TRANSPORT: "test-outbox",
       MAIL_OUTBOX_DIR,
       AUTH_IP_HEADER: E2E_IP_HEADER,
+      // Media uploads are kept in the server process (no object storage in E2E runs).
+      STORAGE_DRIVER: "test-memory",
     },
     url: `${baseURL}/api/health?scope=liveness`,
     reuseExistingServer: !process.env.CI,

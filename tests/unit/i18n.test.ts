@@ -34,6 +34,21 @@ const SAMPLE_PARAMS = {
   name: "Reem",
   workspace: "Acme",
   minutes: 60,
+  // Marketing Core (Phase 3).
+  from: "DRAFT",
+  to: "IN_REVIEW",
+  zone: "Asia/Riyadh",
+  page: 1,
+  pages: 3,
+  target: "1,000",
+  start: "1 January 2027",
+  end: "31 January 2027",
+  amount: "1500.00",
+  currency: "SAR",
+  title: "Launch post",
+  width: 1200,
+  height: 800,
+  size: "1.2 MB",
 };
 
 describe("locale configuration", () => {

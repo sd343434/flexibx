@@ -15,7 +15,7 @@ export interface AppShellProps {
   readonly workspaces: readonly SwitcherWorkspace[];
   readonly user: { readonly name: string; readonly email: string };
   /** Navigation entries the current role may open (decided on the server). */
-  readonly nav: { readonly members: boolean };
+  readonly nav: Readonly<Record<Exclude<ShellNavItem["id"], "home">, boolean>>;
   readonly signOut: ReactNode;
   readonly children: ReactNode;
 }
@@ -29,11 +29,20 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
   const t = useTranslations("shell");
   const tCommon = useTranslations("common");
   const home = `/w/${workspace.slug}`;
+  const sections = [
+    "content",
+    "calendar",
+    "campaigns",
+    "brand",
+    "media",
+    "activity",
+    "members",
+  ] as const;
   const navItems: ShellNavItem[] = [
     { id: "home", href: home, label: t("nav.home") },
-    ...(nav.members
-      ? [{ id: "members", href: `${home}/members`, label: t("nav.members") } as const]
-      : []),
+    ...sections
+      .filter((id) => nav[id])
+      .map((id) => ({ id, href: `${home}/${id}`, label: t(`nav.${id}`) })),
   ];
 
   return (
