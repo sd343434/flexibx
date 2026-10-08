@@ -1,7 +1,9 @@
 # Phase 3 — Marketing Core OS
 
-Status: **implemented and verified locally; IN_PROGRESS** (not committed; awaiting human
-commit review). Baseline: `2734c962a094b7f49722c0f6db0cea84ee5593a2` (Phase 2 completed).
+Status: **COMPLETED** (human approved). Implementation commit
+`b661a2689fef437cf8cb093fd4a45d56b934b661`, status commit
+`c386b8041a905db97c8079cd7be2ad58208680ff`; CI run 37834859497 passed. Baseline:
+`2734c962a094b7f49722c0f6db0cea84ee5593a2` (Phase 2 completed).
 
 Phase 3 turns the authenticated workspace into a marketing operating system. A team can
 describe its brand, define its audiences, goals and content pillars, plan campaigns,

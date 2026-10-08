@@ -1,7 +1,7 @@
 # Flexibx architecture
 
 Status: **Phase 1 — foundation** (completed), **Phase 2 — authentication and runtime
-multi-tenancy** (completed) and **Phase 3 — Marketing Core OS** (implemented; in progress,
+multi-tenancy** (completed) and **Phase 3 — Marketing Core OS** (completed,
 see §10 and [`PHASE_3_MARKETING_CORE_OS.md`](PHASE_3_MARKETING_CORE_OS.md)). This
 document describes what exists, the rules every later phase must follow, and what is
 intentionally deferred.
