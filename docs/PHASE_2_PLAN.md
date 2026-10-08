@@ -2,8 +2,8 @@
 
 > **This is the canonical Phase 2 execution plan.** It is the source of truth for future
 > Claude implementation prompts. Phase 2 was planned as **12 steps**; by human instruction
-> they were executed as **9 implementation steps** (mapping in §1). All planned scope is
-> implemented; Phase 2 awaits the **human completion review** (C9).
+> they were executed as **9 implementation steps** (mapping in §1). **Phase 2 is
+> COMPLETED** (human completion review, C9); final implementation commit `8000e31`.
 >
 > - Any change to this plan (scope, order, decisions) requires explicit human approval.
 > - Updating this document never starts implementation. Each step begins only after an
@@ -31,14 +31,15 @@ Related documents: [`ARCHITECTURE.md`](ARCHITECTURE.md) (current system and rule
 | 9    | Invitations                                    | Complete — `f12cea0` (executed Step 7)                                              |
 | 10   | Email verification and password reset          | Complete — `d9a5bbd` (executed Step 8, together with plan Step 11)                  |
 | 11   | Authentication rate limiting                   | Complete — `d9a5bbd` (executed Step 8); limits approved as a human decision         |
-| 12   | Phase 2 hardening and completion               | Executed Step 9 — implemented, awaiting human review (not committed yet)            |
+| 12   | Phase 2 hardening and completion               | Complete — `8000e31` (executed Step 9, with the C1/C6 decision)                     |
 
 Executed steps (human instructions) → plan steps: 1–6 → 1–6; 7 → 7, 8, 9; 8 → 10, 11;
 9 → 12. The plan's scope, decisions and step definitions below are unchanged.
 
-`.phase-status.json`: phase 2, `IN_PROGRESS`, interim range
-`228701e…` (end of Phase 1) `..d9a5bbd…` (executed Step 8). `READY_FOR_REVIEW` and
-`COMPLETED` are set only after the human approvals required by C9.
+`.phase-status.json`: phase 2, `COMPLETED`, implementation range `228701e…` (end of
+Phase 1) `..8000e31…` (executed Step 9). `READY_FOR_REVIEW` and `COMPLETED` were each
+set after the human approval required by C9; CI run 15 on `8000e31` passed every job.
+Phase 3 starts only with an explicit human instruction.
 
 ## 2. Scope
 

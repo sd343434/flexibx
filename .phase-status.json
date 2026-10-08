@@ -1,11 +1,11 @@
 {
   "phase": 2,
-  "status": "IN_PROGRESS",
-  "summary": "Phase 2 implemented: Steps 1–8 committed (Better Auth foundation, runtime auth and workspace access, workspace creation, auth UI, workspace shell, members, invitations and mailer, email verification, password reset and change, auth rate limiting). Step 9, final hardening and the C1/C6 decision (sign-in and workspace creation never need a verified email; invitation acceptance does), is done locally and awaits human review before any status change.",
-  "files_changed": 131,
+  "status": "COMPLETED",
+  "summary": "Phase 2 completed (human approval, C9): Better Auth foundation, runtime auth and workspace access, workspace creation, auth UI, workspace shell, members, invitations and mailer, email verification (verified-only operations, C1/C6), password reset and change, auth rate limiting, final hardening. All checks passed locally and in CI run 15.",
+  "files_changed": 136,
   "implementation": {
     "base": "228701e4076ad7f7b818e20a4ea0392c7afbd526",
-    "head": "d9a5bbd5775eb3731d81844af67b04c8be6a2e8a"
+    "head": "8000e31715bcf9414369cedaa14519bfc5bae9e0"
   },
   "tests": {
     "passed": 873,
@@ -23,9 +23,8 @@
     "An unverified account can be registered for an address its creator does not own and used to sign in and create workspaces (C1); it cannot accept invitations, and the real owner can reclaim it by password reset.",
     "Without AUTH_IP_HEADER, IP-keyed rate limits fall back to one shared bucket per entry point; production deployments must configure the trusted client-IP header.",
     "The account-keyed sign-in limit lets an attacker slow one account's sign-in for 15 minutes (no lockout state; accepted trade-off).",
-    "AUTH_SECRET is validated on first auth use rather than at boot, so a missing value makes auth requests fail closed.",
-    "CI has never passed on this branch (Node 22.12 pin below ESLint 10's minimum, gitleaks flagging test fixtures, Docker context missing an e2e import). Step 9 fixes are verified locally; CI confirmation needs a push."
+    "AUTH_SECRET is validated on first auth use rather than at boot, so a missing value makes auth requests fail closed."
   ],
   "next_phase": 3,
-  "recommended_next_action": "Human review of Step 9 and the Phase 2 completion report; approve READY_FOR_REVIEW (C9) before any status change, commit or push."
+  "recommended_next_action": "Phase 2 is complete. Phase 3 starts only with an explicit human instruction."
 }
