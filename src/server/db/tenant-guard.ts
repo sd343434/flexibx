@@ -32,7 +32,12 @@ export const TENANT_ROOT_RELATIONS = ["members", "auditLogs", "clients", "invita
  * never reachable through the application client: only the auth layer touches them,
  * through the system client. This also keeps raw session tokens out of app code.
  */
-export const AUTH_MODELS: ReadonlySet<string> = new Set(["Session", "Account", "Verification"]);
+export const AUTH_MODELS: ReadonlySet<string> = new Set([
+  "Session",
+  "Account",
+  "Verification",
+  "RateLimit",
+]);
 
 /**
  * Global (non-tenant) models and the relations they must not reach through the

@@ -190,7 +190,8 @@ Controls, from outermost to innermost:
    - **Invitations** (`workspace_invitations`, tenant-owned, registered in the tenant
      guard): OWNER/ADMIN invite an email with a grantable role. The token is 32 random
      bytes (base64url) shown once to the inviter as a link built from `APP_URL`
-     (`/{locale}/invite/{token}`); only its SHA-256 hex is stored. Invitations expire
+     (`/{locale}/invite/{token}`); only its SHA-256 hex is stored. Creation is limited per
+     inviting user and acceptance per client (see rate limiting below). Invitations expire
      after 7 days. The database adds: one pending invitation per (workspace, email)
      (partial unique index), `role <> 'OWNER'`, a hex-only hash and "accepted or
      revoked, never both". An expired pending invitation is replaced by a new one;
@@ -237,6 +238,94 @@ NULL AND revoked_at IS NULL AND expires_at > now`; zero rows → invalid), membe
      sent the same way. Sign-out deletes the current database session and expires its
      cookie (other sessions of the user stay valid), then shows the sign-in page.
      Email/password inputs are `dir="ltr"` in both locales.
+   - **Email verification** (Step 8, decision C6): Better Auth's stateless signed tokens
+     (HS256 with `AUTH_SECRET`, 1-hour expiry, nothing stored). Sign-up sends the link in
+     the sign-up page's locale. Policy `AUTH_REQUIRE_EMAIL_VERIFICATION` (unset: required
+     in production only). When required, Better Auth refuses sign-in for an unverified
+     account — and only after the correct password, so `auth.errors.emailNotVerified`
+     reveals nothing to a guesser — and `resolveCurrentUser` treats an unverified session
+     as no user, so every page, action and route needs a verified account (this also
+     closes the Step 7 gap of accepting an invitation for an address one does not own).
+     `/{locale}/verify-email`: the user confirms with a button (a POST, so mail scanners
+     that prefetch links cannot use the token up). `verifyEmailToken` accepts a token only
+     while its account is still unverified, so a replayed, used, expired, forged,
+     malformed, email-change or unknown-account token is the same `INVALID_TOKEN`. Resend
+     (`resendVerificationEmail`) always answers "if an unverified account uses it, we
+     sent a link" (Better Auth also pads that path to 500 ms).
+   - **Password reset** (`requestPasswordReset` / `resetPasswordWithToken`): the request
+     always answers "if an account uses it, we sent a link"; Better Auth emails only real
+     accounts. Tokens: 24 random alphanumerics, 1-hour expiry, stored only as SHA-256
+     (`verification.storeIdentifier: "hashed"`), consumed atomically (single use). Unknown,
+     used, expired and malformed tokens are the same `INVALID_TOKEN`. A reset hashes the
+     new password (scrypt), deletes every session of the account
+     (`revokeSessionsOnPasswordReset`), and the user signs in again
+     (`/sign-in?reset=1`). Signed-in **password change** (`/{locale}/account/security`,
+     linked from the user menu) needs the current password and deletes every other
+     session (`revokeOtherSessions`); Better Auth replaces the current session and its
+     cookie. There is no session list/revoke UI (C7).
+   - **Email links** are built from `APP_URL` as `/{locale}/verify-email#token=…` and
+     `/{locale}/reset-password#token=…`. The token is in the URL fragment, which browsers
+     never send to a server: it stays out of request logs, proxies and Referer headers.
+     The page reads it client-side (also on `hashchange`) and removes it from the address
+     bar. Both pages are `noindex` and `no-referrer`. The locale travels through Better
+     Auth's callback URL (`/{locale}`).
+   - **Email callbacks never throw**: Better Auth calls them only for existing accounts,
+     so a mail failure that surfaced would reveal the account. Failures are logged as
+     `account email not sent (<template>)` — never the address, link or token.
+   - **HTTP surface**: every email/password Better Auth endpoint (sign-up, sign-in,
+     request-password-reset, reset-password, verify-email, send-verification-email,
+     change-password) is in `disabledPaths`; the public route additionally refuses the
+     internal limiter checkpoint and the `/reset-password/:token` callback
+     (`isInternalOnlyAuthPath`). Only session reads, sign-out and Better Auth's
+     session-management endpoints stay public, under the origin check.
+   - **Authentication rate limiting** (Step 8, decisions 8 and C8): Better Auth's own
+     limiter, on in every environment, with database storage (`rate_limits`). Its
+     limiter runs only in its HTTP router, and Flexibx calls Better Auth server-side
+     (`auth.api.*`), which bypasses it — verified, and covered by a test. So every
+     Flexibx entry point first passes a **limiter checkpoint**: a request through
+     `auth.handler` to the no-op plugin endpoint `/flexibx/rate-limit/<bucket>[/<hmac>]`
+     (`server/auth/rate-limit.ts`). That request carries only the configured client-IP
+     header (IP buckets) or none (account buckets), so the key is Better Auth's
+     `<trusted ip>|<path>`; account buckets put an HMAC (AUTH_SECRET) of the normalized
+     email or user id in the path, never the raw value. Policy, one module
+     (`server/auth/rate-limit-policy.ts`). **Status: PROPOSED — PENDING HUMAN
+     APPROVAL.** The values below are the Step 8 proposal, not a final decision:
+
+     | Bucket                         | Key     | Limit           |
+     | ------------------------------ | ------- | --------------- |
+     | sign-in                        | IP      | 10 / minute     |
+     | sign-in (account)              | email   | 10 / 15 minutes |
+     | sign-up                        | IP      | 10 / 10 minutes |
+     | password-reset request         | IP      | 5 / 15 minutes  |
+     | password-reset request (acct.) | email   | 3 / hour        |
+     | password-reset submission      | IP      | 10 / 15 minutes |
+     | verification resend            | IP      | 5 / 15 minutes  |
+     | verification resend (account)  | email   | 3 / hour        |
+     | verify-email submission        | IP      | 20 / 15 minutes |
+     | password change                | user id | 5 / 15 minutes  |
+     | invitation acceptance          | IP      | 20 / 15 minutes |
+     | invitation creation            | user id | 50 / hour       |
+
+     `get-session` (called by the proxy on every page to roll the cookie) is exempt;
+     Better Auth's defaults cover its other HTTP paths, none of which takes a password,
+     sends an email or consumes a token (`/verify-password` is disabled: its
+     `scope: "server"` is not enforced by the router, so it would be a current-password
+     oracle outside the change-password limit). The public surface, the
+     checkpoint-before-Better-Auth order of every entry point and the call-site list
+     are pinned by `tests/integration/auth-entry-points.test.ts`. A limit is `RATE_LIMITED` with
+     `auth.errors.rateLimited` / `errors.RATE_LIMITED`, the same whether or not an
+     account exists; the checkpoint fails closed on any other error.
+
+   - **Client IP** (decision 8): Better Auth's `getIP`, configured only from
+     `AUTH_IP_HEADER` / `AUTH_TRUSTED_PROXIES`. Without them no header is read at all —
+     not even `X-Forwarded-For` (`ipAddressHeaders: []`) — and IP buckets fall back to
+     Better Auth's single shared bucket per path ("no-trusted-ip"; loopback in
+     development and test). A multi-hop chain is trusted only with trusted proxies,
+     stripped from the right.
+   - **Security audit** (platform-level entries, `workspace_id` null):
+     `user.email_verified`, `user.password_reset_requested` (only for an existing
+     account; never shown to the requester), `user.password_reset`,
+     `user.password_changed`. Rate-limit hits are logged (bucket only), not audited.
 2. **Permission matrix** (`server/tenancy/permissions.ts`): the only place that maps roles
    to actions. Services call `assertCan(ctx, action)`. `CLIENT` (an agency's customer) has
    a narrow set: view brand/content/campaigns/analytics and approve content.
@@ -300,18 +389,18 @@ inheritance, so isolation stays simple and auditable.
 
 ## 7. Security model (Phase 1)
 
-| Area         | Control                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Secrets      | Environment only. Validated lazily and fail-fast, with names (not values) in errors. `.env*` gitignored and dockerignored. Server modules import `server-only`. No `NEXT_PUBLIC_*` variables. gitleaks in CI.                                                                                                                                                                                                                                                                                                                         |
-| Logging      | pino JSON with deep redaction of password/secret/token/cookie/authorization/API-key keys, plus credentials in URLs and bearer tokens. Usage counters such as `inputTokens` stay visible.                                                                                                                                                                                                                                                                                                                                              |
-| Errors       | Codes + translation keys only; no stack traces or internals in responses.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Input        | Zod validation of query/body/params in `withRoute`. 1 MiB body cap. JSON content type required for bodies. Request-id format validated.                                                                                                                                                                                                                                                                                                                                                                                               |
-| Headers      | Per-request nonce CSP for pages (`script-src 'self' 'nonce-…' 'strict-dynamic'`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`). Strict CSP for `/api`. `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, COOP, HSTS in production. `X-Powered-By` removed.                                                                                                                                                                                                       |
-| Data         | Tenant guard + scoped repositories + permission matrix. Append-only audit with redacted metadata. Restrictive FKs protect audit history.                                                                                                                                                                                                                                                                                                                                                                                              |
-| Auth         | Better Auth 1.7.7 (`src/server/auth/`). Database sessions (7 days, rolled at most daily, no cookie cache), scrypt password hashes, `HttpOnly` + `SameSite=Lax` cookies, `Secure` + `__Secure-` prefix in production/https. Origin/CSRF checks set explicitly on (Better Auth disables them in test mode otherwise). Email/password sign-up and sign-in are not exposed over HTTP; `server/auth/credentials.ts` returns the same result whether or not an email exists. No client IP is trusted unless `AUTH_IP_HEADER` is configured. |
-| Storage      | Private bucket by default. Server-generated keys. MIME allowlist and per-category size caps. Presigned uploads sign `Content-Type` and `Content-Length`. Short TTLs (≤ 1 h).                                                                                                                                                                                                                                                                                                                                                          |
-| Containers   | Multi-stage build, non-root runtime user, standalone output only, healthcheck. Compose binds to `127.0.0.1`.                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Dependencies | Exact version pins, committed lockfile, pnpm install-script allowlist (`pnpm-workspace.yaml`).                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Area         | Control                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Secrets      | Environment only. Validated lazily and fail-fast, with names (not values) in errors. `.env*` gitignored and dockerignored. Server modules import `server-only`. No `NEXT_PUBLIC_*` variables. gitleaks in CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Logging      | pino JSON with deep redaction of password/secret/token/cookie/authorization/API-key keys, plus credentials in URLs, bearer tokens and invitation tokens in paths. Usage counters such as `inputTokens` stay visible. Account-email links carry their token in the URL fragment, never sent to the server.                                                                                                                                                                                                                                                                                                                                                                          |
+| Errors       | Codes + translation keys only; no stack traces or internals in responses.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Input        | Zod validation of query/body/params in `withRoute`. 1 MiB body cap. JSON content type required for bodies. Request-id format validated.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Headers      | Per-request nonce CSP for pages (`script-src 'self' 'nonce-…' 'strict-dynamic'`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`). Strict CSP for `/api`. `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, COOP, HSTS in production. `X-Powered-By` removed.                                                                                                                                                                                                                                                                                                                                                    |
+| Data         | Tenant guard + scoped repositories + permission matrix. Append-only audit with redacted metadata. Restrictive FKs protect audit history.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Auth         | Better Auth 1.7.7 (`src/server/auth/`). Database sessions (7 days, rolled at most daily, no cookie cache), scrypt password hashes, `HttpOnly` + `SameSite=Lax` cookies, `Secure` + `__Secure-` prefix in production/https. Origin/CSRF checks set explicitly on (Better Auth disables them in test mode otherwise). No email/password flow is exposed over HTTP; Flexibx server code returns the same result whether or not an email exists. Email verification required in production (configurable); reset tokens hashed, single use, 1 h. Rate limits on every entry point through Better Auth's limiter. No client IP header is trusted unless `AUTH_IP_HEADER` is configured. |
+| Storage      | Private bucket by default. Server-generated keys. MIME allowlist and per-category size caps. Presigned uploads sign `Content-Type` and `Content-Length`. Short TTLs (≤ 1 h).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Containers   | Multi-stage build, non-root runtime user, standalone output only, healthcheck. Compose binds to `127.0.0.1`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Dependencies | Exact version pins, committed lockfile, pnpm install-script allowlist (`pnpm-workspace.yaml`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 **Assumptions and known limits.**
 
@@ -321,20 +410,35 @@ inheritance, so isolation stays simple and auditable.
   backups); rotating it invalidates every session cookie; auth tables are unreachable from
   the application client (tenant guard) and from code outside `server/auth/` (static
   test); Better Auth log output is reduced to redacted message text.
-- Auth rate limiting is off until the rate-limiting step (it needs a trusted client IP).
+- Without `AUTH_IP_HEADER` (direct exposure or an unconfigured proxy), IP-keyed limits
+  are one shared bucket per entry point: abuse by one client then throttles everyone at
+  that entry point (account-keyed limits are unaffected). Production deployments must
+  configure the trusted header. Better Auth logs a warning once per process when it
+  cannot resolve an IP (account buckets trigger it by design).
+- Account-keyed sign-in limits let an attacker slow one account's sign-in for 15
+  minutes (no lockout state; accepted trade-off against distributed guessing).
+- Production email: there is no provider yet (C3). With verification required in
+  production, nobody can verify — and therefore sign in — until a provider exists; the
+  production default is intentional and documented. `MAIL_TRANSPORT=test-outbox` is for
+  end-to-end runs of the production build only; it writes single-use links to disk.
+- Verification tokens are stateless: one stays cryptographically valid until it expires
+  (1 h) but changes nothing once the account is verified. If an account were deleted and
+  re-registered within that hour, an old token could verify the new account (account
+  deletion is out of scope in Phase 2).
+- Response times: sign-up and password-reset requests take at least 500 ms
+  (`withMinimumDuration`, `server/auth/timing.ts`), and Better Auth pads verification
+  resends the same way, so the known/unknown-account branches cannot be told apart by
+  timing — including once a real email provider makes the "account exists" branch slower.
+  Sign-in keeps Better Auth's own equalization (a dummy hash for unknown accounts).
 - The credentials in `.env.example`, `docker-compose.yml` and CI are local or throwaway
   defaults.
 - Styles allow `'unsafe-inline'`, because Next.js and next/font inject style tags. Scripts
   never do.
-- Rate limiting is not yet in place (Phase 2 for auth, Phase 6 for AI and API).
-- Invitations (Phase 2, step 7): invitation creation and acceptance are not rate
-  limited. An OWNER/ADMIN could create many invitations (bounded per address by the
-  pending-unique index; each needs a distinct email), and a client could submit many
-  accept attempts. Guessing a token is not practical (256-bit tokens, constant-shape
-  responses), but per-user and per-IP limits belong to the auth-hardening step (Step 8).
-- Email verification is Step 8: until then, someone who registers the invited address
-  without owning it AND obtains the link could accept. The link is shown only to the
-  inviter and shared by them, which limits this; verification will close it.
+- API and AI rate limiting are Phase 6; Phase 2 limits authentication entry points and
+  invitations only.
+- With verification not required (development, or an explicit `false`), someone who
+  registers an invited address without owning it AND obtains the link could accept;
+  with the production default this is closed.
 
 ## 8. Observability
 

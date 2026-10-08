@@ -1,11 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-// Sign-up → sign-in → sign-out through the real pages, server actions, Better Auth and
-// database. Needs the production build with DATABASE_URL and AUTH_SECRET set.
+import { expect, PASSWORD, signInHere, test, uniqueEmail, verifyEmail } from "./fixtures";
 
-const PASSWORD = "correct horse battery";
-const uniqueEmail = (tag: string) =>
-  `e2e-${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+// Sign-up → (verification) → sign-in → sign-out through the real pages, server actions,
+// Better Auth and database. Needs the production build with DATABASE_URL and AUTH_SECRET
+// set; production policy, so email verification is required.
 
 const LOCALES = [
   { locale: "ar", dir: "rtl", name: "ريم", signOut: "تسجيل الخروج" },
@@ -49,10 +48,18 @@ for (const { locale, dir, name, signOut } of LOCALES) {
     await expect(page.getByTestId("auth-error")).toBeVisible();
     expect(await sessionCookie(page)).toBeUndefined();
 
-    // Correct credentials: an HttpOnly, SameSite=Lax session cookie, then the
-    // workspace landing (a new user has none, so it continues to creation).
+    // The right password before verification: "verify your email", still no session.
     await page.fill("#sign-in-password", PASSWORD);
     await page.getByTestId("sign-in-submit").click();
+    await expect(page.getByTestId("verify-email-link")).toBeVisible();
+    expect(await sessionCookie(page)).toBeUndefined();
+
+    // Verify with the emailed link, then sign in: an HttpOnly, SameSite=Lax session
+    // cookie, then the workspace landing (a new user has none, so it continues to creation).
+    await verifyEmail(page, email);
+    await expect(page.locator("html")).toHaveAttribute("dir", dir);
+    await page.goto(`/${locale}/sign-in`);
+    await signInHere(page, email);
     await expect(page).toHaveURL(`/${locale}/workspaces/new`);
     const cookie = await sessionCookie(page);
     expect(cookie?.httpOnly).toBe(true);
@@ -91,6 +98,7 @@ test("an external next is never followed after sign-in", async ({ page }) => {
   await page.fill("#sign-up-password", PASSWORD);
   await page.getByTestId("sign-up-submit").click();
   await expect(page).toHaveURL("/en/sign-in?registered=1");
+  await verifyEmail(page, email);
 
   await page.goto(`/en/sign-in?next=${encodeURIComponent("https://evil.example/")}`);
   await page.fill("#sign-in-email", email);

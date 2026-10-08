@@ -1,14 +1,26 @@
 import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
 
+import type { Locale } from "@/i18n/config";
+
 import { AppError } from "../errors/app-error";
 import { parseInput } from "../validation/parse";
 
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, type Auth } from "./auth-config";
+import type { RateLimiter } from "./rate-limit";
+import { ENUMERATION_SAFE_MIN_DURATION_MS, withMinimumDuration } from "./timing";
 
 // Flexibx's email/password entry points. Better Auth's own sign-up/sign-in HTTP
-// endpoints are disabled (DISABLED_HTTP_PATHS); these functions are the only way in and
-// never reveal whether an email address is registered.
+// endpoints are disabled (DISABLED_HTTP_PATHS); these functions are the only way in,
+// pass the rate-limit checkpoint first, and never reveal whether an email address is
+// registered.
+
+/** What sign-up and sign-in need besides their input. */
+export interface CredentialsDeps {
+  readonly limit: RateLimiter;
+  /** Headers of the incoming request (client-IP header, cookies). */
+  readonly headers: Headers;
+}
 
 const emailSchema = z.string().trim().toLowerCase().max(254).pipe(z.email());
 
@@ -33,7 +45,9 @@ export interface SignUpResult {
 
 export type SignInResult =
   | { readonly status: "SIGNED_IN"; readonly setCookie: readonly string[] }
-  | { readonly status: "INVALID_CREDENTIALS" };
+  | { readonly status: "INVALID_CREDENTIALS" }
+  /** Correct password, but the email is not verified yet (only when verification is required). */
+  | { readonly status: "EMAIL_NOT_VERIFIED" };
 
 const EXISTING_USER_CODES = new Set([
   "USER_ALREADY_EXISTS",
@@ -52,12 +66,33 @@ async function errorCode(response: Response): Promise<string | undefined> {
 /**
  * Registers an account. Invalid input throws VALIDATION_FAILED (about the input only).
  * An existing email yields the same ACCEPTED result as a new one, after an equivalent
- * password hash so response time does not reveal the difference either.
+ * password hash, and every answer takes at least ENUMERATION_SAFE_MIN_DURATION_MS, so
+ * response time does not reveal the difference either (a new account also gets a
+ * verification email in `locale`, Better Auth `sendOnSignUp`, which a real provider
+ * will make slower).
  */
-export async function signUpWithEmail(auth: Auth, input: SignUpInput): Promise<SignUpResult> {
+export async function signUpWithEmail(
+  auth: Auth,
+  input: SignUpInput,
+  deps: CredentialsDeps,
+  locale: Locale,
+): Promise<SignUpResult> {
+  await deps.limit({ bucket: "sign-up", requestHeaders: deps.headers });
   const body = parseInput(signUpInputSchema, input, "sign-up");
+  return withMinimumDuration(ENUMERATION_SAFE_MIN_DURATION_MS, () =>
+    registerAccount(auth, body, locale),
+  );
+}
 
-  const response = await auth.api.signUpEmail({ body, asResponse: true });
+async function registerAccount(
+  auth: Auth,
+  body: z.output<typeof signUpInputSchema>,
+  locale: Locale,
+): Promise<SignUpResult> {
+  const response = await auth.api.signUpEmail({
+    body: { ...body, callbackURL: `/${locale}` },
+    asResponse: true,
+  });
   if (response.ok) return { status: "ACCEPTED" };
 
   const code = await errorCode(response);
@@ -73,19 +108,35 @@ export async function signUpWithEmail(auth: Auth, input: SignUpInput): Promise<S
 
 /**
  * Signs in. Every failure — malformed input, unknown email, wrong password — returns
- * the single INVALID_CREDENTIALS result. On success the caller forwards `setCookie`.
+ * the single INVALID_CREDENTIALS result. EMAIL_NOT_VERIFIED is only possible after the
+ * correct password (Better Auth checks it first), so it reveals nothing to a guesser.
+ * Limited per client and per account (RATE_LIMITED). On success the caller forwards
+ * `setCookie`.
  */
 export async function signInWithEmail(
   auth: Auth,
   input: SignInInput,
-  headers: Headers,
+  deps: CredentialsDeps,
 ): Promise<SignInResult> {
+  await deps.limit({ bucket: "sign-in", requestHeaders: deps.headers });
   const parsed = signInInputSchema.safeParse(input);
   if (!parsed.success) return { status: "INVALID_CREDENTIALS" };
+  await deps.limit({
+    bucket: "sign-in-account",
+    requestHeaders: deps.headers,
+    subject: parsed.data.email,
+  });
 
-  const response = await auth.api.signInEmail({ body: parsed.data, headers, asResponse: true });
-  if (!response.ok) return { status: "INVALID_CREDENTIALS" };
-  return { status: "SIGNED_IN", setCookie: response.headers.getSetCookie() };
+  const response = await auth.api.signInEmail({
+    body: parsed.data,
+    headers: deps.headers,
+    asResponse: true,
+  });
+  if (response.ok) return { status: "SIGNED_IN", setCookie: response.headers.getSetCookie() };
+  if (response.status === 403 && (await errorCode(response)) === "EMAIL_NOT_VERIFIED") {
+    return { status: "EMAIL_NOT_VERIFIED" };
+  }
+  return { status: "INVALID_CREDENTIALS" };
 }
 
 /**

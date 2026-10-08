@@ -62,9 +62,13 @@
       "password": "Password",
       "submit": "Sign in",
       "submitting": "Signing in…",
-      "registered": "Thanks. If you just created an account, you can sign in now with your email and password.",
+      "registered": "Thanks. If this is a new account, we've sent a verification link to your email address. Verify it, then sign in.",
       "noAccount": "Don't have an account?",
-      "signUpLink": "Create one"
+      "signUpLink": "Create one",
+      "forgotPassword": "Forgot your password?",
+      "passwordReset": "Your password has been changed. Sign in with your new password.",
+      "verified": "Your email address is verified. You can sign in now.",
+      "verifyEmailLink": "Send a new verification link"
     },
     "signUp": {
       "title": "Create an account",
@@ -84,7 +88,59 @@
     "errors": {
       "invalidCredentials": "The email or password is incorrect.",
       "invalidInput": "Some of the information is invalid. Please review the highlighted fields.",
-      "unavailable": "We couldn't complete this request. Please try again later."
+      "unavailable": "We couldn't complete this request. Please try again later.",
+      "rateLimited": "Too many attempts. Please wait a few minutes and try again.",
+      "emailNotVerified": "Please verify your email address before signing in. Check your inbox, or send a new verification link.",
+      "wrongPassword": "The current password is incorrect."
+    },
+    "verifyEmail": {
+      "title": "Verify your email",
+      "description": "Open the link we emailed you to confirm your address. Links expire after one hour and work once.",
+      "confirmTitle": "Confirm your email address",
+      "confirmDescription": "Select the button below to finish verifying your email address.",
+      "confirm": "Verify email",
+      "confirming": "Verifying…",
+      "success": "Your email address is verified.",
+      "invalid": "This verification link is invalid, has expired or has already been used.",
+      "alreadyVerified": "Your email address is already verified.",
+      "continue": "Continue",
+      "signIn": "Sign in",
+      "resendTitle": "Need a new link?",
+      "resendDescription": "Enter your email address. If an unverified account uses it, we'll send a new verification link.",
+      "email": "Email",
+      "resendSubmit": "Send verification link",
+      "resending": "Sending…",
+      "resendSent": "If an unverified account uses this email address, we've sent a new verification link. Check your inbox."
+    },
+    "forgotPassword": {
+      "title": "Reset your password",
+      "description": "Enter your account's email address and we'll send you a link to set a new password.",
+      "email": "Email",
+      "submit": "Send reset link",
+      "submitting": "Sending…",
+      "sent": "If an account uses this email address, we've sent a link to reset the password. It expires in one hour.",
+      "backToSignIn": "Back to sign in"
+    },
+    "resetPassword": {
+      "title": "Choose a new password",
+      "description": "After you change it, every device signed in to your account is signed out.",
+      "newPassword": "New password",
+      "passwordHint": "At least {minimum} characters.",
+      "submit": "Change password",
+      "submitting": "Changing…",
+      "invalid": "This reset link is invalid, has expired or has already been used.",
+      "missing": "Open the reset link from your email to choose a new password.",
+      "requestNew": "Request a new link"
+    },
+    "changePassword": {
+      "title": "Account security",
+      "description": "Change your password. Every other device signed in to your account will be signed out.",
+      "currentPassword": "Current password",
+      "newPassword": "New password",
+      "passwordHint": "At least {minimum} characters.",
+      "submit": "Change password",
+      "submitting": "Changing…",
+      "success": "Your password has been changed. Other devices have been signed out."
     }
   },
   "workspaces": {
@@ -130,7 +186,8 @@
     "userMenu": {
       "label": "Account menu",
       "signedInAs": "Signed in as",
-      "role": "Role in this workspace: {role}"
+      "role": "Role in this workspace: {role}",
+      "security": "Account security"
     }
   },
   "members": {
@@ -214,6 +271,20 @@
       "action": "Accept the invitation",
       "expiry": "This invitation expires on {date} and can be used once.",
       "ignore": "If you weren't expecting this invitation, you can ignore this email."
+    },
+    "verification": {
+      "subject": "Verify your email address for Flexibx",
+      "intro": "Hello {name}, confirm that this is your email address to finish setting up your Flexibx account.",
+      "action": "Verify email address",
+      "expiry": "This link expires in {minutes} minutes and can be used once.",
+      "ignore": "If you didn't create a Flexibx account, you can ignore this email."
+    },
+    "passwordReset": {
+      "subject": "Reset your Flexibx password",
+      "intro": "Hello {name}, we received a request to reset the password for your Flexibx account.",
+      "action": "Choose a new password",
+      "expiry": "This link expires in {minutes} minutes and can be used once. After the reset, every device signed in to your account is signed out.",
+      "ignore": "If you didn't ask to reset your password, you can ignore this email; your password stays the same."
     }
   },
   "errors": {

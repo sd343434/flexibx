@@ -16,6 +16,10 @@ export const AUDIT_ACTIONS = [
   "member.invited",
   "invitation.revoked",
   "invitation.accepted",
+  "user.email_verified",
+  "user.password_reset_requested",
+  "user.password_reset",
+  "user.password_changed",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

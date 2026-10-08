@@ -33,6 +33,7 @@ const SAMPLE_PARAMS = {
   inviter: "Reem",
   name: "Reem",
   workspace: "Acme",
+  minutes: 60,
 };
 
 describe("locale configuration", () => {

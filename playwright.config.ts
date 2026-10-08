@@ -2,7 +2,10 @@ import { existsSync } from "node:fs";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { E2E_IP_HEADER, MAIL_OUTBOX_DIR } from "./e2e/env";
+
 const PORT = Number(process.env.E2E_PORT ?? 3100);
+
 const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT.toString()}`;
 
 // Use an explicitly configured Chromium, or the one preinstalled in this dev container
@@ -35,7 +38,16 @@ export default defineConfig({
   // Runs the production build (`pnpm build` must have been run first).
   webServer: {
     command: "pnpm start",
-    env: { PORT: PORT.toString(), HOSTNAME: "127.0.0.1" },
+    // Production build with production policy: email verification required (default),
+    // emails written to the test outbox instead of sent, and a trusted client-IP header
+    // so rate limits are per test client.
+    env: {
+      PORT: PORT.toString(),
+      HOSTNAME: "127.0.0.1",
+      MAIL_TRANSPORT: "test-outbox",
+      MAIL_OUTBOX_DIR,
+      AUTH_IP_HEADER: E2E_IP_HEADER,
+    },
     url: `${baseURL}/api/health?scope=liveness`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -61,8 +61,14 @@ export const storageEnvSchema = z.object({
  */
 export const authEnvSchema = z.object({
   AUTH_SECRET: z.string().min(32, "must be at least 32 characters (openssl rand -base64 32)"),
-  // Trusted client-IP source. Unset (default): no IP is trusted or recorded, because
-  // forwarded headers are client-controlled unless a known proxy overwrites them.
+  // Email verification policy (decision C6). Unset: required in production, not in
+  // development/test. "true"/"false" overrides it explicitly.
+  AUTH_REQUIRE_EMAIL_VERIFICATION: optional(
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ),
+  // Trusted client-IP source. Unset (default): no forwarded header is trusted, because
+  // they are client-controlled unless a known proxy overwrites them; rate limits then
+  // fall back to one shared bucket per entry point (documented in ARCHITECTURE.md).
   AUTH_IP_HEADER: optional(
     z
       .string()
@@ -84,6 +90,26 @@ export const authEnvSchema = z.object({
       .pipe(z.array(z.string().regex(/^[0-9a-f:.]+(\/\d{1,3})?$/i, "must be an IP or CIDR"))),
   ),
 });
+
+/**
+ * Mail transport selection. Unset: the environment default (memory in test, log in
+ * development, explicit failure in production). `test-outbox` writes rendered emails to
+ * MAIL_OUTBOX_DIR for end-to-end tests — never for a real deployment.
+ */
+export const mailEnvSchema = z.object({
+  MAIL_TRANSPORT: optional(z.enum(["test-outbox"])),
+  MAIL_OUTBOX_DIR: optional(z.string().trim().min(1)),
+});
+
+export type MailEnv = z.infer<typeof mailEnvSchema>;
+
+/** Whether an account must verify its email before signing in (decision C6). */
+export function resolveEmailVerificationRequired(
+  nodeEnv: string | undefined,
+  configured: boolean | undefined,
+): boolean {
+  return configured ?? nodeEnv === "production";
+}
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 export type AuthEnv = z.infer<typeof authEnvSchema>;
@@ -118,6 +144,12 @@ export function parseServerEnv(source: EnvSource): ServerEnv {
 export function parseAuthEnv(source: EnvSource): AuthEnv {
   const result = authEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("auth", result.error.issues);
+  return result.data;
+}
+
+export function parseMailEnv(source: EnvSource): MailEnv {
+  const result = mailEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("mail", result.error.issues);
   return result.data;
 }
 

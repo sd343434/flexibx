@@ -1,5 +1,8 @@
 import "server-only";
 
+import { headers } from "next/headers";
+
+import { getRateLimiter } from "../auth/auth";
 import { requireUser } from "../auth/session";
 import { getDb } from "../db/client";
 import { getEnv } from "../env";
@@ -30,6 +33,11 @@ export const inviteMemberAction = withAction({
   handler: async ({ slug, ...input }, { logger }) => {
     const user = await requireUser();
     const ctx = await requireWorkspaceAccess(slug, "member.invite");
+    await getRateLimiter()({
+      bucket: "invitation-create",
+      requestHeaders: new Headers(await headers()),
+      subject: user.id,
+    });
     const created = await createInvitation(getDb(), ctx, input, {
       mailer: getMailer(),
       appUrl: getEnv().APP_URL,
@@ -90,5 +98,11 @@ export const leaveWorkspaceAction = withAction({
 export const acceptInvitationAction = withAction({
   name: "invitation.accept",
   input: acceptInvitationInputSchema,
-  handler: async ({ token }) => acceptInvitationForCurrentUser(token),
+  handler: async ({ token }) => {
+    await getRateLimiter()({
+      bucket: "invitation-accept",
+      requestHeaders: new Headers(await headers()),
+    });
+    return acceptInvitationForCurrentUser(token);
+  },
 });

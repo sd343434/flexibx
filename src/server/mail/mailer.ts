@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+
 import type { Locale } from "@/i18n/config";
 
 import { AppError } from "../errors/app-error";
@@ -21,12 +25,27 @@ export interface InvitationMailData {
   readonly expiresAt: Date;
 }
 
-export interface MailMessage {
+/** Email verification and password reset: a single-use link for the account owner. */
+export interface AccountLinkMailData {
+  readonly name: string;
+  /** Absolute link built from APP_URL; the token is in the URL fragment. */
+  readonly url: string;
+  readonly expiresInMinutes: number;
+}
+
+interface MailEnvelope {
   readonly to: string;
   readonly locale: Locale;
-  readonly template: "workspace_invitation";
-  readonly data: InvitationMailData;
 }
+
+export type MailMessage = MailEnvelope &
+  (
+    | { readonly template: "workspace_invitation"; readonly data: InvitationMailData }
+    | { readonly template: "email_verification"; readonly data: AccountLinkMailData }
+    | { readonly template: "password_reset"; readonly data: AccountLinkMailData }
+  );
+
+export type MailTemplate = MailMessage["template"];
 
 /** sent: a provider accepted it. logged / captured: development / test transports only. */
 export type MailDeliveryStatus = "sent" | "logged" | "captured";
@@ -90,6 +109,37 @@ export class LogMailer implements Mailer {
   }
 }
 
+/**
+ * Test outbox: writes each rendered message as a JSON file (mode 0600) to an absolute
+ * directory, where end-to-end tests read the links. Only used when MAIL_TRANSPORT is
+ * explicitly `test-outbox`; reports "captured", never "sent". The files contain
+ * single-use links: never configure this in a real deployment.
+ */
+export class OutboxMailer implements Mailer {
+  readonly transport = "test-outbox";
+
+  constructor(private readonly directory: string) {
+    if (!isAbsolute(directory)) throw new Error("MAIL_OUTBOX_DIR must be an absolute path");
+  }
+
+  send(message: MailMessage): Promise<{ readonly status: MailDeliveryStatus }> {
+    const rendered = renderMail(message);
+    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    const name = `${Date.now().toString()}-${randomUUID()}.json`;
+    writeFileSync(
+      join(this.directory, name),
+      JSON.stringify({
+        to: message.to,
+        locale: message.locale,
+        template: message.template,
+        ...rendered,
+      }),
+      { mode: 0o600 },
+    );
+    return Promise.resolve({ status: "captured" });
+  }
+}
+
 /** Production with no provider configured: every send fails explicitly. */
 export class UnconfiguredMailer implements Mailer {
   readonly transport = "none";
@@ -104,11 +154,37 @@ export class UnconfiguredMailer implements Mailer {
   }
 }
 
+export interface MailerOptions {
+  /** MAIL_TRANSPORT: unset = the environment default; `test-outbox` = OutboxMailer. */
+  readonly transport?: "test-outbox" | undefined;
+  /** MAIL_OUTBOX_DIR: required with `test-outbox`. */
+  readonly outboxDir?: string | undefined;
+}
+
+interface MailerLogger extends MailLogger {
+  warn(object: Record<string, unknown>, message: string): void;
+}
+
 /**
  * The transport for an environment. No real provider exists yet (adding one is a later
- * phase), so production always gets UnconfiguredMailer.
+ * phase), so production gets UnconfiguredMailer — unless the test outbox is configured
+ * explicitly (end-to-end runs of the production build), which is logged loudly.
  */
-export function createMailer(nodeEnv: string | undefined, log: MailLogger): Mailer {
+export function createMailer(
+  nodeEnv: string | undefined,
+  log: MailerLogger,
+  options: MailerOptions = {},
+): Mailer {
+  if (options.transport === "test-outbox") {
+    if (options.outboxDir === undefined) {
+      throw new Error("MAIL_TRANSPORT=test-outbox requires MAIL_OUTBOX_DIR");
+    }
+    log.warn(
+      { mail: { transport: "test-outbox" } },
+      "Test mail outbox is active: emails are written to disk, none are sent",
+    );
+    return new OutboxMailer(options.outboxDir);
+  }
   if (nodeEnv === "production") return new UnconfiguredMailer();
   if (nodeEnv === "test") return new MemoryMailer();
   return new LogMailer(log);

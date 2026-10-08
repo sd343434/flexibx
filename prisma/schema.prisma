@@ -221,3 +221,17 @@ model Verification {
   @@index([identifier])
   @@map("verifications")
 }
+
+/// Better Auth's rate-limit counters (`rateLimit.storage: "database"`). Global/system
+/// table, only the auth layer touches it. `key` is `<client ip or fallback>|<path>`;
+/// Flexibx-defined buckets put an HMAC of the email or user id in the path, never the
+/// raw value. `lastRequest` is a millisecond timestamp.
+model RateLimit {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String @unique
+  count       Int
+  lastRequest BigInt @map("last_request")
+
+  @@index([lastRequest])
+  @@map("rate_limits")
+}

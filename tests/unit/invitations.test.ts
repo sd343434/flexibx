@@ -222,7 +222,7 @@ describe("mailer transports", () => {
   });
 
   it("production never gets a development or test transport", () => {
-    const log = { info: vi.fn() };
+    const log = { info: vi.fn(), warn: vi.fn() };
     expect(createMailer("production", log)).toBeInstanceOf(UnconfiguredMailer);
     expect(createMailer("test", log)).toBeInstanceOf(MemoryMailer);
     expect(createMailer("development", log)).toBeInstanceOf(LogMailer);

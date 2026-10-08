@@ -1,23 +1,14 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+
+import { expect, newClientPage, signUpVerifiedAndSignIn, test } from "./fixtures";
 
 // The workspace shell end to end: real pages, server actions, Better Auth and database.
 // Needs the production build with DATABASE_URL and AUTH_SECRET set.
 
-const PASSWORD = "correct horse battery";
 const tag = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 async function signUpAndSignIn(page: Page, locale: "ar" | "en") {
-  const email = `e2e-shell-${tag()}@example.com`;
-  await page.goto(`/${locale}/sign-up`);
-  await page.fill("#sign-up-name", "Reem");
-  await page.fill("#sign-up-email", email);
-  await page.fill("#sign-up-password", PASSWORD);
-  await page.getByTestId("sign-up-submit").click();
-  await expect(page).toHaveURL(`/${locale}/sign-in?registered=1`);
-  await page.fill("#sign-in-email", email);
-  await page.fill("#sign-in-password", PASSWORD);
-  await page.getByTestId("sign-in-submit").click();
-  await expect(page).toHaveURL(`/${locale}/workspaces/new`);
+  await signUpVerifiedAndSignIn(page, locale, `e2e-shell-${tag()}@example.com`);
 }
 
 async function createWorkspace(page: Page, locale: "ar" | "en", name: string, slug: string) {
@@ -78,13 +69,13 @@ test("anonymous and foreign access to a workspace", async ({ page, browser }) =>
   await createWorkspace(page, "en", "Private", slug);
 
   // Anonymous: sign-in with a safe return path.
-  const anonymous = await browser.newPage();
+  const anonymous = await newClientPage(browser);
   await anonymous.goto(`/en/w/${slug}`);
   await expect(anonymous).toHaveURL(`/en/sign-in?next=${encodeURIComponent(`/en/w/${slug}`)}`);
   await anonymous.close();
 
   // Another signed-in user: the same 404 as for an unknown workspace.
-  const intruder = await browser.newPage();
+  const intruder = await newClientPage(browser);
   await signUpAndSignIn(intruder, "en");
   const response = await intruder.goto(`/en/w/${slug}`);
   expect(response?.status()).toBe(404);

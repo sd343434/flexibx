@@ -3,7 +3,16 @@
 import { redirect } from "next/navigation";
 
 import { DEFAULT_LOCALE, isLocale, type Locale } from "@/i18n/config";
-import { signInAction, signOutAction, signUpAction } from "@/server/auth/auth-actions";
+import {
+  changePasswordAction,
+  requestPasswordResetAction,
+  resendVerificationAction,
+  resetPasswordAction,
+  signInAction,
+  signOutAction,
+  signUpAction,
+  verifyEmailAction,
+} from "@/server/auth/auth-actions";
 import {
   AUTH_ERROR_MESSAGE_KEYS,
   authErrorMessageKey,
@@ -37,7 +46,11 @@ export async function submitSignUp(
 ): Promise<AuthFormState> {
   const target = toLocale(locale);
   const values = { name: text(formData.get("name")), email: text(formData.get("email")) };
-  const result = await signUpAction({ ...values, password: text(formData.get("password")) });
+  const result = await signUpAction({
+    ...values,
+    password: text(formData.get("password")),
+    locale: target,
+  });
   if (!result.ok) {
     const fields = result.error.code === "VALIDATION_FAILED" ? result.error.fields : undefined;
     return {
@@ -67,6 +80,9 @@ export async function submitSignIn(
   const values = { email: text(formData.get("email")) };
   const result = await signInAction({ ...values, password: text(formData.get("password")) });
   if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code), values };
+  if (result.data.status === "EMAIL_NOT_VERIFIED") {
+    return { messageKey: AUTH_ERROR_MESSAGE_KEYS.emailNotVerified, values };
+  }
   if (result.data.status !== "SIGNED_IN") {
     return { messageKey: AUTH_ERROR_MESSAGE_KEYS.invalidCredentials, values };
   }
@@ -77,4 +93,126 @@ export async function submitSignIn(
 export async function submitSignOut(locale: string): Promise<void> {
   await signOutAction({});
   redirect(`/${toLocale(locale)}/sign-in`);
+}
+
+/**
+ * State of an email-only request form (resend verification, forgot password): the
+ * generic confirmation, or an error key with field errors for malformed input.
+ */
+export type EmailRequestState =
+  | { readonly status: "sent" }
+  | {
+      readonly messageKey: AuthErrorMessageKey;
+      readonly fields?: readonly FieldError[];
+      readonly values: { readonly email: string };
+    }
+  | null;
+
+function emailRequestFailure(
+  error: {
+    readonly code: Parameters<typeof authErrorMessageKey>[0];
+    readonly fields?: readonly FieldError[];
+  },
+  email: string,
+): EmailRequestState {
+  const fields = error.code === "VALIDATION_FAILED" ? error.fields : undefined;
+  return {
+    messageKey: authErrorMessageKey(error.code),
+    ...(fields === undefined ? {} : { fields }),
+    values: { email },
+  };
+}
+
+/** Resend verification. The confirmation is the same for every email address. */
+export async function submitResendVerification(
+  locale: string,
+  _previous: EmailRequestState,
+  formData: FormData,
+): Promise<EmailRequestState> {
+  const email = text(formData.get("email"));
+  const result = await resendVerificationAction({ email, locale: toLocale(locale) });
+  return result.ok ? { status: "sent" } : emailRequestFailure(result.error, email);
+}
+
+/** Forgot password. The confirmation is the same for every email address. */
+export async function submitForgotPassword(
+  locale: string,
+  _previous: EmailRequestState,
+  formData: FormData,
+): Promise<EmailRequestState> {
+  const email = text(formData.get("email"));
+  const result = await requestPasswordResetAction({ email, locale: toLocale(locale) });
+  return result.ok ? { status: "sent" } : emailRequestFailure(result.error, email);
+}
+
+/** A token form (verify email, reset password): idle, invalid token or an error. */
+export type TokenFormState =
+  | { readonly status: "verified" }
+  | { readonly status: "invalid" }
+  | { readonly messageKey: AuthErrorMessageKey; readonly fields?: readonly FieldError[] }
+  | null;
+
+/** Verifies the email address with the token read from the link's URL fragment. */
+export async function submitVerifyEmail(
+  _previous: TokenFormState,
+  formData: FormData,
+): Promise<TokenFormState> {
+  const result = await verifyEmailAction({ token: text(formData.get("token")) });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  return result.data.status === "VERIFIED" ? { status: "verified" } : { status: "invalid" };
+}
+
+/**
+ * Sets a new password with the token read from the link's URL fragment. On success
+ * every session of the account has ended; the user signs in again with the new password.
+ */
+export async function submitResetPassword(
+  locale: string,
+  _previous: TokenFormState,
+  formData: FormData,
+): Promise<TokenFormState> {
+  const result = await resetPasswordAction({
+    token: text(formData.get("token")),
+    newPassword: text(formData.get("newPassword")),
+  });
+  if (!result.ok) {
+    const fields = result.error.code === "VALIDATION_FAILED" ? result.error.fields : undefined;
+    return {
+      messageKey: authErrorMessageKey(result.error.code),
+      ...(fields === undefined ? {} : { fields }),
+    };
+  }
+  if (result.data.status !== "RESET") return { status: "invalid" };
+  redirect(`/${toLocale(locale)}/sign-in?reset=1`);
+}
+
+export type ChangePasswordState = {
+  readonly messageKey: AuthErrorMessageKey;
+  readonly fields?: readonly FieldError[];
+} | null;
+
+/**
+ * Changes the signed-in user's password; the passwords are never echoed back. Success
+ * reloads the page with `?changed=1`: Better Auth replaced the session cookie, and the
+ * confirmation must not depend on client state surviving that refresh.
+ */
+export async function submitChangePassword(
+  locale: string,
+  _previous: ChangePasswordState,
+  formData: FormData,
+): Promise<ChangePasswordState> {
+  const result = await changePasswordAction({
+    currentPassword: text(formData.get("currentPassword")),
+    newPassword: text(formData.get("newPassword")),
+  });
+  if (!result.ok) {
+    const fields = result.error.code === "VALIDATION_FAILED" ? result.error.fields : undefined;
+    return {
+      messageKey: authErrorMessageKey(result.error.code),
+      ...(fields === undefined ? {} : { fields }),
+    };
+  }
+  if (result.data.status !== "CHANGED")
+    return { messageKey: AUTH_ERROR_MESSAGE_KEYS.wrongPassword };
+  redirect(`/${toLocale(locale)}/account/security?changed=1`);
 }

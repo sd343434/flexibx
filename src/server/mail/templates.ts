@@ -37,7 +37,56 @@ function assertHttpUrl(value: string): string {
   return url.toString();
 }
 
+interface MailParts {
+  readonly subject: string;
+  readonly intro: string;
+  readonly action: string;
+  readonly url: string;
+  readonly expiry: string;
+  readonly ignore: string;
+}
+
+function compose(locale: MailMessage["locale"], parts: MailParts): RenderedMail {
+  // A subject is a header line: no line breaks, whatever the interpolated values contain.
+  const subject = parts.subject.replace(/[\r\n]+/g, " ");
+  const url = assertHttpUrl(parts.url);
+  const text = [parts.intro, "", `${parts.action}: ${url}`, "", parts.expiry, parts.ignore].join(
+    "\n",
+  );
+  const html = [
+    `<!doctype html><html lang="${locale}" dir="${getDirection(locale)}"><body>`,
+    `<p>${escapeHtml(parts.intro)}</p>`,
+    `<p><a href="${escapeHtml(url)}">${escapeHtml(parts.action)}</a></p>`,
+    `<p>${escapeHtml(parts.expiry)}</p>`,
+    `<p>${escapeHtml(parts.ignore)}</p>`,
+    "</body></html>",
+  ].join("");
+  return { subject, text, html };
+}
+
+function renderAccountLink(
+  message: Extract<MailMessage, { template: "email_verification" | "password_reset" }>,
+): RenderedMail {
+  const { locale, data } = message;
+  const t = createTranslator({
+    locale,
+    messages: MESSAGES[locale],
+    namespace:
+      message.template === "email_verification" ? "emails.verification" : "emails.passwordReset",
+  });
+  const params = { name: data.name, minutes: data.expiresInMinutes };
+  return compose(locale, {
+    subject: t("subject"),
+    intro: t("intro", params),
+    action: t("action"),
+    url: data.url,
+    expiry: t("expiry", params),
+    ignore: t("ignore"),
+  });
+}
+
 export function renderMail(message: MailMessage): RenderedMail {
+  if (message.template !== "workspace_invitation") return renderAccountLink(message);
   const { locale, data } = message;
   const t = createTranslator({
     locale,
@@ -55,24 +104,13 @@ export function renderMail(message: MailMessage): RenderedMail {
     dateStyle: "long",
     timeZone: "Asia/Riyadh",
   }).format(data.expiresAt);
-  const url = assertHttpUrl(data.acceptUrl);
   const params = { workspace: data.workspaceName, inviter: data.inviterName, role, date: expires };
-
-  // A subject is a header line: no line breaks, whatever the workspace name contains.
-  const subject = t("subject", { workspace: data.workspaceName }).replace(/[\r\n]+/g, " ");
-  const intro = t("intro", params);
-  const expiry = t("expiry", params);
-  const action = t("action");
-  const ignore = t("ignore");
-
-  const text = [intro, "", `${action}: ${url}`, "", expiry, ignore].join("\n");
-  const html = [
-    `<!doctype html><html lang="${locale}" dir="${getDirection(locale)}"><body>`,
-    `<p>${escapeHtml(intro)}</p>`,
-    `<p><a href="${escapeHtml(url)}">${escapeHtml(action)}</a></p>`,
-    `<p>${escapeHtml(expiry)}</p>`,
-    `<p>${escapeHtml(ignore)}</p>`,
-    "</body></html>",
-  ].join("");
-  return { subject, text, html };
+  return compose(locale, {
+    subject: t("subject", { workspace: data.workspaceName }),
+    intro: t("intro", params),
+    action: t("action"),
+    url: data.acceptUrl,
+    expiry: t("expiry", params),
+    ignore: t("ignore"),
+  });
 }

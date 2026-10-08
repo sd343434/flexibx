@@ -5,7 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { WorkspaceRole } from "@/generated/prisma/enums";
-import { getAuth } from "@/server/auth/auth";
+import { getAuth, getRateLimiter } from "@/server/auth/auth";
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
 import { getCurrentUser, requireUser } from "@/server/auth/session";
 import { getSystemDb } from "@/server/db/client";
@@ -52,8 +52,9 @@ let counter = 0;
 async function signedInUser(name = "User") {
   counter += 1;
   const email = `user-${String(counter)}-${Date.now().toString(36)}@example.com`;
-  await signUpWithEmail(getAuth(), { email, password: PASSWORD, name });
-  const result = await signInWithEmail(getAuth(), { email, password: PASSWORD }, new Headers());
+  const deps = { limit: getRateLimiter(), headers: new Headers() };
+  await signUpWithEmail(getAuth(), { email, password: PASSWORD, name }, deps, "en");
+  const result = await signInWithEmail(getAuth(), { email, password: PASSWORD }, deps);
   if (result.status !== "SIGNED_IN") throw new Error("sign-in failed");
   const setCookie = result.setCookie.find((c) => c.startsWith(`${COOKIE}=`)) ?? "";
   const cookie = setCookie.split(";")[0] ?? "";

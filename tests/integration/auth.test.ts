@@ -7,7 +7,9 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@/server/errors/app-error";
 import { createAuth, type AuthLogLevel } from "@/server/auth/auth-config";
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
+import { MemoryMailer } from "@/server/mail/mailer";
 
+import { createTestAuth, depsFor } from "./auth-harness";
 import { createTenant, createTestDb, resetDatabase } from "./helpers";
 
 const { system, db } = createTestDb();
@@ -19,13 +21,10 @@ const COOKIE = "flexibx.session_token";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const logs: { level: AuthLogLevel; message: string }[] = [];
-const auth = createAuth({
-  db: system,
-  secret: SECRET,
-  baseURL: BASE,
-  isProduction: false,
+const harness = createTestAuth(system, SECRET, {
   log: (level, message) => logs.push({ level, message }),
 });
+const { auth } = harness;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -41,11 +40,11 @@ const cookieHeader = (value: string) => `${COOKIE}=${encodeURIComponent(value)}`
 const headersWith = (value: string) => new Headers({ cookie: cookieHeader(value) });
 
 async function register(email: string, name = "Test User") {
-  return signUpWithEmail(auth, { email, password: PASSWORD, name });
+  return signUpWithEmail(auth, { email, password: PASSWORD, name }, depsFor(harness), "en");
 }
 
 async function signIn(email: string, password = PASSWORD) {
-  const result = await signInWithEmail(auth, { email, password }, new Headers());
+  const result = await signInWithEmail(auth, { email, password }, depsFor(harness));
   if (result.status !== "SIGNED_IN") throw new Error(`sign-in failed: ${result.status}`);
   return cookieValue(sessionSetCookie(result.setCookie));
 }
@@ -88,12 +87,17 @@ describe("sign-up", () => {
 
   it("never lets input set isPlatformAdmin or locale", async () => {
     // Flexibx entry point: unknown keys are dropped before Better Auth sees them.
-    await signUpWithEmail(auth, {
-      email: "admin-try@example.com",
-      password: PASSWORD,
-      name: "X",
-      ...({ isPlatformAdmin: true, locale: "en" } as object),
-    });
+    await signUpWithEmail(
+      auth,
+      {
+        email: "admin-try@example.com",
+        password: PASSWORD,
+        name: "X",
+        ...({ isPlatformAdmin: true, locale: "en" } as object),
+      },
+      depsFor(harness),
+      "en",
+    );
     expect(
       await system.user.findUniqueOrThrow({ where: { email: "admin-try@example.com" } }),
     ).toMatchObject({ isPlatformAdmin: false, locale: "ar" });
@@ -131,7 +135,12 @@ describe("sign-up", () => {
 
   it("rejects invalid input with field codes only", async () => {
     await expect(
-      signUpWithEmail(auth, { email: "not-an-email", password: "short", name: "" }),
+      signUpWithEmail(
+        auth,
+        { email: "not-an-email", password: "short", name: "" },
+        depsFor(harness),
+        "en",
+      ),
     ).rejects.toSatisfy(
       (error) =>
         error instanceof AppError &&
@@ -155,7 +164,7 @@ describe("sign-in", () => {
   it("returns one generic result for a wrong password, an unknown email and malformed input", async () => {
     await register("login@example.com");
     const attempt = (email: string, password: string) =>
-      signInWithEmail(auth, { email, password }, new Headers());
+      signInWithEmail(auth, { email, password }, depsFor(harness));
     const wrong = await attempt("login@example.com", "not the password");
     expect(wrong).toEqual({ status: "INVALID_CREDENTIALS" });
     expect(await attempt("nobody@example.com", "not the password")).toEqual(wrong);
@@ -181,7 +190,7 @@ describe("sign-in", () => {
     await createTenant(system);
     const user = await system.user.findFirstOrThrow();
     expect(
-      await signInWithEmail(auth, { email: user.email, password: PASSWORD }, new Headers()),
+      await signInWithEmail(auth, { email: user.email, password: PASSWORD }, depsFor(harness)),
     ).toEqual({ status: "INVALID_CREDENTIALS" });
     expect(await system.account.count()).toBe(0);
   });
@@ -216,6 +225,10 @@ describe("sessions", () => {
 
     const otherSecret = createAuth({
       db: system,
+      appUrl: BASE,
+      requireEmailVerification: false,
+      mailer: new MemoryMailer(),
+      onSecurityEvent: () => Promise.resolve(),
       secret: `${SECRET}-rotated`,
       baseURL: BASE,
       isProduction: false,
@@ -346,13 +359,22 @@ describe("origin and CSRF protection", () => {
     ).toBe(403);
     expect(
       (
+        await post("/revoke-other-sessions", {
+          cookie: cookieHeader(cookie),
+          origin: "https://evil.example",
+        })
+      ).status,
+    ).toBe(403);
+    // Password change is not on the HTTP surface at all (Flexibx server action only).
+    expect(
+      (
         await post(
           "/change-password",
           { cookie: cookieHeader(cookie), origin: "https://evil.example" },
           { currentPassword: PASSWORD, newPassword: "attacker chosen pw" },
         )
       ).status,
-    ).toBe(403);
+    ).toBe(404);
     expect(await auth.api.getSession({ headers: headersWith(cookie) })).not.toBeNull();
   });
 });
@@ -366,7 +388,7 @@ describe("logging and data boundaries", () => {
     await signInWithEmail(
       auth,
       { email: "logs@example.com", password: "wrong password!" },
-      new Headers(),
+      depsFor(harness),
     );
     await post("/sign-out", {
       cookie: cookieHeader(cookie),
@@ -388,11 +410,13 @@ describe("logging and data boundaries", () => {
     const result = await signInWithEmail(
       auth,
       { email: "ip@example.com", password: PASSWORD },
-      new Headers({ "x-forwarded-for": "203.0.113.7" }),
+      depsFor(harness, new Headers({ "x-forwarded-for": "203.0.113.7" })),
     );
     expect(result.status).toBe("SIGNED_IN");
     const session = await system.session.findFirstOrThrow();
-    expect(session.ipAddress ?? "").toBe("");
+    // The spoofable header is never read; only Better Auth's test loopback fallback.
+    expect(session.ipAddress).not.toBe("203.0.113.7");
+    expect([null, "127.0.0.1"]).toContain(session.ipAddress);
   });
 
   it("keeps auth tables out of the application (tenant-guarded) client", async () => {

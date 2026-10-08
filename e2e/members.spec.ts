@@ -1,28 +1,29 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import type { Browser, Page } from "@playwright/test";
+
+import {
+  expect,
+  mailCount,
+  newClientPage,
+  PASSWORD,
+  signInHere,
+  signUpVerifiedAndSignIn,
+  test,
+  verifyEmail,
+  type Locale,
+} from "./fixtures";
 
 // Members and invitations end to end: real pages, server actions, Better Auth and the
-// database, on the production build (no email provider configured → links are shared
-// manually, and the UI must say that no email was sent).
+// database, on the production build. Emails go to the test outbox (captured, never
+// sent), so links are shared manually and the UI must say that no email was sent.
 
-const PASSWORD = "correct horse battery";
 const tag = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-type Locale = "ar" | "en";
 
 async function signUpAndSignIn(page: Page, locale: Locale, email: string, name: string) {
-  await page.goto(`/${locale}/sign-up`);
-  await page.fill("#sign-up-name", name);
-  await page.fill("#sign-up-email", email);
-  await page.fill("#sign-up-password", PASSWORD);
-  await page.getByTestId("sign-up-submit").click();
-  await expect(page).toHaveURL(`/${locale}/sign-in?registered=1`);
-  await page.fill("#sign-in-email", email);
-  await page.fill("#sign-in-password", PASSWORD);
-  await page.getByTestId("sign-in-submit").click();
-  await expect(page).toHaveURL(`/${locale}/workspaces/new`);
+  await signUpVerifiedAndSignIn(page, locale, email, name);
 }
 
 async function ownerWithWorkspace(browser: Browser, locale: Locale) {
-  const page = await browser.newPage();
+  const page = await newClientPage(browser);
   const slug = `team-${tag()}`;
   await signUpAndSignIn(page, locale, `e2e-owner-${tag()}@example.com`, "Owner");
   await page.fill("#workspace-name", `Team ${slug}`);
@@ -42,8 +43,17 @@ async function invite(page: Page, email: string, role: string) {
 }
 
 for (const { locale, dir, notSent } of [
-  { locale: "ar", dir: "rtl", notSent: "لم يُرسل أي بريد: لم يُعدّ مزوّد بريد إلكتروني." },
-  { locale: "en", dir: "ltr", notSent: "No email was sent: no email provider is configured." },
+  {
+    locale: "ar",
+    dir: "rtl",
+    notSent: "لم يُرسل أي بريد: إرسال البريد غير مُعدّ في هذه البيئة (بيئة التطوير).",
+  },
+  {
+    locale: "en",
+    dir: "ltr",
+    notSent:
+      "No email was sent: email delivery is not configured in this environment (development).",
+  },
 ] as const) {
   test(`invite, accept, change role and remove in /${locale} (${dir})`, async ({ browser }) => {
     const { page: owner, slug } = await ownerWithWorkspace(browser, locale);
@@ -62,10 +72,12 @@ for (const { locale, dir, notSent } of [
     expect(link).toMatch(new RegExp(`/${locale}/invite/[A-Za-z0-9_-]{43}$`));
     await expect(owner.getByTestId("invite-delivery")).toHaveText(notSent);
     await expect(owner.getByTestId("pending-row")).toHaveCount(1);
+    expect(mailCount(email, "workspace_invitation")).toBe(1);
     const path = new URL(link).pathname;
 
-    // The invitee opens the link signed out, creates an account and comes back.
-    const invitee = await browser.newPage();
+    // The invitee opens the link signed out, creates an account, verifies the email
+    // address and comes back.
+    const invitee = await newClientPage(browser);
     await invitee.goto(path);
     await expect(invitee).toHaveURL(`/${locale}/sign-in?next=${encodeURIComponent(path)}`);
     await invitee.locator('a[href*="/sign-up?next="]').click();
@@ -74,9 +86,10 @@ for (const { locale, dir, notSent } of [
     await invitee.fill("#sign-up-password", PASSWORD);
     await invitee.getByTestId("sign-up-submit").click();
     await expect(invitee).toHaveURL(new RegExp(`/${locale}/sign-in\\?registered=1&next=`));
-    await invitee.fill("#sign-in-email", email);
-    await invitee.fill("#sign-in-password", PASSWORD);
-    await invitee.getByTestId("sign-in-submit").click();
+    await verifyEmail(invitee, email);
+    await invitee.goto(path);
+    await expect(invitee).toHaveURL(`/${locale}/sign-in?next=${encodeURIComponent(path)}`);
+    await signInHere(invitee, email);
     await expect(invitee).toHaveURL(path);
     await expect(invitee.locator("html")).toHaveAttribute("dir", dir);
     await expect(invitee.getByTestId("invitation-valid")).toBeVisible();
@@ -120,7 +133,7 @@ test("revoked links, wrong accounts and leaving", async ({ browser }) => {
   await pending.getByTestId("revoke-invitation-confirm").click();
   await expect(owner.getByTestId("pending-empty")).toBeVisible();
 
-  const revokedUser = await browser.newPage();
+  const revokedUser = await newClientPage(browser);
   await signUpAndSignIn(revokedUser, "en", revokedEmail, "Revoked");
   await revokedUser.goto(revokedLink);
   await expect(revokedUser.getByTestId("invitation-invalid")).toBeVisible();
@@ -128,7 +141,7 @@ test("revoked links, wrong accounts and leaving", async ({ browser }) => {
 
   // A different account sees neither the workspace nor an accept button.
   const link = new URL(await invite(owner, `e2e-intended-${tag()}@example.com`, "ADMIN")).pathname;
-  const stranger = await browser.newPage();
+  const stranger = await newClientPage(browser);
   await signUpAndSignIn(stranger, "en", `e2e-stranger-${tag()}@example.com`, "Stranger");
   await stranger.goto(link);
   await expect(stranger.getByTestId("invitation-email-mismatch")).toBeVisible();
@@ -139,7 +152,7 @@ test("revoked links, wrong accounts and leaving", async ({ browser }) => {
   // A member can leave; afterwards the workspace is gone for them.
   const memberEmail = `e2e-leaver-${tag()}@example.com`;
   const memberLink = new URL(await invite(owner, memberEmail, "EDITOR")).pathname;
-  const member = await browser.newPage();
+  const member = await newClientPage(browser);
   await signUpAndSignIn(member, "en", memberEmail, "Leaver");
   await member.goto(memberLink);
   await member.getByTestId("accept-invitation").click();

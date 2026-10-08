@@ -9,6 +9,7 @@ import {
   SESSION_UPDATE_AGE_SECONDS,
 } from "@/server/auth/auth-config";
 import { EnvValidationError, parseAuthEnv } from "@/server/env-schema";
+import { MemoryMailer } from "@/server/mail/mailer";
 
 const SECRET = "x".repeat(40);
 
@@ -17,7 +18,11 @@ function build(overrides: Partial<Parameters<typeof createAuth>[0]> = {}) {
     db: {} as PrismaClient, // never queried here
     secret: SECRET,
     baseURL: "http://localhost:3000",
+    appUrl: "http://localhost:3000",
     isProduction: false,
+    requireEmailVerification: false,
+    mailer: new MemoryMailer(),
+    onSecurityEvent: () => Promise.resolve(),
     log: () => undefined,
     ...overrides,
   });
@@ -61,8 +66,9 @@ describe("auth configuration invariants", () => {
     );
   });
 
-  it("trusts no client IP by default; a configured header/proxy list is used as given", () => {
-    expect(options.advanced.ipAddress).toEqual({ disableIpTracking: true });
+  it("trusts no client IP header by default; a configured header/proxy list is used as given", () => {
+    // No header at all — not even X-Forwarded-For — is read without configuration.
+    expect(options.advanced.ipAddress).toEqual({ ipAddressHeaders: [] });
     expect(build({ ipHeader: "cf-connecting-ip" }).options.advanced.ipAddress).toEqual({
       ipAddressHeaders: ["cf-connecting-ip"],
     });
@@ -122,6 +128,12 @@ describe("auth environment", () => {
   it("leaves IP trust unset by default and validates a configured header and proxy list", () => {
     const base = { AUTH_SECRET: SECRET };
     expect(parseAuthEnv(base)).toEqual({ AUTH_SECRET: SECRET });
+    expect(parseAuthEnv({ ...base, AUTH_REQUIRE_EMAIL_VERIFICATION: "true" })).toMatchObject({
+      AUTH_REQUIRE_EMAIL_VERIFICATION: true,
+    });
+    expect(() => parseAuthEnv({ ...base, AUTH_REQUIRE_EMAIL_VERIFICATION: "yes" })).toThrow(
+      EnvValidationError,
+    );
     expect(parseAuthEnv({ ...base, AUTH_IP_HEADER: "", AUTH_TRUSTED_PROXIES: "" })).toEqual(base);
     expect(
       parseAuthEnv({

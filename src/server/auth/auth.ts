@@ -1,13 +1,18 @@
 import "server-only";
 
-import { getSystemDb } from "../db/client";
+import { recordAudit } from "../audit/audit-log";
+import { getDb, getSystemDb } from "../db/client";
 import { getAuthEnv, getEnv } from "../env";
+import { resolveEmailVerificationRequired } from "../env-schema";
 import { logger } from "../logger";
+import { getMailer } from "../mail";
 
 import { createAuth, type Auth } from "./auth-config";
+import { createRateLimiter, type RateLimiter } from "./rate-limit";
 import { hasSessionCookie, refreshSessionCookies } from "./session-refresh";
 
 let instance: Auth | undefined;
+let limiter: RateLimiter | undefined;
 
 /**
  * The application's Better Auth instance, created on first use so `next build` needs no
@@ -22,7 +27,18 @@ export function getAuth(): Auth {
       db: getSystemDb(),
       secret: authEnv.AUTH_SECRET,
       baseURL: env.AUTH_URL ?? env.APP_URL,
+      appUrl: env.APP_URL,
       isProduction: env.NODE_ENV === "production",
+      requireEmailVerification: isEmailVerificationRequired(),
+      mailer: getMailer(),
+      // Platform-level audit entries (no workspace), on the guarded client.
+      onSecurityEvent: async (action, userId) => {
+        await recordAudit(
+          getDb(),
+          { workspaceId: null, userId },
+          { action, entityType: "user", entityId: userId },
+        );
+      },
       ipHeader: authEnv.AUTH_IP_HEADER,
       trustedProxies: authEnv.AUTH_TRUSTED_PROXIES,
       log: (level, message) => {
@@ -31,6 +47,28 @@ export function getAuth(): Auth {
     });
   }
   return instance;
+}
+
+/** Email verification policy for this process (decision C6). */
+export function isEmailVerificationRequired(): boolean {
+  return resolveEmailVerificationRequired(
+    getEnv().NODE_ENV,
+    getAuthEnv().AUTH_REQUIRE_EMAIL_VERIFICATION,
+  );
+}
+
+/** The limiter checkpoint for Flexibx's authentication entry points (rate-limit.ts). */
+export function getRateLimiter(): RateLimiter {
+  if (limiter === undefined) {
+    const env = getEnv();
+    const authEnv = getAuthEnv();
+    limiter = createRateLimiter(getAuth(), {
+      secret: authEnv.AUTH_SECRET,
+      baseURL: env.AUTH_URL ?? env.APP_URL,
+      ipHeader: authEnv.AUTH_IP_HEADER,
+    });
+  }
+  return limiter;
 }
 
 /**

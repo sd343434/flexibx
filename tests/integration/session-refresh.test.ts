@@ -5,11 +5,11 @@
 import { NextRequest } from "next/server";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createAuth } from "@/server/auth/auth-config";
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
 import { hasSessionCookie, refreshSessionCookies } from "@/server/auth/session-refresh";
 import { getSystemDb } from "@/server/db/client";
 
+import { createTestAuth, depsFor, type TestAuth } from "./auth-harness";
 import { createTestDb, resetDatabase } from "./helpers";
 
 // What `next/headers` would expose to Better Auth's nextCookies() plugin for the current
@@ -41,13 +41,8 @@ const BASE = "http://localhost:3000";
 const PASSWORD = "correct horse battery";
 const COOKIE = "flexibx.session_token";
 const DAY = 86_400_000;
-const auth = createAuth({
-  db: system,
-  secret: process.env.AUTH_SECRET ?? "",
-  baseURL: BASE,
-  isProduction: false,
-  log: () => undefined,
-});
+const harness = createTestAuth(system, process.env.AUTH_SECRET ?? "");
+const { auth } = harness;
 
 beforeEach(async () => {
   await resetDatabase(system);
@@ -61,11 +56,12 @@ afterAll(async () => {
 });
 
 let counter = 0;
-async function signedIn(instance = auth) {
+async function signedIn(test: TestAuth = harness) {
+  const instance = test.auth;
   counter += 1;
   const email = `roll-${String(counter)}@example.com`;
-  await signUpWithEmail(instance, { email, password: PASSWORD, name: "R" });
-  const result = await signInWithEmail(instance, { email, password: PASSWORD }, new Headers());
+  await signUpWithEmail(instance, { email, password: PASSWORD, name: "R" }, depsFor(test), "en");
+  const result = await signInWithEmail(instance, { email, password: PASSWORD }, depsFor(test));
   if (result.status !== "SIGNED_IN") throw new Error("sign-in failed");
   const setCookie = result.setCookie.find((c) => c.includes(".session_token=")) ?? "";
   const pair = setCookie.split(";")[0] ?? "";
@@ -134,14 +130,12 @@ describe("proxy-side refresh (page requests)", () => {
   });
 
   it("keeps Secure and the __Secure- prefix on https", async () => {
-    const secureAuth = createAuth({
-      db: system,
-      secret: process.env.AUTH_SECRET ?? "",
+    const secureHarness = createTestAuth(system, process.env.AUTH_SECRET ?? "", {
       baseURL: "https://app.flexibx.test",
       isProduction: true,
-      log: () => undefined,
     });
-    const user = await signedIn(secureAuth);
+    const secureAuth = secureHarness.auth;
+    const user = await signedIn(secureHarness);
     expect(user.cookieHeader.startsWith("__Secure-flexibx.session_token=")).toBe(true);
     await age(user.token, 3);
     const [renewed = ""] = await refreshSessionCookies(

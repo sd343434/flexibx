@@ -5,16 +5,18 @@ import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Link } from "@/i18n/navigation";
 
 import { submitSignIn, type AuthFormState } from "../actions";
 
 interface SignInFormProps {
   /** Raw `next` query value; the server sanitizes it before redirecting. */
   readonly next: string | undefined;
-  readonly registered: boolean;
+  /** A status message from the previous step (sign-up, verification, reset). */
+  readonly notice?: "registered" | "verified" | "passwordReset" | undefined;
 }
 
-export function SignInForm({ next, registered }: SignInFormProps) {
+export function SignInForm({ next, notice }: SignInFormProps) {
   const locale = useLocale();
   const t = useTranslations("auth.signIn");
   const tRoot = useTranslations();
@@ -26,19 +28,28 @@ export function SignInForm({ next, registered }: SignInFormProps) {
   return (
     <form action={formAction} className="space-y-6" data-testid="sign-in-form">
       {state === null ? (
-        registered ? (
-          <p role="status" className="rounded-md border p-3 text-sm" data-testid="registered">
-            {t("registered")}
+        notice === undefined ? null : (
+          <p role="status" className="rounded-md border p-3 text-sm" data-testid={notice}>
+            {t(notice)}
           </p>
-        ) : null
+        )
       ) : (
-        <p
+        <div
           role="alert"
-          className="rounded-md border border-destructive p-3 text-sm text-destructive"
+          className="space-y-2 rounded-md border border-destructive p-3 text-sm text-destructive"
           data-testid="auth-error"
         >
-          {tRoot(state.messageKey)}
-        </p>
+          <p>{tRoot(state.messageKey)}</p>
+          {state.messageKey === "auth.errors.emailNotVerified" ? (
+            <Link
+              href="/verify-email"
+              className="font-medium underline underline-offset-4"
+              data-testid="verify-email-link"
+            >
+              {t("verifyEmailLink")}
+            </Link>
+          ) : null}
+        </div>
       )}
       {next === undefined ? null : <input type="hidden" name="next" value={next} />}
 

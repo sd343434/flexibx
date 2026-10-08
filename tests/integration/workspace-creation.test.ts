@@ -7,7 +7,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { submitCreateWorkspace } from "@/app/[locale]/workspaces/new/actions";
 import { WorkspaceRole } from "@/generated/prisma/enums";
-import { getAuth } from "@/server/auth/auth";
+import { getAuth, getRateLimiter } from "@/server/auth/auth";
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
 import { getSystemDb } from "@/server/db/client";
 import { createGuardedClient, type GuardedPrismaClient } from "@/server/db/prisma";
@@ -58,8 +58,9 @@ let counter = 0;
 async function signedInUser(name = "User") {
   counter += 1;
   const email = `creator-${String(counter)}-${Date.now().toString(36)}@example.com`;
-  await signUpWithEmail(getAuth(), { email, password: PASSWORD, name });
-  const result = await signInWithEmail(getAuth(), { email, password: PASSWORD }, new Headers());
+  const deps = { limit: getRateLimiter(), headers: new Headers() };
+  await signUpWithEmail(getAuth(), { email, password: PASSWORD, name }, deps, "en");
+  const result = await signInWithEmail(getAuth(), { email, password: PASSWORD }, deps);
   if (result.status !== "SIGNED_IN") throw new Error("sign-in failed");
   const setCookie = result.setCookie.find((c) => c.startsWith(`${COOKIE}=`)) ?? "";
   const user = await system.user.findUniqueOrThrow({ where: { email } });

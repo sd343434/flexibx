@@ -33,7 +33,27 @@ export default async function SignInPage({ params, searchParams }: SignInPagePro
           <h1 className="text-3xl font-bold">{t("title")}</h1>
           <p className="text-muted-foreground">{t("description")}</p>
         </header>
-        <SignInForm next={next} registered={single(query.registered) === "1"} />
+        <SignInForm
+          next={next}
+          notice={
+            single(query.reset) === "1"
+              ? "passwordReset"
+              : single(query.verified) === "1"
+                ? "verified"
+                : single(query.registered) === "1"
+                  ? "registered"
+                  : undefined
+          }
+        />
+        <p className="text-sm">
+          <Link
+            href="/forgot-password"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+            data-testid="forgot-password-link"
+          >
+            {t("forgotPassword")}
+          </Link>
+        </p>
         <p className="text-sm text-muted-foreground">
           {t("noAccount")}{" "}
           <Link
