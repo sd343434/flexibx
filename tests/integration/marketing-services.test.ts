@@ -1005,7 +1005,12 @@ describe("dashboard and activity", () => {
     const client = await getDashboard(db, await memberOf(owner, WorkspaceRole.CLIENT));
     expect(client.activity).toBeNull();
     expect(client.content).not.toBeNull();
-    expect(client.can).toEqual({ editBrand: false, createContent: false, manageCampaigns: false });
+    expect(client.can).toEqual({
+      editBrand: false,
+      createContent: false,
+      manageCampaigns: false,
+      approveContent: true,
+    });
   });
 
   it("lists activity newest first, paginated, with status names only", async () => {

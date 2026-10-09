@@ -24,10 +24,10 @@ export function WorkspaceSwitcher({ current, workspaces }: WorkspaceSwitcherProp
   return (
     <details className="group relative" data-testid="workspace-switcher">
       <summary
-        className="flex max-w-56 cursor-pointer list-none items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent [&::-webkit-details-marker]:hidden"
+        className="flex min-h-11 w-full cursor-pointer list-none items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm font-semibold hover:bg-accent [&::-webkit-details-marker]:hidden"
         aria-label={t("label")}
       >
-        <span className="truncate" data-testid="current-workspace">
+        <span className="flex-1 truncate" data-testid="current-workspace">
           {current.name}
         </span>
         <ChevronsUpDown aria-hidden="true" className="size-4 shrink-0 opacity-60" />

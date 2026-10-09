@@ -1,7 +1,7 @@
-import { Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 
+import { BrandMark, BrandSymbol } from "@/components/common/brand-mark";
 import { LocaleSwitcher } from "@/components/common/locale-switcher";
 import { ThemeToggle } from "@/components/common/theme-toggle";
 import { Link } from "@/i18n/navigation";
@@ -46,30 +46,31 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
   ];
 
   return (
-    <div className="flex min-h-screen flex-col" data-testid="app-shell">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
-          <Link href={home} className="flex items-center gap-2 font-semibold">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Sparkles aria-hidden="true" className="size-4" />
-            </span>
-            <span className="hidden sm:inline">{tCommon("appName")}</span>
-          </Link>
-          <span aria-hidden="true" className="text-muted-foreground">
-            /
-          </span>
-          <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
-          <div className="ms-auto flex items-center gap-1">
-            <LocaleSwitcher />
-            <ThemeToggle />
-            <UserMenu name={user.name} email={user.email} role={workspace.role} signOut={signOut} />
-          </div>
-        </div>
+    <div
+      className="min-h-screen bg-background lg:flex lg:items-stretch lg:gap-4 lg:p-4"
+      data-testid="app-shell"
+    >
+      <aside className="flex flex-col gap-4 px-4 pt-4 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:w-64 lg:shrink-0 lg:gap-6 lg:px-2 lg:py-4">
+        <Link href={home} className="self-start rounded-md px-2">
+          <BrandMark label={tCommon("appName")} />
+        </Link>
+        <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
         <ShellNav items={navItems} label={t("nav.label")} />
-      </header>
-      <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
-        {children}
-      </main>
+        <div className="mt-auto hidden space-y-4 rounded-3xl bg-feature p-5 text-feature-foreground lg:block dark:[--brand-loop:#ffffff]">
+          <BrandSymbol className="h-8 w-16" />
+          <p className="text-lg leading-snug font-bold">{t("brand.tagline")}</p>
+        </div>
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col gap-3 p-4 lg:p-0">
+        <div className="flex items-center justify-end gap-1">
+          <LocaleSwitcher />
+          <ThemeToggle />
+          <UserMenu name={user.name} email={user.email} role={workspace.role} signOut={signOut} />
+        </div>
+        <main id="main" className="w-full flex-1 rounded-3xl bg-panel p-4 shadow-sm sm:p-6 lg:p-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

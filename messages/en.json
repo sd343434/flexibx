@@ -192,6 +192,9 @@
       "signedInAs": "Signed in as",
       "role": "Role in this workspace: {role}",
       "security": "Account security"
+    },
+    "brand": {
+      "tagline": "Your content, on loop."
     }
   },
   "members": {
@@ -462,11 +465,9 @@
       "done": "Done",
       "todo": "To do",
       "contentTitle": "Content pipeline",
-      "upcomingTitle": "Scheduled in the next 14 days",
+      "upcomingTitle": "Coming up",
       "upcomingEmpty": "Nothing is scheduled yet.",
-      "recentTitle": "Recently updated content",
-      "recentEmpty": "No content yet.",
-      "campaignsTitle": "Active and planned campaigns",
+      "campaignsTitle": "Campaigns",
       "campaignsEmpty": "No active or planned campaigns.",
       "activeCampaigns": "{count, plural, =0 {No active campaigns} one {# active campaign} other {# active campaigns}}",
       "activeGoals": "{count, plural, =0 {No active goals} one {# active goal} other {# active goals}}",
@@ -475,7 +476,22 @@
       "activityEmpty": "No activity yet.",
       "viewAll": "View all",
       "newContent": "New content",
-      "brandName": "Brand: {name}"
+      "brandName": "Brand: {name}",
+      "greeting": "Hello, {name}",
+      "reviewSummary": "{count, plural, =0 {Nothing waits for review.} one {# item waits for review.} other {# items wait for review.}}",
+      "progress": "Published: {percent}",
+      "reviewTitle": "Waiting for review",
+      "reviewEmpty": "Nothing waits for review.",
+      "plannedFor": "Planned for",
+      "notPlanned": "No date yet",
+      "open": "Open",
+      "allContent": "All content",
+      "draftsTitle": "Drafts to finish",
+      "draftsEmpty": "No drafts right now.",
+      "profileTitle": "Profile",
+      "weekTitle": "This week",
+      "today": "Today",
+      "calendarLink": "Calendar"
     },
     "brand": {
       "title": "Brand profile",

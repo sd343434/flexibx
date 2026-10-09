@@ -46,8 +46,11 @@ export function ShellNav({
   const home = items[0]?.href;
 
   return (
-    <nav aria-label={label} className="mx-auto max-w-6xl overflow-x-auto px-4 sm:px-6">
-      <ul className="flex gap-1">
+    <nav
+      aria-label={label}
+      className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:overflow-visible lg:px-0"
+    >
+      <ul className="flex gap-1 lg:flex-col">
         {items.map((item) => {
           const Icon = ICONS[item.id];
           const current =
@@ -58,9 +61,9 @@ export function ShellNav({
                 href={item.href}
                 aria-current={current ? "page" : undefined}
                 data-testid={`nav-${item.id}`}
-                className="flex items-center gap-2 border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground aria-[current=page]:border-primary aria-[current=page]:text-foreground"
+                className="flex min-h-11 items-center gap-3 rounded-xl px-3.5 text-sm font-medium whitespace-nowrap text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-[current=page]:bg-primary aria-[current=page]:font-semibold aria-[current=page]:text-primary-foreground lg:text-[0.95rem]"
               >
-                <Icon aria-hidden="true" className="size-4" />
+                <Icon aria-hidden="true" className="size-5 shrink-0" />
                 {item.label}
               </Link>
             </li>

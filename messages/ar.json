@@ -192,6 +192,9 @@
       "signedInAs": "تم تسجيل الدخول باسم",
       "role": "دورك في مساحة العمل هذه: {role}",
       "security": "أمان الحساب"
+    },
+    "brand": {
+      "tagline": "محتواك، في حلقة لا تتوقف."
     }
   },
   "members": {
@@ -462,11 +465,9 @@
       "done": "مكتمل",
       "todo": "لم يكتمل",
       "contentTitle": "مسار المحتوى",
-      "upcomingTitle": "مجدول خلال ١٤ يومًا القادمة",
+      "upcomingTitle": "المجدول القادم",
       "upcomingEmpty": "لا يوجد محتوى مجدول بعد.",
-      "recentTitle": "محتوى حُدّث مؤخرًا",
-      "recentEmpty": "لا يوجد محتوى بعد.",
-      "campaignsTitle": "الحملات النشطة والمخطط لها",
+      "campaignsTitle": "الحملات",
       "campaignsEmpty": "لا توجد حملات نشطة أو مخطط لها.",
       "activeCampaigns": "{count, plural, =0 {لا توجد حملات نشطة} one {حملة نشطة واحدة} two {حملتان نشطتان} few {# حملات نشطة} many {# حملة نشطة} other {# حملة نشطة}}",
       "activeGoals": "{count, plural, =0 {لا توجد أهداف نشطة} one {هدف نشط واحد} two {هدفان نشطان} few {# أهداف نشطة} many {# هدفًا نشطًا} other {# هدف نشط}}",
@@ -475,7 +476,22 @@
       "activityEmpty": "لا يوجد نشاط بعد.",
       "viewAll": "عرض الكل",
       "newContent": "محتوى جديد",
-      "brandName": "العلامة التجارية: {name}"
+      "brandName": "العلامة التجارية: {name}",
+      "greeting": "أهلاً {name}",
+      "reviewSummary": "{count, plural, =0 {لا شيء ينتظر المراجعة.} one {عنصر واحد ينتظر المراجعة.} two {عنصران ينتظران المراجعة.} few {# عناصر تنتظر المراجعة.} many {# عنصرًا ينتظر المراجعة.} other {# عنصر ينتظر المراجعة.}}",
+      "progress": "منشور: {percent}",
+      "reviewTitle": "بانتظار المراجعة",
+      "reviewEmpty": "لا شيء ينتظر المراجعة.",
+      "plannedFor": "الموعد المخطط",
+      "notPlanned": "بلا موعد بعد",
+      "open": "فتح",
+      "allContent": "كل المحتوى",
+      "draftsTitle": "مسودات للإكمال",
+      "draftsEmpty": "لا توجد مسودات الآن.",
+      "profileTitle": "ملفك",
+      "weekTitle": "هذا الأسبوع",
+      "today": "اليوم",
+      "calendarLink": "التقويم"
     },
     "brand": {
       "title": "الملف التعريفي للعلامة التجارية",

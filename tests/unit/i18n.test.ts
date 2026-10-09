@@ -43,6 +43,8 @@ const SAMPLE_PARAMS = {
   target: "1,000",
   start: "1 January 2027",
   end: "31 January 2027",
+  // Workspace dashboard.
+  percent: "40%",
   amount: "1500.00",
   currency: "SAR",
   title: "Launch post",

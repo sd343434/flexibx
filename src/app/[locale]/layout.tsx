@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Sans_Arabic, Inter } from "next/font/google";
+import { Figtree, IBM_Plex_Sans_Arabic } from "next/font/google";
 import { headers } from "next/headers";
 import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { getTranslations } from "next-intl/server";
@@ -19,7 +19,8 @@ const arabicFont = IBM_Plex_Sans_Arabic({
   display: "swap",
 });
 
-const latinFont = Inter({
+// Figtree: a geometric sans close to the flexibx wordmark (brand guidelines v2.0).
+const latinFont = Figtree({
   subsets: ["latin"],
   variable: "--font-latin",
   display: "swap",
@@ -49,8 +50,8 @@ export async function generateMetadata({
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fbfbfe" },
-    { media: "(prefers-color-scheme: dark)", color: "#16161f" },
+    { media: "(prefers-color-scheme: light)", color: "#eeebf8" },
+    { media: "(prefers-color-scheme: dark)", color: "#07060f" },
   ],
 };
 

@@ -1,4 +1,4 @@
-import type { CampaignStatus, ContentStatus } from "@/generated/prisma/enums";
+import type { CampaignStatus, ContentStatus, ContentType } from "@/generated/prisma/enums";
 
 import type { Db } from "../db/types";
 import type { TenantContext } from "../tenancy/context";
@@ -126,13 +126,29 @@ export interface DashboardData {
       title: string;
       status: ContentStatus;
       scheduledAt: Date;
+      campaign: string | null;
     }[];
-    readonly recent: readonly {
+    /** Content waiting for a decision (IN_REVIEW), soonest planned first. */
+    readonly review: readonly {
       id: string;
       title: string;
-      status: ContentStatus;
-      updatedAt: Date;
+      type: ContentType;
+      scheduledAt: Date | null;
+      campaign: string | null;
     }[];
+    /** Drafts to finish, soonest planned first; `excerpt` is the start of the body. */
+    readonly drafts: readonly {
+      id: string;
+      title: string;
+      excerpt: string;
+      scheduledAt: Date | null;
+      pillar: string | null;
+    }[];
+    /** The current week (Sunday first) with the number of dated items per day. */
+    readonly week: {
+      readonly today: string;
+      readonly days: readonly { readonly date: string; readonly count: number }[];
+    };
   } | null;
   readonly campaigns: {
     readonly active: number;
@@ -143,6 +159,7 @@ export interface DashboardData {
       startDate: Date | null;
       endDate: Date | null;
       content: number;
+      published: number;
     }[];
     readonly activeGoals: number;
   } | null;
@@ -151,7 +168,22 @@ export interface DashboardData {
     readonly editBrand: boolean;
     readonly createContent: boolean;
     readonly manageCampaigns: boolean;
+    readonly approveContent: boolean;
   };
+}
+
+/** Dashboard lists show at most this many items each. */
+export const DASHBOARD_LIST_LIMIT = 4;
+/** Characters of a draft's body shown on its dashboard card. */
+export const DASHBOARD_EXCERPT_LENGTH = 140;
+
+/** The start of a body as one line, cut at a word boundary when it is too long. */
+export function excerpt(body: string, length = DASHBOARD_EXCERPT_LENGTH): string {
+  const line = body.replace(/\s+/g, " ").trim();
+  if (line.length <= length) return line;
+  const cut = line.slice(0, length);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > length / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 /** Upcoming scheduled content shown on the dashboard: the next 14 days. */
@@ -182,19 +214,61 @@ export async function getDashboard(
   let contentTotal = 0;
   if (canContent) {
     const horizon = new Date(now.getTime() + DASHBOARD_UPCOMING_DAYS * 24 * 60 * 60 * 1000);
-    const [groups, upcoming, recent] = await Promise.all([
+    const week = calendarPeriod("week", zonedDateKey(now, timeZone), timeZone);
+    const weekRange = { gte: week.start, lt: week.end };
+    const planned = [
+      { scheduledAt: { sort: "asc", nulls: "last" } },
+      { updatedAt: "desc" },
+      { id: "asc" },
+    ] as const;
+    const [groups, upcoming, review, drafts, dated] = await Promise.all([
       db.contentItem.groupBy({ by: ["status"], where: { workspaceId }, _count: { _all: true } }),
       db.contentItem.findMany({
         where: { workspaceId, status: "SCHEDULED", scheduledAt: { gte: now, lt: horizon } },
         orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
-        take: 5,
-        select: { id: true, title: true, status: true, scheduledAt: true },
+        take: DASHBOARD_LIST_LIMIT,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          scheduledAt: true,
+          campaign: { select: { name: true } },
+        },
       }),
       db.contentItem.findMany({
-        where: { workspaceId },
-        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-        take: 5,
-        select: { id: true, title: true, status: true, updatedAt: true },
+        where: { workspaceId, status: "IN_REVIEW" },
+        orderBy: [...planned],
+        take: DASHBOARD_LIST_LIMIT,
+        select: {
+          id: true,
+          title: true,
+          type: true,
+          scheduledAt: true,
+          campaign: { select: { name: true } },
+        },
+      }),
+      db.contentItem.findMany({
+        where: { workspaceId, status: "DRAFT" },
+        orderBy: [...planned],
+        take: 2,
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          scheduledAt: true,
+          pillar: { select: { name: true } },
+        },
+      }),
+      db.contentItem.findMany({
+        where: {
+          workspaceId,
+          OR: [
+            { status: { not: "PUBLISHED" }, scheduledAt: weekRange },
+            { status: "PUBLISHED", publishedAt: weekRange },
+          ],
+        },
+        take: MAX_CALENDAR_ITEMS,
+        select: { status: true, scheduledAt: true, publishedAt: true },
       }),
     ]);
     const byStatus = Object.fromEntries(CONTENT_STATUSES.map((status) => [status, 0])) as Record<
@@ -203,12 +277,30 @@ export async function getDashboard(
     >;
     for (const group of groups) byStatus[group.status] = group._count._all;
     contentTotal = Object.values(byStatus).reduce((sum, value) => sum + value, 0);
+    const perDay = new Map<string, number>();
+    for (const row of dated) {
+      const at = row.status === "PUBLISHED" ? row.publishedAt : row.scheduledAt;
+      if (at === null) continue;
+      const key = zonedDateKey(at, timeZone);
+      perDay.set(key, (perDay.get(key) ?? 0) + 1);
+    }
     content = {
       byStatus,
-      upcoming: upcoming.flatMap((row) =>
-        row.scheduledAt === null ? [] : [{ ...row, scheduledAt: row.scheduledAt }],
+      upcoming: upcoming.flatMap(({ campaign, ...row }) =>
+        row.scheduledAt === null
+          ? []
+          : [{ ...row, scheduledAt: row.scheduledAt, campaign: campaign?.name ?? null }],
       ),
-      recent,
+      review: review.map(({ campaign, ...row }) => ({ ...row, campaign: campaign?.name ?? null })),
+      drafts: drafts.map(({ body, pillar, ...row }) => ({
+        ...row,
+        excerpt: excerpt(body),
+        pillar: pillar?.name ?? null,
+      })),
+      week: {
+        today: zonedDateKey(now, timeZone),
+        days: week.days.map((date) => ({ date, count: perDay.get(date) ?? 0 })),
+      },
     };
   }
 
@@ -221,7 +313,7 @@ export async function getDashboard(
       db.campaign.findMany({
         where: { workspaceId, status: { in: ["ACTIVE", "PLANNED"] } },
         orderBy: [{ status: "asc" }, { startDate: { sort: "asc", nulls: "last" } }, { id: "asc" }],
-        take: 5,
+        take: 3,
         select: {
           id: true,
           name: true,
@@ -237,10 +329,30 @@ export async function getDashboard(
     ]);
     campaignTotal = total;
     goalTotal = goals;
+    const published =
+      list.length === 0
+        ? []
+        : await db.contentItem.groupBy({
+            by: ["campaignId"],
+            where: {
+              workspaceId,
+              status: "PUBLISHED",
+              campaignId: { in: list.map((row) => row.id) },
+            },
+            _count: { _all: true },
+          });
+    const publishedBy = new Map(published.map((row) => [row.campaignId, row._count._all]));
     campaigns = {
       active,
       activeGoals,
-      list: list.map(({ _count, ...row }) => ({ ...row, content: _count.contentItems })),
+      // Active campaigns first (the query orders by status, where PLANNED sorts first).
+      list: list
+        .map(({ _count, ...row }) => ({
+          ...row,
+          content: _count.contentItems,
+          published: publishedBy.get(row.id) ?? 0,
+        }))
+        .sort((a, b) => Number(b.status === "ACTIVE") - Number(a.status === "ACTIVE")),
     };
   }
 
@@ -264,6 +376,7 @@ export async function getDashboard(
       editBrand: can(ctx.role, "brand.edit"),
       createContent: can(ctx.role, "content.create"),
       manageCampaigns: can(ctx.role, "campaign.manage"),
+      approveContent: can(ctx.role, "content.approve"),
     },
   };
 }

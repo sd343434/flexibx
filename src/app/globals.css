@@ -16,6 +16,7 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-panel: var(--panel);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
@@ -24,6 +25,13 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-lime: var(--lime);
+  --color-lime-foreground: var(--lime-foreground);
+  --color-lime-soft: var(--lime-soft);
+  --color-lime-soft-foreground: var(--lime-soft-foreground);
+  --color-feature: var(--feature);
+  --color-feature-foreground: var(--feature-foreground);
+  --color-feature-muted: var(--feature-muted);
   --color-destructive: var(--destructive);
   --font-sans: var(--app-font-sans);
   --radius-sm: calc(var(--radius) - 4px);
@@ -32,36 +40,57 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/*
+ * Brand palette (flexibx brand guidelines v2.0): violet #6B3BFF, lime #D4FF3A,
+ * ink #0E0B1F and paper. Lime is an accent surface with ink text, never text on light
+ * backgrounds. "feature" is the strong card surface: ink in light mode, violet in dark.
+ */
 :root {
-  --radius: 0.75rem;
-  --background: oklch(0.99 0.004 270);
-  --foreground: oklch(0.2 0.03 270);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.03 270);
-  --muted: oklch(0.96 0.008 270);
-  --muted-foreground: oklch(0.47 0.03 270);
-  --border: oklch(0.91 0.01 270);
-  --ring: oklch(0.55 0.19 275);
-  --primary: oklch(0.5 0.2 275);
-  --primary-foreground: oklch(0.99 0 0);
-  --accent: oklch(0.95 0.03 275);
-  --accent-foreground: oklch(0.32 0.12 275);
-  --destructive: oklch(0.58 0.22 27);
+  --radius: 0.875rem;
+  --background: #eeebf8;
+  --foreground: #0e0b1f;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --card-foreground: #0e0b1f;
+  --muted: #f6f4fd;
+  --muted-foreground: #5f5b75;
+  --border: #e4e0f2;
+  --ring: #6b3bff;
+  --primary: #6b3bff;
+  --primary-foreground: #ffffff;
+  --accent: #eee9ff;
+  --accent-foreground: #4a22d9;
+  --lime: #d4ff3a;
+  --lime-foreground: #0e0b1f;
+  --lime-soft: #f2ffc7;
+  --lime-soft-foreground: #3a4500;
+  --feature: #0e0b1f;
+  --feature-foreground: #ffffff;
+  --feature-muted: #c9c4e0;
+  --destructive: oklch(0.55 0.22 27);
 }
 
 .dark {
-  --background: oklch(0.16 0.02 270);
-  --foreground: oklch(0.96 0.008 270);
-  --card: oklch(0.2 0.025 270);
-  --card-foreground: oklch(0.96 0.008 270);
-  --muted: oklch(0.24 0.025 270);
-  --muted-foreground: oklch(0.72 0.03 270);
-  --border: oklch(0.3 0.03 270);
-  --ring: oklch(0.7 0.16 275);
-  --primary: oklch(0.7 0.16 275);
-  --primary-foreground: oklch(0.16 0.02 270);
-  --accent: oklch(0.28 0.06 275);
-  --accent-foreground: oklch(0.9 0.05 275);
+  --background: #07060f;
+  --foreground: #f4f2ff;
+  --panel: #0e0b1f;
+  --card: #1c1834;
+  --card-foreground: #f4f2ff;
+  --muted: #15122a;
+  --muted-foreground: #aaa4c7;
+  --border: #2c2747;
+  --ring: #a88bff;
+  --primary: #7c55ff;
+  --primary-foreground: #ffffff;
+  --accent: #2a2150;
+  --accent-foreground: #cdbdff;
+  --lime: #d4ff3a;
+  --lime-foreground: #0e0b1f;
+  --lime-soft: #273010;
+  --lime-soft-foreground: #d4ff3a;
+  --feature: #6b3bff;
+  --feature-foreground: #ffffff;
+  --feature-muted: #ebe4ff;
   --destructive: oklch(0.68 0.2 27);
 }
 
