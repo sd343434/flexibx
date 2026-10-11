@@ -20,6 +20,7 @@ import {
 } from "@/server/ads/planner";
 import { setSpendLimit } from "@/server/ads/spend-limits";
 import { createFakeProvider } from "@/server/ai/fake-provider";
+import type { AiProvider } from "@/server/ai/provider";
 import { decideApproval } from "@/server/orchestration/approvals";
 import { executeRun, type OrchestrationDeps } from "@/server/orchestration/engine";
 import { setAutomationPaused } from "@/server/orchestration/policy";
@@ -1140,5 +1141,164 @@ describe("interruptions and concurrency", () => {
     ).toEqual(["recommendOptimizations"]);
     expect(setup.graph.writes()).toHaveLength(writes);
     expect(await system.agentRun.count({ where: { workflow: "ad_activate" } })).toBe(0);
+  });
+});
+
+// ── the AI proposes only what can launch here ───────────────────────────────
+
+describe("AI plan constraints", () => {
+  /** A provider that records the prompt and answers with the given AD_PLAN fields. */
+  function scripted(answer: { objective: string; placements: string[] }) {
+    const prompts: string[] = [];
+    const provider: AiProvider = {
+      name: "scripted",
+      generate(request) {
+        prompts.push(request.user);
+        return Promise.resolve({
+          text: JSON.stringify({
+            objective: answer.objective,
+            campaignName: "Autumn reading",
+            audience: {
+              description: "Readers in Jordan",
+              countries: ["JO"],
+              ageMin: 18,
+              ageMax: 45,
+              genders: "ALL",
+              interests: ["books"],
+            },
+            placements: answer.placements,
+            creative: {
+              headline: "Meet the novel",
+              primaryText: "Looking for a new read?",
+              callToAction: "LEARN_MORE",
+              assetRef: null,
+            },
+            rationale: "Readers respond to discovery offers.",
+          }),
+          provider: "scripted",
+          model: "scripted",
+          usage: { inputTokens: null, outputTokens: null },
+        });
+      },
+    };
+    return { runtime: { provider, timeoutMs: 5_000 }, prompts };
+  }
+
+  const input = (accountId: string, extra: Record<string, unknown> = {}) => ({
+    accountId,
+    budget: "900",
+    startDate: plusDays(1),
+    endDate: plusDays(10),
+    ...extra,
+  });
+
+  it("tells the AI only the launchable objectives and Facebook placements, and keeps the link", async () => {
+    const setup = await ready();
+    const { runtime, prompts } = scripted({ objective: "TRAFFIC", placements: ["AUTOMATIC"] });
+    const { planId } = await createAdPlan(
+      db,
+      setup.owner,
+      runtime,
+      input(setup.accountId, { destinationUrl: "https://shop.example.com/autumn" }),
+      "en",
+      { adapters: setup.deps.adapters },
+    );
+    const prompt = prompts[0] ?? "";
+    expect(prompt).toContain("Allowed objectives only (choose no other): AWARENESS, TRAFFIC");
+    expect(prompt).toContain(
+      "Placements available on this platform: FACEBOOK_FEED, FACEBOOK_STORIES, FACEBOOK_REELS",
+    );
+    expect(prompt).not.toMatch(/Placements available on this platform:[^\n]*INSTAGRAM/);
+    expect(prompt).not.toContain("WhatsApp Business is connected");
+    // "Automatic" is not launchable here: every Facebook placement is used instead.
+    const plan = await system.adPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.proposal).toMatchObject({
+      objective: "TRAFFIC",
+      placements: ["FACEBOOK_FEED", "FACEBOOK_STORIES", "FACEBOOK_REELS"],
+      creative: { destinationUrl: "https://shop.example.com/autumn" },
+    });
+    // Nothing stands between this plan and a launch on a server with execution enabled.
+    const review = await getAdPlanReview(db, setup.owner, setup.deps.adapters, planId, {
+      executionEnabled: true,
+    });
+    expect(review.launch).toEqual({ available: true });
+  });
+
+  it("refuses a proposal whose objective cannot launch instead of storing a dead plan", async () => {
+    const setup = await ready();
+    const plans = await system.adPlan.count({ where: { workspaceId: setup.owner.workspaceId } });
+    const { runtime } = scripted({ objective: "MESSAGES", placements: ["FACEBOOK_FEED"] });
+    await expect(
+      createAdPlan(db, setup.owner, runtime, input(setup.accountId), "en", {
+        adapters: setup.deps.adapters,
+      }),
+    ).rejects.toMatchObject({ fields: [{ code: "ads_provider_error" }] });
+    expect(await system.adPlan.count({ where: { workspaceId: setup.owner.workspaceId } })).toBe(
+      plans,
+    );
+  });
+
+  it("keeps only the launchable placements the AI chose", async () => {
+    const setup = await ready();
+    const { runtime } = scripted({
+      objective: "AWARENESS",
+      placements: ["INSTAGRAM_FEED", "FACEBOOK_STORIES"],
+    });
+    const { planId } = await createAdPlan(db, setup.owner, runtime, input(setup.accountId), "en", {
+      adapters: setup.deps.adapters,
+    });
+    const plan = await system.adPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.proposal).toMatchObject({ placements: ["FACEBOOK_STORIES"] });
+  });
+
+  it("does not steer toward WhatsApp conversations when MESSAGES cannot launch", async () => {
+    const setup = await ready();
+    const connection = await system.adConnection.create({
+      data: {
+        workspaceId: setup.owner.workspaceId,
+        platform: "WHATSAPP",
+        externalUserId: "wa-user",
+        status: "ACTIVE",
+        tokenCiphertext: "v1.a.b.c",
+        scopes: ["whatsapp_business_management"],
+      },
+    });
+    await system.adAccount.create({
+      data: {
+        workspaceId: setup.owner.workspaceId,
+        connectionId: connection.id,
+        platform: "WHATSAPP",
+        externalId: "waba1",
+        name: "Bookshop WhatsApp",
+        currency: "USD",
+        externalStatus: "ACTIVE",
+        selected: true,
+      },
+    });
+    const constrained = scripted({ objective: "TRAFFIC", placements: ["FACEBOOK_FEED"] });
+    await createAdPlan(db, setup.owner, constrained.runtime, input(setup.accountId), "en", {
+      adapters: setup.deps.adapters,
+    });
+    expect(constrained.prompts[0]).not.toContain("WhatsApp Business is connected");
+    // Without a write path to respect, the WhatsApp destination is still offered.
+    const free = scripted({ objective: "MESSAGES", placements: ["AUTOMATIC"] });
+    await createAdPlan(db, setup.owner, free.runtime, input(setup.accountId), "en");
+    expect(free.prompts[0]).toContain("WhatsApp Business is connected (Bookshop WhatsApp)");
+  });
+
+  it("refuses a destination that is not https", async () => {
+    const setup = await ready();
+    const { runtime, prompts } = scripted({ objective: "TRAFFIC", placements: ["FACEBOOK_FEED"] });
+    await expect(
+      createAdPlan(
+        db,
+        setup.owner,
+        runtime,
+        input(setup.accountId, { destinationUrl: "http://shop.example.com" }),
+        "en",
+        { adapters: setup.deps.adapters },
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    expect(prompts).toHaveLength(0);
   });
 });

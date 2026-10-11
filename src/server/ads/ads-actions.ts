@@ -123,10 +123,13 @@ export const createAdPlanAction = withAction({
     startDate: z.string().max(20),
     endDate: z.string().max(20),
     request: z.string().max(2000),
+    destinationUrl: z.string().max(2100).optional(),
   }),
   handler: async ({ slug: workspace, uiLocale, ...input }) => {
     const ctx = await requireWorkspaceAccess(workspace, "ads.plan");
-    return createAdPlan(getDb(), ctx, getAiRuntimeForAutomation(), input, uiLocale);
+    return createAdPlan(getDb(), ctx, getAiRuntimeForAutomation(), input, uiLocale, {
+      adapters: getAdAdapters(),
+    });
   },
 });
 

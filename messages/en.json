@@ -1501,6 +1501,8 @@
       "end": "End date",
       "request": "Anything to focus on (optional)",
       "requestHint": "For example: a product, an offer or a city.",
+      "destination": "Destination link (optional)",
+      "destinationHint": "The page the ad opens, starting with https://. Required before the campaign is created.",
       "submit": "Propose a plan",
       "pending": "Planning…",
       "aiOff": "AI is not configured on this server, so plans cannot be proposed.",

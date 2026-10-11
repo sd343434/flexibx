@@ -70,6 +70,15 @@ export default async function AdsRoute({
     },
     { kind: "date", name: "endDate", label: t("planForm.end"), required: true },
     {
+      kind: "url",
+      name: "destinationUrl",
+      label: t("planForm.destination"),
+      hint: t("planForm.destinationHint"),
+      dir: "ltr",
+      maxLength: 2000,
+      wide: true,
+    },
+    {
       kind: "textarea",
       name: "request",
       label: t("planForm.request"),

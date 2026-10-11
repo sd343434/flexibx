@@ -104,6 +104,8 @@ export function renderAdData(input: {
   readonly platform: string;
   /** The placements this platform supports (the model must choose among them). */
   readonly placements?: readonly string[];
+  /** The only objectives that can launch here, when restricted. */
+  readonly objectives?: readonly string[];
   /** The connected WhatsApp Business account's name, when conversations can go there. */
   readonly whatsapp?: string | null;
   readonly budget: Money;
@@ -120,6 +122,11 @@ export function renderAdData(input: {
       ? []
       : [
           `${ar ? "مواضع الظهور المتاحة على هذه المنصة" : "Placements available on this platform"}: ${input.placements.join(", ")}`,
+        ]),
+    ...(input.objectives === undefined
+      ? []
+      : [
+          `${ar ? "الأهداف المسموح بها فقط (لا تختر غيرها)" : "Allowed objectives only (choose no other)"}: ${input.objectives.join(", ")}`,
         ]),
     `${ar ? "الميزانية الإجمالية (يحددها الإنسان)" : "Total budget (set by the person)"}: ${formatMajor(input.budget)} ${input.budget.currency}`,
     `${ar ? "المدة بالأيام" : "Duration in days"}: ${String(input.days)}`,

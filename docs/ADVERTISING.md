@@ -78,6 +78,15 @@ Rules later work must keep:
   the person still holds `ads.manage`. At most 10 pending states per workspace.
 - **Placements.** `PLATFORM_PLACEMENTS` (model.ts) lists what each platform can express;
   the planner keeps only those (none left → `AUTOMATIC`), and the AI is told them.
+- **Only launchable plans.** When the platform has a ready write path
+  (`launchableChoices`, planner.ts), the AI is told the only objectives and placements
+  that writer supports (Meta: AWARENESS/TRAFFIC and explicit Facebook placements); a
+  proposal with another objective is refused (`ads_provider_error`, stage
+  `plan_objective`) instead of stored, placements outside the list are dropped (none
+  left → every supported placement), and the WhatsApp hint (objective MESSAGES) is only
+  given when MESSAGES can launch. The plan form also takes the destination link (https),
+  which a launch requires. Found in the first real run: the AI chose MESSAGES with
+  automatic placements, which the Meta writer cannot create.
 - **Permissions.** `ads.view` and `ads.plan` (managers and above), `ads.manage`
   (owners/admins: connect, select accounts, disconnect), submitting a launch also needs
   `automation.manage`; approving needs `automation.approve`.

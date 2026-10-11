@@ -22,12 +22,15 @@ import { adsError, adsUnavailableOperation } from "./errors";
 import { hasExternalObjects, readLedger } from "./execution";
 import { executionPreflight } from "./execution-preflight";
 import {
+  AD_OBJECTIVES,
   AD_PLACEMENTS,
   placementsFor,
   PLATFORM_PLACEMENTS,
   readAccountSnapshot,
   readCampaignSpec,
   type AdCampaignSpec,
+  type AdObjective,
+  type AdPlacement,
   type AdPlatform,
 } from "./model";
 import {
@@ -58,6 +61,14 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const createAdPlanSchema = z.object({
   accountId: z.string().refine(isUuid),
   budget: z.string().trim().min(1).max(20),
+  /** Where the ad leads (https). Optional here; required before a launch. */
+  destinationUrl: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z
+      .url({ protocol: /^https$/ })
+      .max(2000)
+      .optional(),
+  ),
   startDate: date,
   endDate: date,
   request: z.preprocess(
@@ -153,13 +164,38 @@ async function whatsappDestination(db: Db, ctx: TenantContext): Promise<string |
   return account?.name ?? null;
 }
 
-/** Creates a plan from an AI proposal (ads.plan). Returns the plan id. */
+/**
+ * What the platform's write path can launch, so the AI proposes only plans that can run
+ * here. Null when there is no ready writer (nothing to constrain: such plans cannot
+ * launch on this server anyway).
+ */
+export function launchableChoices(
+  adapters: AdAdapters | undefined,
+  platform: AdPlatform,
+): { readonly objectives: AdObjective[]; readonly placements: AdPlacement[] } | null {
+  const entry = adapters?.[platform];
+  const writer = entry?.available === true ? entry.adapter.writer : undefined;
+  if (writer?.ready !== true) return null;
+  return {
+    objectives: AD_OBJECTIVES.filter((objective) => writer.supportsObjective(objective)),
+    placements: PLATFORM_PLACEMENTS[platform].filter((placement) =>
+      writer.supportsPlacements([placement]),
+    ),
+  };
+}
+
+/**
+ * Creates a plan from an AI proposal (ads.plan). Returns the plan id. With `adapters`,
+ * the AI may only choose the objectives and placements the platform's write path
+ * supports; a proposal outside them is refused rather than stored.
+ */
 export async function createAdPlan(
   db: GuardedPrismaClient,
   ctx: TenantContext,
   runtime: AiRuntime,
   input: unknown,
   uiLocale: AiLanguage,
+  options: { readonly adapters?: AdAdapters } = {},
 ): Promise<{ readonly planId: string }> {
   assertCan(ctx, "ads.plan");
   const data = parseInput(createAdPlanSchema, input);
@@ -179,8 +215,12 @@ export async function createAdPlan(
   );
   const snapshot = readAccountSnapshot(account.snapshot);
   const language: AiLanguage = data.language ?? uiLocale;
-  // Click-to-WhatsApp ads exist on Meta only.
-  const whatsapp = account.platform === "META" ? await whatsappDestination(db, ctx) : null;
+  const choices = launchableChoices(options.adapters, account.platform);
+  // Click-to-WhatsApp ads exist on Meta only, and need the MESSAGES objective.
+  const whatsapp =
+    account.platform === "META" && (choices === null || choices.objectives.includes("MESSAGES"))
+      ? await whatsappDestination(db, ctx)
+      : null;
 
   const { generationId } = await generate(db, ctx, runtime, {
     operation: "AD_PLAN",
@@ -196,7 +236,8 @@ export async function createAdPlan(
         language,
         accountName: account.name,
         platform: account.platform,
-        placements: PLATFORM_PLACEMENTS[account.platform],
+        placements: choices?.placements ?? PLATFORM_PLACEMENTS[account.platform],
+        ...(choices === null ? {} : { objectives: choices.objectives }),
         whatsapp,
         budget: { minor: budget, currency: account.currency },
         days,
@@ -225,6 +266,10 @@ export async function createAdPlan(
     });
     const output = generation === null ? null : readStoredOutput("AD_PLAN", generation.output);
     if (output === null) throw adsError("CONFLICT", "ads_provider_error", { stage: "plan_output" });
+    if (choices !== null && !choices.objectives.includes(output.objective)) {
+      throw adsError("CONFLICT", "ads_provider_error", { stage: "plan_objective" });
+    }
+    const chosen = choices?.placements.filter((placement) => output.placements.includes(placement));
     const audience = output.audience;
     const spec = readCampaignSpec({
       objective: output.objective,
@@ -234,14 +279,21 @@ export async function createAdPlan(
         ageMin: Math.min(audience.ageMin, audience.ageMax),
         ageMax: Math.max(audience.ageMin, audience.ageMax),
       },
-      // Only what the account's platform can express (Snapchat: automatic placement).
-      placements: placementsFor(account.platform, output.placements),
+      // Only what the account's platform can express (Snapchat: automatic placement); with
+      // a write path, only what it can launch (none chosen → all it supports).
+      placements:
+        chosen === undefined
+          ? placementsFor(account.platform, output.placements)
+          : chosen.length > 0
+            ? chosen
+            : [...(choices?.placements ?? [])],
       creative: {
         headline: output.creative.headline,
         primaryText: output.creative.primaryText,
         callToAction: output.creative.callToAction,
         mediaAssetId:
           output.creative.assetRef === null ? null : (assetRefs[output.creative.assetRef] ?? null),
+        ...(data.destinationUrl === undefined ? {} : { destinationUrl: data.destinationUrl }),
       },
       rationale: output.rationale,
     } satisfies AdCampaignSpec);

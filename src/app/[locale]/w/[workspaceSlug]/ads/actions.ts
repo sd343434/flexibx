@@ -126,6 +126,7 @@ export async function submitCreatePlan(
     startDate: text(formData, "startDate"),
     endDate: text(formData, "endDate"),
     request: text(formData, "request"),
+    destinationUrl: text(formData, "destinationUrl"),
   };
   const result = await createAdPlanAction({
     slug,
