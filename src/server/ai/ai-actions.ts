@@ -18,7 +18,7 @@ import {
   generateIdeas,
   type AiRuntime,
 } from "./ai-service";
-import { createFakeProvider } from "./fake-provider";
+import { providerFromEnv } from "./configured-provider";
 import {
   applyGenerationInputSchema,
   assistContentInputSchema,
@@ -34,11 +34,11 @@ import {
 // provider. Using a suggestion is not rate-limited (it calls no provider) but repeats
 // every authorization and ownership check on the server.
 
-/** The configured provider (none when AI_PROVIDER=disabled) and its timeout. */
+/** The configured provider (fake or OpenAI; none when AI_PROVIDER=disabled) and its timeout. */
 export function getAiRuntime(): AiRuntime {
   const env = getAiEnv();
   return {
-    provider: env.AI_PROVIDER === "fake" ? createFakeProvider() : null,
+    provider: providerFromEnv(env),
     timeoutMs: env.AI_TIMEOUT_MS,
   };
 }

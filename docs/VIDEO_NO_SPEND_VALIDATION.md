@@ -84,10 +84,11 @@ To execute them, these components must be implemented (authorization needed):
 
 Facts about the **application** (verified by reading the code):
 
-- `AI_PROVIDER` accepts only `disabled` | `fake`, and the default is `disabled`
-  (`src/server/env-schema.ts:123`).
-- No HTTP client, Google or Runway SDK, or provider URL exists in `src/server/ai/`.
-  No such dependency is in `package.json`.
+- `AI_PROVIDER` (text operations only) accepts `disabled` | `fake` | `openai`, and the
+  default is `disabled` (`src/server/env-schema.ts`). `openai` calls OpenAI's Responses
+  API for text; it has no video path.
+- No Google or Runway SDK or video provider URL exists in `src/server/ai/`, and no such
+  dependency is in `package.json`.
 
 So the app has **no code path that can send a paid video request**.
 

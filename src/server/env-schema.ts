@@ -116,16 +116,35 @@ export function resolveEmailVerificationRequired(
  * AI provider (Phase 4). `disabled` (default): every AI operation fails with
  * SERVICE_UNAVAILABLE ("AI is not configured"). `fake`: a deterministic local adapter for
  * development and automated tests — it calls no external service and its suggestions are
- * placeholders, never for a real deployment. No commercial provider exists yet, so no
- * API key is read. AI_TIMEOUT_MS bounds one provider call (1–120 s, default 30 s).
+ * placeholders, never for a real deployment. `openai`: OpenAI's Responses API, which needs
+ * OPENAI_API_KEY (server-only, never logged); OPENAI_MODEL picks the model (default: the
+ * project setting DEFAULT_OPENAI_MODEL, not a promise that the model exists — the API
+ * rejects unknown models) and OPENAI_REASONING_EFFORT is sent only when set (reasoning
+ * models). AI_TIMEOUT_MS bounds one provider call (1–120 s, default 30 s).
  */
-export const aiEnvSchema = z.object({
-  AI_PROVIDER: z.preprocess(emptyToUndefined, z.enum(["disabled", "fake"]).default("disabled")),
-  AI_TIMEOUT_MS: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().int().min(1000).max(120_000).default(30_000),
-  ),
-});
+export const aiEnvSchema = z
+  .object({
+    AI_PROVIDER: z.preprocess(
+      emptyToUndefined,
+      z.enum(["disabled", "fake", "openai"]).default("disabled"),
+    ),
+    AI_TIMEOUT_MS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1000).max(120_000).default(30_000),
+    ),
+    OPENAI_API_KEY: optional(z.string().trim().min(20, "must be an OpenAI API key")),
+    OPENAI_MODEL: optional(
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "must be an OpenAI model name"),
+    ),
+    OPENAI_REASONING_EFFORT: optional(z.enum(["minimal", "low", "medium", "high"])),
+  })
+  .refine((env) => env.AI_PROVIDER !== "openai" || env.OPENAI_API_KEY !== undefined, {
+    path: ["OPENAI_API_KEY"],
+    message: "AI_PROVIDER=openai needs OPENAI_API_KEY",
+  });
 
 export type AiEnv = z.infer<typeof aiEnvSchema>;
 

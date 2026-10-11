@@ -606,5 +606,26 @@ IN_FLIGHT/UNCERTAIN steps reconciled by tag, never blindly retried), `ad_activat
 it on after a second approval, and `whatsapp_send` sends one message to one opted-in
 contact (encrypted numbers, consent, approved templates or the 24-hour window, caps,
 exactly-once). Workspace spending limits per currency gate every creation and activation.
-Only Meta has a write path; Snapchat and TikTok writers are blocked boundaries. None of
-this has been exercised against a real platform.
+Only Meta has a write path; Snapchat and TikTok writers are blocked boundaries. The Meta
+connection (Facebook Login for Business configuration) and the read-only sync have been
+exercised once against a real Meta app and ad accounts (2026-10-11); campaign creation
+and activation, and WhatsApp, have not.
+
+## 14. AI providers
+
+Code: `src/server/ai/`. Every AI request goes through `runProvider` (`run.ts`: hard
+timeout, one retry for timeouts and unavailability only) and every answer is validated by
+the operation's schema before use. `providerFromEnv` (`configured-provider.ts`) is the one
+place that turns `AI_PROVIDER` into a provider, for people and for automation:
+
+- `disabled` (default): AI operations fail as not configured.
+- `fake`: deterministic local placeholders for development and tests; no external call.
+- `openai`: OpenAI's Responses API (`openai-provider.ts`), called with `fetch` (no SDK) at
+  a pinned endpoint. `OPENAI_API_KEY` is required and only sent in the `Authorization`
+  header; `OPENAI_MODEL` defaults to the project setting `DEFAULT_OPENAI_MODEL`
+  (`gpt-5.5`, not a promise that it exists — the API rejects unknown models);
+  `OPENAI_REASONING_EFFORT` is sent only when set and then adds a reasoning allowance to
+  `max_output_tokens`. Requests are `store: false`, ask for one JSON object
+  (`text.format: json_object`) and offer no tools. 429 → `rate_limited` (not retried);
+  408/409/5xx/network → `unavailable` (retried once); a refusal → `refused`; incomplete or
+  empty output → `invalid_output`. Tested against a stand-in for the API only.

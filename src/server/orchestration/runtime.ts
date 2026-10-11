@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { AiRuntime } from "../ai/ai-service";
-import { createFakeProvider } from "../ai/fake-provider";
+import { providerFromEnv } from "../ai/configured-provider";
 import { getDb } from "../db/client";
 import { getAiEnv } from "../env";
 import { logger } from "../logger";
@@ -29,7 +29,7 @@ import { whatsappSendWorkflow, type WhatsAppSendServices } from "./workflows/wha
 
 // The application's orchestration dependencies: the workflows that exist and the
 // services their tasks use. The AI provider comes from AI_PROVIDER (disabled by default;
-// `fake` is the deterministic local adapter). No paid provider exists.
+// `fake` is the deterministic local adapter; `openai` calls OpenAI's Responses API).
 
 /** Services every workflow may use (each workflow declares the part it needs). */
 export type AppServices = PlanningServices & WhatsAppSendServices;
@@ -44,7 +44,7 @@ export const WORKFLOWS = {
 export function getAiRuntimeForAutomation(): AiRuntime {
   const env = getAiEnv();
   return {
-    provider: env.AI_PROVIDER === "fake" ? createFakeProvider() : null,
+    provider: providerFromEnv(env),
     timeoutMs: env.AI_TIMEOUT_MS,
   };
 }

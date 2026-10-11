@@ -210,6 +210,14 @@ async function finishRun(
 
 function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
+  // A handler that throws synchronously becomes a rejection here, so the timer below is
+  // always cleared (otherwise it would fire later as an unhandled rejection).
+  let task: Promise<T>;
+  try {
+    task = run(controller.signal);
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -217,7 +225,7 @@ function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: num
       reject(new TaskError("timeout", true));
     }, timeoutMs);
   });
-  return Promise.race([run(controller.signal), timeout]).finally(() => {
+  return Promise.race([task, timeout]).finally(() => {
     clearTimeout(timer);
   });
 }
