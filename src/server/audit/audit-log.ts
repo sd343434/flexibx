@@ -40,6 +40,89 @@ export const AUDIT_ACTIONS = [
   "asset.created",
   "asset.updated",
   "asset.deleted",
+  // AI Marketing Engine (Phase 4). Metadata: operation, provider, model, status, token
+  // counts, error code, related content id — never prompts or generated text.
+  "ai.generated",
+  "ai.failed",
+  "ai.applied",
+  // Generated video retention. Metadata: ids, counts, sizes, timestamps, attempt numbers,
+  // delivery outcomes — never storage keys, titles, prompts or email addresses.
+  "video.generated",
+  "video.expiry_reminder",
+  "video.files_deleted",
+  "video.deletion_failed",
+  "video.metadata_purged",
+  // Generative video jobs. Metadata: job/attempt ids, states, tier, duration, failure
+  // codes, money in micros — never prompts, titles or provider output URLs.
+  "video.job_requested",
+  "video.job_finished",
+  "video.attempt_failed",
+  "video.job_reviewed",
+  // Orchestration (AI Marketing Manager). Metadata: run/task ids and keys, workflow,
+  // states, failure codes, policy field names, counts and content ids — never prompts or
+  // generated text.
+  "automation.policy_updated",
+  "automation.paused",
+  "automation.resumed",
+  "automation.run_created",
+  "automation.run_finished",
+  "automation.run_cancelled",
+  "automation.task_failed",
+  "automation.approval_required",
+  // Approval decisions carry the exact action decided on (snapshot, hash, amount).
+  "automation.approval_granted",
+  "automation.approval_rejected",
+  "automation.approval_stale",
+  "automation.approval_used",
+  "automation.drafts_created",
+  // Advertising platforms. Metadata: platform, account/plan ids, external ids, unified
+  // statuses, error codes, counts, granted permission names and amounts — never tokens,
+  // authorization codes, state values or raw platform responses.
+  "ads.connect_started",
+  "ads.connected",
+  "ads.connect_failed",
+  "ads.disconnected",
+  "ads.accounts_refreshed",
+  "ads.account_selected",
+  "ads.synced",
+  "ads.sync_failed",
+  "ads.plan_created",
+  "ads.plan_updated",
+  "ads.plan_discarded",
+  "ads.launch_requested",
+  "ads.launch_succeeded",
+  "ads.launch_failed",
+  // WhatsApp Business. Metadata: account ids, counts and error codes — never phone
+  // numbers, message ids, message contents or tokens.
+  "whatsapp.synced",
+  "whatsapp.sync_failed",
+  // Execution (external writes). Metadata: plan/step names, external object ids, amounts,
+  // codes — never tokens, numbers or message contents.
+  "ads.step_succeeded",
+  "ads.step_failed",
+  "ads.step_uncertain",
+  "ads.step_reconciled",
+  "ads.activation_requested",
+  "ads.activation_succeeded",
+  "ads.activation_failed",
+  "ads.state_reconciled",
+  "ads.spend_limit_set",
+  "ads.identities_listed",
+  "ads.identity_selected",
+  "whatsapp.marketing_opted_out",
+  "whatsapp.marketing_resumed",
+  "whatsapp.message_resolved",
+  "whatsapp.send_cancelled",
+  "whatsapp.contact_added",
+  "whatsapp.contact_opted_out",
+  "whatsapp.send_requested",
+  "whatsapp.send_succeeded",
+  "whatsapp.send_failed",
+  "whatsapp.send_uncertain",
+  // Platform storage administration (platform scope, workspaceId = null). Metadata:
+  // provider ids and changed field names — never keys, endpoints or bucket names.
+  "storage.settings_updated",
+  "storage.write_provider_changed",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -55,7 +138,10 @@ export interface AuditEntry {
 
 /** Who/where: a workspace context, or a platform-level actor (workspaceId = null). */
 export type AuditScope =
-  TenantContext | { readonly workspaceId: null; readonly userId: string | null };
+  | TenantContext
+  | { readonly workspaceId: null; readonly userId: string | null }
+  // A scheduled system job acting inside one workspace (e.g. video retention): no actor.
+  | { readonly workspaceId: string; readonly userId: null };
 
 const MAX_USER_AGENT_LENGTH = 512;
 

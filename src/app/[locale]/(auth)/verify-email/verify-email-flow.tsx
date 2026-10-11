@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -73,7 +75,7 @@ export function VerifyEmailFlow({ signedIn, alreadyVerified }: VerifyEmailFlowPr
         ) : null}
         <input type="hidden" name="token" value={token} />
         <Button type="submit" disabled={pending} data-testid="verify-email-submit">
-          {pending ? t("confirming") : t("confirm")}
+          <PendingLabel pending={pending} idle={t("confirm")} busy={t("confirming")} />
         </Button>
       </form>
     );

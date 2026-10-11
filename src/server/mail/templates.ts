@@ -85,7 +85,33 @@ function renderAccountLink(
   });
 }
 
+function renderVideoExpiry(
+  message: Extract<MailMessage, { template: "video_expiry_reminder" }>,
+): RenderedMail {
+  const { locale, data } = message;
+  const t = createTranslator({
+    locale,
+    messages: MESSAGES[locale],
+    namespace: "emails.videoExpiry",
+  });
+  const params = {
+    title: data.videoTitle,
+    workspace: data.workspaceName,
+    hours: data.hoursLeft,
+    date: data.deletionTime,
+  };
+  return compose(locale, {
+    subject: t("subject", params),
+    intro: t("intro", params),
+    action: t("action"),
+    url: data.url,
+    expiry: t("expiry", params),
+    ignore: t("ignore"),
+  });
+}
+
 export function renderMail(message: MailMessage): RenderedMail {
+  if (message.template === "video_expiry_reminder") return renderVideoExpiry(message);
   if (message.template !== "workspace_invitation") return renderAccountLink(message);
   const { locale, data } = message;
   const t = createTranslator({

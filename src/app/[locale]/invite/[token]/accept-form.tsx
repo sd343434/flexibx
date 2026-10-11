@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -37,7 +39,7 @@ export function AcceptInvitationForm({ token }: { readonly token: string }) {
         </p>
       )}
       <Button type="submit" disabled={pending} data-testid="accept-invitation">
-        {pending ? t("accepting") : t("accept")}
+        <PendingLabel pending={pending} idle={t("accept")} busy={t("accepting")} />
       </Button>
     </form>
   );

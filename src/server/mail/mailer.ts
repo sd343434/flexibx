@@ -33,6 +33,18 @@ export interface AccountLinkMailData {
   readonly expiresInMinutes: number;
 }
 
+/** Reminder before an AI-generated video's files are deleted (retention policy). */
+export interface VideoExpiryMailData {
+  readonly workspaceName: string;
+  readonly videoTitle: string;
+  /** 48 or 24: the reminder window. */
+  readonly hoursLeft: number;
+  /** Deletion date and time, already formatted in the workspace's time zone. */
+  readonly deletionTime: string;
+  /** Absolute link to the workspace's videos page, built from APP_URL. */
+  readonly url: string;
+}
+
 interface MailEnvelope {
   readonly to: string;
   readonly locale: Locale;
@@ -43,6 +55,7 @@ export type MailMessage = MailEnvelope &
     | { readonly template: "workspace_invitation"; readonly data: InvitationMailData }
     | { readonly template: "email_verification"; readonly data: AccountLinkMailData }
     | { readonly template: "password_reset"; readonly data: AccountLinkMailData }
+    | { readonly template: "video_expiry_reminder"; readonly data: VideoExpiryMailData }
   );
 
 export type MailTemplate = MailMessage["template"];

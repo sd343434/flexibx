@@ -3,9 +3,13 @@ import { randomUUID } from "node:crypto";
 import { AppError } from "../errors/app-error";
 import { isUuid } from "../tenancy/context";
 
+import type { StorageProvider } from "@/generated/prisma/enums";
+
 /**
  * Object storage abstraction. PostgreSQL stores only object keys + metadata; bytes live
- * in S3-compatible storage. Implementations: S3 (AWS S3 / MinIO / R2) and in-memory (tests).
+ * in S3-compatible storage. Implementations: S3 (any S3-compatible service; Wasabi is
+ * configured through it, see wasabi-storage.ts) and in-memory (tests). Application code
+ * never imports a provider SDK: it gets services from the router in ./providers.ts.
  */
 export interface StorageService {
   put(
@@ -13,7 +17,12 @@ export interface StorageService {
     body: Uint8Array,
     options: { readonly contentType: AllowedContentType },
   ): Promise<void>;
-  delete(key: string): Promise<void>;
+  /**
+   * Deletes the object; deleting a missing object succeeds. `signal` aborts the request
+   * where the adapter supports it. An aborted delete may still have reached storage, so
+   * callers treat it as unconfirmed, never as "not deleted".
+   */
+  delete(key: string, options?: StorageDeleteOptions): Promise<void>;
   /** Presigned PUT. The signed Content-Type and Content-Length must match the upload. */
   getSignedUploadUrl(key: string, options: SignedUploadOptions): Promise<SignedUpload>;
   getSignedDownloadUrl(
@@ -24,6 +33,60 @@ export interface StorageService {
   publicUrl(key: string): string | null;
   /** The object's bytes, or null when it does not exist (served through access-checked routes). */
   getObject(key: string): Promise<StoredObjectData | null>;
+  /**
+   * Checks that the configured bucket is reachable with the configured credentials,
+   * without reading or writing objects. Rejects with a StorageAccessError. Optional: a
+   * provider without it cannot pass the platform admin's connection test.
+   */
+  checkAccess?(options?: { readonly signal?: AbortSignal }): Promise<void>;
+}
+
+/**
+ * Where an object is stored (Prisma enum `StorageProvider`). Every object row records it,
+ * and reads and deletes always go to that provider — never to whichever provider is
+ * currently configured for new writes.
+ */
+export type StorageProviderId = StorageProvider;
+
+/** Resolves the storage service holding objects of a provider. */
+export interface StorageRouter {
+  /** Throws SERVICE_UNAVAILABLE when that provider is not (fully) configured. */
+  forProvider(provider: StorageProviderId): Promise<StorageService>;
+}
+
+/** Raw SQL inside the database transaction that records a new object row. */
+export interface StorageTransaction {
+  $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+}
+
+/** Where new objects are written: the provider recorded on the row, and its service. */
+export interface StorageWriteTarget {
+  readonly provider: StorageProviderId;
+  readonly storage: StorageService;
+  /**
+   * Call inside the transaction that inserts the object's row, before the insert. It
+   * share-locks the platform storage settings and throws CONFLICT if the provider's
+   * location changed since this target was resolved (the object was written to a
+   * location the row would no longer point at). The lock is held until that transaction
+   * ends, so a location change cannot slip in between this check and the insert. On
+   * CONFLICT the writer removes the object it wrote and the user retries.
+   */
+  confirm(tx: StorageTransaction): Promise<void>;
+}
+
+/** Why a connection check failed (codes only: no endpoints, keys or provider messages). */
+export type StorageAccessFailure =
+  "access_denied" | "bucket_not_found" | "wrong_region" | "timeout" | "unreachable" | "failed";
+
+export class StorageAccessError extends Error {
+  constructor(readonly failure: StorageAccessFailure) {
+    super(`Storage access check failed: ${failure}`);
+    this.name = "StorageAccessError";
+  }
+}
+
+export interface StorageDeleteOptions {
+  readonly signal?: AbortSignal;
 }
 
 export interface StoredObjectData {

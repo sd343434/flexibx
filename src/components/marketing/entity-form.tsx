@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { Check } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useActionState, useState, type ReactNode } from "react";
@@ -269,6 +271,8 @@ export interface EntityFormProps {
   readonly action: FormAction;
   readonly fields: readonly FieldSpec[];
   readonly submitLabel: string;
+  /** Button text while the action runs (default: "Saving…"). */
+  readonly pendingLabel?: string;
   readonly testId: string;
   /** Show the fields without a submit button (the role may only view). */
   readonly readOnly?: boolean;
@@ -280,6 +284,7 @@ export function EntityForm({
   action,
   fields,
   submitLabel,
+  pendingLabel,
   testId,
   readOnly = false,
   children,
@@ -319,7 +324,11 @@ export function EntityForm({
       {readOnly ? null : (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={pending} data-testid={`${testId}-submit`}>
-            {pending ? t("marketing.common.saving") : submitLabel}
+            <PendingLabel
+              pending={pending}
+              idle={submitLabel}
+              busy={pendingLabel ?? t("marketing.common.saving")}
+            />
           </Button>
           {state !== null && "done" in state ? (
             <p
@@ -399,11 +408,12 @@ export function ActionButton({
             disabled={pending}
             data-testid={testId === undefined ? undefined : `${testId}-submit`}
           >
-            {pending
-              ? t("marketing.common.working")
-              : confirm === undefined
-                ? label
-                : t("marketing.common.confirm")}
+            <PendingLabel
+              pending={pending}
+              idle={confirm === undefined ? label : t("marketing.common.confirm")}
+              busy={t("marketing.common.working")}
+              surface={variant === "default" ? "primary" : "plain"}
+            />
           </Button>
           {confirm === undefined ? null : (
             <Button

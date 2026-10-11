@@ -18,6 +18,14 @@ const ENTITY_PATHS: Readonly<Record<string, string>> = {
   audience: "brand/audiences",
 };
 
+/** Entries written by the scheduled video retention job: shown as the product, not "Someone". */
+const SYSTEM_ACTIONS: ReadonlySet<string> = new Set([
+  "video.expiry_reminder",
+  "video.files_deleted",
+  "video.deletion_failed",
+  "video.metadata_purged",
+]);
+
 /** Audit entries as sentences ("Sara approved…"), with links to records that still exist. */
 export async function ActivityList({
   locale,
@@ -55,7 +63,12 @@ export async function ActivityList({
             data-action={entry.action}
           >
             <p>
-              <span className="font-medium">{entry.actor ?? t("activity.unknownActor")}</span>{" "}
+              <span className="font-medium">
+                {entry.actor ??
+                  (SYSTEM_ACTIONS.has(entry.action)
+                    ? t("activity.systemActor")
+                    : t("activity.unknownActor"))}
+              </span>{" "}
               {path === undefined || entry.entityId === null || deleted ? (
                 action
               ) : (

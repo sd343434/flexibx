@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { Check, Copy } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState, useState } from "react";
@@ -143,7 +145,7 @@ export function InviteForm({
           </select>
         </div>
         <Button type="submit" disabled={pending} data-testid="invite-submit">
-          {pending ? t("submitting") : t("submit")}
+          <PendingLabel pending={pending} idle={t("submit")} busy={t("submitting")} />
         </Button>
       </form>
       {emailError === undefined ? null : (
@@ -228,7 +230,7 @@ export function RoleForm({
         disabled={pending}
         data-testid="role-submit"
       >
-        {pending ? t("saving") : t("save")}
+        <PendingLabel pending={pending} idle={t("save")} busy={t("saving")} surface="plain" />
       </Button>
       <FormError state={state} />
     </form>
@@ -277,7 +279,7 @@ function ConfirmForm({
           className={dangerClass}
           data-testid={`${testId}-confirm`}
         >
-          {pending ? pendingLabel : submit}
+          <PendingLabel pending={pending} idle={submit} busy={pendingLabel} surface="plain" />
         </Button>
         <FormError state={state} />
       </form>

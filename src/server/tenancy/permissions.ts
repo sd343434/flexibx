@@ -27,6 +27,15 @@ export const ACTIONS = [
   "billing.view",
   "billing.manage",
   "audit.view",
+  // AI Marketing Manager: see what automation does / configure, run and stop it.
+  "automation.view",
+  "automation.manage",
+  // Decide on an automation task that acts outside Flexibx or spends money.
+  "automation.approve",
+  // Advertising platforms: see accounts and results / plan campaigns / connect accounts.
+  "ads.view",
+  "ads.plan",
+  "ads.manage",
 ] as const;
 
 export type Action = (typeof ACTIONS)[number];
@@ -45,6 +54,7 @@ const EDITOR_ACTIONS = [
   "brand.edit",
   "content.create",
   "content.edit",
+  "automation.view",
 ] as const satisfies readonly Action[];
 
 const MANAGER_ACTIONS = [
@@ -52,6 +62,8 @@ const MANAGER_ACTIONS = [
   "content.approve",
   "content.publish",
   "campaign.manage",
+  "ads.view",
+  "ads.plan",
 ] as const satisfies readonly Action[];
 
 const ADMIN_ACTIONS = [
@@ -62,6 +74,9 @@ const ADMIN_ACTIONS = [
   "member.remove",
   "billing.view",
   "audit.view",
+  "automation.manage",
+  "automation.approve",
+  "ads.manage",
 ] as const satisfies readonly Action[];
 
 const OWNER_ACTIONS = [

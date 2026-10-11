@@ -5,6 +5,7 @@ import {
   type AllowedContentType,
   type SignedUpload,
   type SignedUploadOptions,
+  type StorageDeleteOptions,
   type StorageService,
   type StoredObjectData,
 } from "./storage";
@@ -40,10 +41,18 @@ export class MemoryStorageService implements StorageService {
     });
   }
 
-  delete(key: string): Promise<void> {
+  delete(key: string, options: StorageDeleteOptions = {}): Promise<void> {
     return settle(() => {
       assertValidKey(key);
+      options.signal?.throwIfAborted();
       this.objects.delete(key);
+    });
+  }
+
+  /** Always reachable (in process); honours an already-aborted signal like S3 would. */
+  checkAccess(options: { readonly signal?: AbortSignal } = {}): Promise<void> {
+    return settle(() => {
+      options.signal?.throwIfAborted();
     });
   }
 

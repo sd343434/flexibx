@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -73,7 +75,7 @@ export function SignInForm({ next, notice }: SignInFormProps) {
       </div>
 
       <Button type="submit" disabled={pending} data-testid="sign-in-submit">
-        {pending ? t("submitting") : t("submit")}
+        <PendingLabel pending={pending} idle={t("submit")} busy={t("submitting")} />
       </Button>
     </form>
   );

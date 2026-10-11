@@ -28,6 +28,9 @@ const SAMPLE_PARAMS = {
   keys: "extra",
   role: "Owner",
   count: 2,
+  // Integrations (accounts per connection).
+  total: 3,
+  selected: 1,
   date: "1 January 2027",
   email: "reem@example.com",
   inviter: "Reem",
@@ -45,12 +48,40 @@ const SAMPLE_PARAMS = {
   end: "31 January 2027",
   // Workspace dashboard.
   percent: "40%",
+  // AI Marketing Engine (Phase 4).
+  words: "cheap",
+  number: 2,
+  reason: "timeout",
+  days: 30,
+  cap: 300,
   amount: "1500.00",
   currency: "SAR",
   title: "Launch post",
   width: 1200,
   height: 800,
   size: "1.2 MB",
+  // Generated video retention.
+  hours: 48,
+  seconds: 8,
+  // Platform admin → Storage.
+  provider: "Wasabi",
+  fields: "region, bucket",
+  media: 3,
+  videos: 1,
+  // Video generation.
+  max: 2,
+  aspect: "Landscape 16:9",
+  resolution: "720p",
+  tier: "Draft",
+  // Advertising.
+  campaigns: 3,
+  adSets: 4,
+  ads: 6,
+  ctr: "1.2",
+  id: "120200000000",
+  // Execution and optimization.
+  median: "2.4%",
+  names: "Campaign A",
 };
 
 describe("locale configuration", () => {

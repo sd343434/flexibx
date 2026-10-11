@@ -31,6 +31,10 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
   const home = `/w/${workspace.slug}`;
   const sections = [
     "content",
+    "ai",
+    "autopilot",
+    "ads",
+    "integrations",
     "calendar",
     "campaigns",
     "brand",

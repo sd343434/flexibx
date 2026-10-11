@@ -10,7 +10,8 @@ import {
   assertUploadAllowed,
   buildWorkspaceKey,
   STORAGE_CATEGORIES,
-  type StorageService,
+  type StorageRouter,
+  type StorageWriteTarget,
 } from "../storage/storage";
 import type { TenantContext } from "../tenancy/context";
 import { assertCan } from "../tenancy/permissions";
@@ -60,12 +61,13 @@ export interface UploadedFile {
 /**
  * Stores an uploaded image. The size is checked before the bytes are read; the type and
  * dimensions come from the file's own header (`sniffImage`), never from the browser. The
- * object is written first and removed again if the database insert fails, so a row never
- * points at a missing object.
+ * object is written first and removed again if the database insert fails (including when
+ * the storage location changed meanwhile: CONFLICT), so a row never points at a missing
+ * object.
  */
 export async function uploadMedia(
   db: GuardedPrismaClient,
-  storage: StorageService,
+  target: StorageWriteTarget,
   ctx: TenantContext,
   file: UploadedFile,
   altText: string | null = null,
@@ -94,9 +96,13 @@ export async function uploadMedia(
   if (count >= MAX_MEDIA_ASSETS) throw limitReached("asset", MAX_MEDIA_ASSETS);
 
   const storageKey = buildWorkspaceKey(ctx.workspaceId, "content-media", image.contentType);
+  const { storage, provider } = target;
   await storage.put(storageKey, bytes, { contentType: image.contentType });
   try {
     return await db.$transaction(async (tx) => {
+      // The provider's location must still be where the object was just written; the
+      // settings row stays share-locked until this insert commits (no change in between).
+      await target.confirm(tx);
       const created = await tx.mediaAsset.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -104,6 +110,7 @@ export async function uploadMedia(
           contentType: image.contentType,
           sizeBytes: bytes.byteLength,
           storageKey,
+          storageProvider: provider,
           width: image.width,
           height: image.height,
           altText,
@@ -157,17 +164,29 @@ export async function updateMediaAltText(
 
 /**
  * Deletes an asset: the row (and its content links) in one transaction, then the stored
- * object. If removing the object fails it is logged — an unreachable orphan, never a
- * row pointing at nothing.
+ * object. The object's provider is resolved FIRST: if it is unavailable (not configured),
+ * nothing is deleted and SERVICE_UNAVAILABLE is returned, so the row and its metadata stay
+ * for a later retry instead of leaving an untracked object behind. If removing the object
+ * fails after the row is gone it is logged — an unreachable orphan, never a row pointing
+ * at nothing.
  */
 export async function deleteMedia(
   db: GuardedPrismaClient,
-  storage: StorageService,
+  storage: StorageRouter,
   ctx: TenantContext,
   assetId: string,
   logger?: Logger,
 ): Promise<{ readonly assetId: string }> {
   assertCan(ctx, "content.edit");
+  const located = await db.mediaAsset.findFirst({
+    where: { workspaceId: ctx.workspaceId, id: assetId },
+    select: { storageKey: true, storageProvider: true },
+  });
+  if (located === null) throw notFound("asset");
+  assertKeyBelongsToWorkspace(located.storageKey, ctx.workspaceId);
+  // The provider the object was written to, whatever is configured for new uploads.
+  // Throws (row kept) when that provider cannot be used right now.
+  const service = await storage.forProvider(located.storageProvider);
   const storageKey = await db.$transaction(async (tx) => {
     const existing = await tx.mediaAsset.findFirst({
       where: { workspaceId: ctx.workspaceId, id: assetId },
@@ -183,8 +202,7 @@ export async function deleteMedia(
     });
     return existing.storageKey;
   });
-  assertKeyBelongsToWorkspace(storageKey, ctx.workspaceId);
-  await storage.delete(storageKey).catch((error: unknown) => {
+  await service.delete(storageKey).catch((error: unknown) => {
     logger?.error({ err: error, assetId }, "Could not remove a deleted asset's stored object");
   });
   return { assetId };
@@ -196,18 +214,19 @@ export async function deleteMedia(
  */
 export async function readMedia(
   db: Db,
-  storage: StorageService,
+  storage: StorageRouter,
   ctx: TenantContext,
   assetId: string,
 ): Promise<{ readonly body: Uint8Array; readonly contentType: string; readonly filename: string }> {
   assertCan(ctx, "content.view");
   const asset = await db.mediaAsset.findFirst({
     where: { workspaceId: ctx.workspaceId, id: assetId },
-    select: { storageKey: true, contentType: true, filename: true },
+    select: { storageKey: true, storageProvider: true, contentType: true, filename: true },
   });
   if (asset === null) throw notFound("asset");
   assertKeyBelongsToWorkspace(asset.storageKey, ctx.workspaceId);
-  const object = await storage.getObject(asset.storageKey);
+  const service = await storage.forProvider(asset.storageProvider);
+  const object = await service.getObject(asset.storageKey);
   if (object === null) throw notFound("asset");
   return { body: object.body, contentType: asset.contentType, filename: asset.filename };
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -90,7 +92,7 @@ export function ResetPasswordForm() {
         )}
       </div>
       <Button type="submit" disabled={pending} data-testid="reset-password-submit">
-        {pending ? t("submitting") : t("submit")}
+        <PendingLabel pending={pending} idle={t("submit")} busy={t("submitting")} />
       </Button>
     </form>
   );

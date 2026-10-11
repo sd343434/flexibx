@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bot,
   CalendarDays,
   FileText,
   History,
@@ -8,6 +9,9 @@ import {
   Images,
   Megaphone,
   Palette,
+  PlugZap,
+  Sparkles,
+  Target,
   Users,
 } from "lucide-react";
 
@@ -15,7 +19,18 @@ import { Link, usePathname } from "@/i18n/navigation";
 
 export interface ShellNavItem {
   readonly id:
-    "home" | "content" | "calendar" | "campaigns" | "brand" | "media" | "activity" | "members";
+    | "home"
+    | "content"
+    | "ai"
+    | "autopilot"
+    | "ads"
+    | "integrations"
+    | "calendar"
+    | "campaigns"
+    | "brand"
+    | "media"
+    | "activity"
+    | "members";
   readonly href: string;
   readonly label: string;
 }
@@ -23,6 +38,10 @@ export interface ShellNavItem {
 const ICONS = {
   home: House,
   content: FileText,
+  ai: Sparkles,
+  autopilot: Bot,
+  ads: Target,
+  integrations: PlugZap,
   calendar: CalendarDays,
   campaigns: Megaphone,
   brand: Palette,

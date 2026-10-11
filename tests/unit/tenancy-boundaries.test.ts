@@ -54,10 +54,56 @@ describe("tenancy boundaries", () => {
       (path) => path !== "src/server/db/client.ts" && /\bgetSystemDb\s*\(/.test(read(path)),
     );
     expect(users.sort()).toEqual([
+      // Platform admin: the admin flag lookup, platform-wide storage settings and
+      // per-provider object counts (no workspace data is read or written).
+      "src/server/admin/platform-admin.ts",
+      "src/server/admin/storage-admin-actions.ts",
+      // Advertising OAuth callback: looks the single-use state up by its hash (the
+      // redirect carries no workspace); every write goes through the guarded client.
+      "src/server/ads/connections.ts",
       "src/server/auth/auth.ts",
       "src/server/health/health-service.ts",
+      // Storage router: reads the platform storage settings singleton only.
+      "src/server/storage/providers.ts",
       "src/server/tenancy/access.ts",
       "src/server/tenancy/invitation-acceptance.ts",
+      // Generated video retention job: cross-workspace candidate selection only; every
+      // per-video read/write goes through the guarded client (retention-job.ts).
+      "src/server/videos/retention-runtime.ts",
+      // WhatsApp webhook: a signed notification carries no session; the WABA is resolved
+      // to the workspaces that connected and selected it, and each event row is written
+      // with that explicit workspace id (deduplicated per workspace).
+      "src/server/whatsapp/webhook-handler.ts",
     ]);
+  });
+
+  it("never sets the platform admin flag from application code", () => {
+    // Platform administrators are granted by an operator directly in the database
+    // (docs/ARCHITECTURE.md). Every mention of the flag is a reviewed read; nothing writes it.
+    const scanned = [...files, "prisma/seed.ts"];
+    const mentions = scanned.filter((path) => /isPlatformAdmin|is_platform_admin/.test(read(path)));
+    expect(mentions.sort()).toEqual([
+      // Read-only lookup: `select: { isPlatformAdmin: true, emailVerified: true }`.
+      "src/server/admin/platform-admin.ts",
+      // Better Auth field declaration with `input: false` (requests cannot set it).
+      "src/server/auth/auth-config.ts",
+      // Doc comment only.
+      "src/server/auth/session.ts",
+    ]);
+    const writes = scanned.filter((path) =>
+      /(data|create|update)\s*:\s*\{[^}]*isPlatformAdmin|is_platform_admin\s*=/.test(
+        // Comments may document the operator procedure; only code counts.
+        read(path).replace(/^\s*(\/\/|\*|\/\*).*$/gm, ""),
+      ),
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it("keeps the bounded (also unguarded) retention pool to the retention runtime", () => {
+    const users = files.filter(
+      (path) =>
+        path !== "src/server/db/client.ts" && /\bgetBoundedRetentionDb\s*\(/.test(read(path)),
+    );
+    expect(users).toEqual(["src/server/videos/retention-runtime.ts"]);
   });
 });

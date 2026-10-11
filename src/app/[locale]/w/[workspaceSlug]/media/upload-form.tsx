@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -55,7 +57,11 @@ export function UploadForm({ slug }: { readonly slug: string }) {
       </div>
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <Button type="submit" disabled={pending} data-testid="media-upload-submit">
-          {pending ? t("marketing.common.working") : t("marketing.media.upload")}
+          <PendingLabel
+            pending={pending}
+            idle={t("marketing.media.upload")}
+            busy={t("marketing.common.working")}
+          />
         </Button>
         {state !== null && "done" in state ? (
           <p role="status" className="text-sm text-muted-foreground" data-testid="form-saved">

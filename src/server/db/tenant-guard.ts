@@ -25,6 +25,33 @@ export const TENANT_MODELS = {
   ContentItem: { workspaceId: "required", appendOnly: false },
   MediaAsset: { workspaceId: "required", appendOnly: false },
   ContentItemAsset: { workspaceId: "required", appendOnly: false },
+  // AI Marketing Engine (Phase 4).
+  AiGeneration: { workspaceId: "required", appendOnly: false },
+  // Generated video retention.
+  GeneratedVideo: { workspaceId: "required", appendOnly: false },
+  GeneratedVideoFile: { workspaceId: "required", appendOnly: false },
+  // Generative video core (Phase 4).
+  VideoGenerationJob: { workspaceId: "required", appendOnly: false },
+  VideoGenerationAttempt: { workspaceId: "required", appendOnly: false },
+  UsageLedgerEntry: { workspaceId: "required", appendOnly: true },
+  // Orchestration core (AI Marketing Manager).
+  AutomationPolicy: { workspaceId: "required", appendOnly: false },
+  AgentRun: { workspaceId: "required", appendOnly: false },
+  AgentTask: { workspaceId: "required", appendOnly: false },
+  AgentTaskApproval: { workspaceId: "required", appendOnly: true },
+  AdOAuthState: { workspaceId: "required", appendOnly: false },
+  AdConnection: { workspaceId: "required", appendOnly: false },
+  AdAccount: { workspaceId: "required", appendOnly: false },
+  AdPlan: { workspaceId: "required", appendOnly: false },
+  // WhatsApp Business (messaging channel on top of the advertising connections).
+  WhatsAppSnapshot: { workspaceId: "required", appendOnly: false },
+  WhatsAppWebhookEvent: { workspaceId: "required", appendOnly: true },
+  // Advertising execution and WhatsApp messaging.
+  AdExecutionStep: { workspaceId: "required", appendOnly: false },
+  AdSpendLimit: { workspaceId: "required", appendOnly: false },
+  WhatsAppContact: { workspaceId: "required", appendOnly: false },
+  WhatsAppMessage: { workspaceId: "required", appendOnly: false },
+  WhatsAppConsentEvent: { workspaceId: "required", appendOnly: true },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -51,6 +78,27 @@ export const TENANT_ROOT_RELATIONS = [
   "contentItems",
   "mediaAssets",
   "contentItemAssets",
+  "aiGenerations",
+  "generatedVideos",
+  "generatedVideoFiles",
+  "videoJobs",
+  "videoAttempts",
+  "usageLedgerEntries",
+  "automationPolicy",
+  "agentRuns",
+  "agentTasks",
+  "agentTaskApprovals",
+  "adOAuthStates",
+  "adConnections",
+  "adAccounts",
+  "adPlans",
+  "whatsappSnapshots",
+  "whatsappEvents",
+  "adExecutionSteps",
+  "adSpendLimits",
+  "whatsappContacts",
+  "whatsappMessages",
+  "whatsappConsentEvents",
 ] as const;
 
 /**
@@ -79,6 +127,20 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "invitationsCreated",
     "contentCreated",
     "mediaUploaded",
+    "aiGenerations",
+    "generatedVideos",
+    "videoJobs",
+    "automationDelegate",
+    "agentRunsRequested",
+    "agentTaskApprovals",
+    "adOAuthStates",
+    "adConnections",
+    "adPlansCreated",
+    "adSpendLimitsSet",
+    "whatsappContactsAdded",
+    "whatsappMessagesRequested",
+    "whatsappMessagesResolved",
+    "whatsappConsentActions",
   ],
 };
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { PendingLabel } from "@/components/common/loaders";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useActionState } from "react";
 
@@ -80,7 +82,7 @@ export function EmailRequestForm({
         )}
       </div>
       <Button type="submit" disabled={pending} data-testid={`${kind}-submit`}>
-        {pending ? submitting : submit}
+        <PendingLabel pending={pending} idle={submit} busy={submitting} />
       </Button>
     </form>
   );

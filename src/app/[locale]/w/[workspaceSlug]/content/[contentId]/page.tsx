@@ -14,9 +14,11 @@ import { Button } from "@/components/ui/button";
 import { Link } from "@/i18n/navigation";
 import { cn } from "@/lib/utils";
 import { contentMetadata } from "@/server/marketing/content-service";
+import { getContentAssist } from "@/server/ai/ai-queries";
 import { getContentPage } from "@/server/marketing/marketing-queries";
 import { utcToZonedLocal } from "@/server/marketing/time";
 
+import { AssistPanel } from "../../ai/assist-panel";
 import { contentFields } from "../../form-fields";
 import {
   submitContent,
@@ -28,8 +30,10 @@ import { guardPage, openWorkspacePage, type WorkspaceRouteParams } from "../../p
 
 export default async function ContentRoute({
   params,
+  searchParams,
 }: {
   readonly params: Promise<WorkspaceRouteParams & { readonly contentId: string }>;
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { locale, workspace } = await openWorkspacePage(params);
   const { contentId } = await params;
@@ -46,6 +50,11 @@ export default async function ContentRoute({
   const plannedLocal =
     content.scheduledAt === null ? "" : utcToZonedLocal(content.scheduledAt, timeZone);
   const slug = workspace.slug;
+  const aiParam = (await searchParams).ai;
+  // AI assistance: drafts the person may edit (content.edit), checked again on the server.
+  const assist = content.canEdit
+    ? await getContentAssist(slug, content.id, typeof aiParam === "string" ? aiParam : undefined)
+    : null;
 
   return (
     <div className="space-y-8">
@@ -139,6 +148,9 @@ export default async function ContentRoute({
       {content.canEdit && data.options !== null ? (
         <Card title={t("content.editTitle")}>
           <EntityForm
+            // Remount after any change (e.g. an AI suggestion applied on this page), so
+            // the uncontrolled inputs show the stored values.
+            key={content.updatedAt.toISOString()}
             action={submitContent.bind(null, slug, locale, content.id)}
             fields={contentFields(t, content, data.options, timeZone)}
             submitLabel={t("content.submitUpdate")}
@@ -183,6 +195,10 @@ export default async function ContentRoute({
             )}
           </dl>
         </Card>
+      )}
+
+      {assist === null ? null : (
+        <AssistPanel locale={locale} slug={slug} contentId={content.id} data={assist} />
       )}
 
       {content.assets.length === 0 ? null : (

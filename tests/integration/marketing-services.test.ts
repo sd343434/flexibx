@@ -56,6 +56,7 @@ import {
   updatePillar,
 } from "@/server/marketing/pillar-service";
 import { MemoryStorageService } from "@/server/storage/memory-storage";
+import type { StorageRouter, StorageService, StorageWriteTarget } from "@/server/storage/storage";
 import type { TenantContext } from "@/server/tenancy/context";
 
 import { createTenant, createTestDb, resetDatabase } from "./helpers";
@@ -71,6 +72,16 @@ afterAll(async () => {
 });
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** These tests use one store: new objects are recorded as LEGACY_S3 and every provider resolves to it. */
+const legacy = (storage: StorageService): StorageWriteTarget => ({
+  provider: "LEGACY_S3",
+  storage,
+  confirm: () => Promise.resolve(),
+});
+const onProvider = (storage: StorageService): StorageRouter => ({
+  forProvider: () => Promise.resolve(storage),
+});
 
 async function rejection(promise: Promise<unknown>): Promise<AppError> {
   const error: unknown = await promise.then(
@@ -131,7 +142,7 @@ async function seedWorkspace(ctx: TenantContext) {
     ctx,
     campaignFields({ audienceId, goalIds: [goalId], pillarIds: [pillarId] }),
   );
-  const { assetId } = await uploadMedia(db, storage, ctx, pngFile());
+  const { assetId } = await uploadMedia(db, legacy(storage), ctx, pngFile());
   const { contentId } = await createContent(
     db,
     ctx,
@@ -397,8 +408,8 @@ describe("tenant isolation", () => {
         () => rescheduleContent(db, other, { contentId: s.contentId, scheduledAt: FUTURE }),
       ],
       ["updateMediaAltText", () => updateMediaAltText(db, other, s.assetId, "x")],
-      ["deleteMedia", () => deleteMedia(db, storage, other, s.assetId)],
-      ["readMedia", () => readMedia(db, storage, other, s.assetId)],
+      ["deleteMedia", () => deleteMedia(db, onProvider(storage), other, s.assetId)],
+      ["readMedia", () => readMedia(db, onProvider(storage), other, s.assetId)],
     ];
     for (const [name, attempt] of attempts) {
       const error = await rejection(attempt());
@@ -611,7 +622,7 @@ describe("role matrix", () => {
       editContent: await ok(
         updateContent(db, ctx, s.contentId, contentFields({ title: "Edited" })),
       ),
-      upload: await ok(uploadMedia(db, s.storage, ctx, pngFile())),
+      upload: await ok(uploadMedia(db, legacy(s.storage), ctx, pngFile())),
       editMedia: await ok(updateMediaAltText(db, ctx, s.assetId, "alt")),
       calendar: await ok(getCalendar(db, ctx, { view: "week" })),
       activity: await ok(listActivity(db, ctx)),
@@ -1054,7 +1065,7 @@ describe("media", () => {
     const storage = new MemoryStorageService();
     const { assetId } = await uploadMedia(
       db,
-      storage,
+      legacy(storage),
       ctx,
       pngFile("../../evil‮.png", png(640, 480)),
       "Cup",
@@ -1072,7 +1083,7 @@ describe("media", () => {
       new RegExp(`^workspaces/${ctx.workspaceId}/content-media/[0-9a-f-]{36}\\.png$`),
     );
     expect(row.storageKey).not.toContain("evil");
-    const served = await readMedia(db, storage, ctx, assetId);
+    const served = await readMedia(db, onProvider(storage), ctx, assetId);
     expect(served.contentType).toBe("image/png");
     expect(served.body.byteLength).toBe(40);
   });
@@ -1082,12 +1093,12 @@ describe("media", () => {
     const storage = new MemoryStorageService();
     const svg = new Uint8Array(Buffer.from("<svg onload=alert(1)>"));
     await expectCode(
-      uploadMedia(db, storage, ctx, pngFile("x.png", svg)),
+      uploadMedia(db, legacy(storage), ctx, pngFile("x.png", svg)),
       "UNSUPPORTED_MEDIA_TYPE",
       "image_invalid",
     );
     await expectCode(
-      uploadMedia(db, storage, ctx, pngFile("x.png", new Uint8Array())),
+      uploadMedia(db, legacy(storage), ctx, pngFile("x.png", new Uint8Array())),
       "VALIDATION_FAILED",
       "file_required",
     );
@@ -1100,7 +1111,7 @@ describe("media", () => {
         return Promise.resolve(png());
       },
     };
-    await expectCode(uploadMedia(db, storage, ctx, huge), "PAYLOAD_TOO_LARGE");
+    await expectCode(uploadMedia(db, legacy(storage), ctx, huge), "PAYLOAD_TOO_LARGE");
     expect(read).toBe(false);
     expect(storage.objects.size).toBe(0);
     expect(await system.mediaAsset.count()).toBe(0);
@@ -1114,7 +1125,7 @@ describe("media", () => {
       data: { deletedAt: new Date() },
     });
     const broken: TenantContext = { ...ctx, workspaceId: crypto.randomUUID() };
-    await expect(uploadMedia(db, storage, broken, pngFile())).rejects.toThrow();
+    await expect(uploadMedia(db, legacy(storage), broken, pngFile())).rejects.toThrow();
     expect(storage.objects.size).toBe(0);
   });
 
@@ -1122,10 +1133,10 @@ describe("media", () => {
     const ctx = await createTenant(system);
     const s = await seedWorkspace(ctx);
     expect((await getContent(db, ctx, s.contentId)).assets).toHaveLength(1);
-    await deleteMedia(db, s.storage, ctx, s.assetId);
+    await deleteMedia(db, onProvider(s.storage), ctx, s.assetId);
     expect((await getContent(db, ctx, s.contentId)).assets).toHaveLength(0);
     expect(s.storage.objects.size).toBe(0);
-    await expectCode(readMedia(db, s.storage, ctx, s.assetId), "NOT_FOUND");
+    await expectCode(readMedia(db, onProvider(s.storage), ctx, s.assetId), "NOT_FOUND");
     expect(await auditActions(ctx)).toContain("asset.deleted");
   });
 });

@@ -46,6 +46,20 @@ export interface RateLimitRule {
  * - change-password: 5 per 15 min per signed-in user (current-password guessing).
  * - invitation-accept: 20 per 15 min per client (tokens are 256-bit; bounds lookups).
  * - invitation-create: 50 per hour per inviting user (deferred from Step 7).
+ *
+ * STATUS: APPROVED — HUMAN DECISION (Phase 4). AI generation (the server action that
+ * calls the AI provider; using a stored suggestion is not limited here):
+ * - ai-generate: 20 per 10 min per signed-in user.
+ * - ai-generate-workspace: 100 per hour per workspace (subject = workspace id), shared
+ *   by all its members. A database-backed cap of 300 generations per workspace per day
+ *   applies on top (src/server/ai/ai-service.ts).
+ *
+ * STATUS: APPROVED — HUMAN DECISION (2026-10-09). Internal video-retention endpoint
+ * (POST/GET /api/internal/video-retention, scheduler and monitoring calls combined):
+ * - video-retention: 12 per 10 min, one shared subject for all callers holding the
+ *   bearer secret. Consumed only after the secret is verified, so unauthenticated
+ *   requests never use up the scheduler's quota. The run's advisory lock still keeps
+ *   one run at a time; this limit only bounds how often the endpoint can be hit.
  */
 export const RATE_LIMIT_RULES = {
   "sign-in": { scope: "ip", window: 60, max: 10 },
@@ -60,6 +74,9 @@ export const RATE_LIMIT_RULES = {
   "change-password": { scope: "subject", window: 900, max: 5 },
   "invitation-accept": { scope: "ip", window: 900, max: 20 },
   "invitation-create": { scope: "subject", window: 3600, max: 50 },
+  "ai-generate": { scope: "subject", window: 600, max: 20 },
+  "ai-generate-workspace": { scope: "subject", window: 3600, max: 100 },
+  "video-retention": { scope: "subject", window: 600, max: 12 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMIT_RULES;

@@ -271,28 +271,39 @@ export async function createContent(
   fields: ContentFields,
 ): Promise<{ readonly contentId: string }> {
   assertCan(ctx, "content.create");
-  return db.$transaction(async (tx) => {
-    const zone = await workspaceTimeZone(tx, ctx);
-    const scheduledAt = toInstant(fields.plannedAt, zone, "plannedAt");
-    const links = await resolveContentLinks(tx, ctx, fields);
-    const created = await tx.contentItem.create({
-      data: {
-        workspaceId: ctx.workspaceId,
-        ...toData(fields, links, scheduledAt),
-        status: "DRAFT",
-        createdByUserId: ctx.userId,
-      },
-      select: { id: true },
-    });
-    await replaceAssetLinks(tx, ctx, created.id, links.assetIds);
-    await recordAudit(tx, ctx, {
-      action: "content.created",
-      entityType: "content",
-      entityId: created.id,
-      metadata: { type: fields.type, assets: links.assetIds.length },
-    });
-    return { contentId: created.id };
+  return db.$transaction((tx) => createContentIn(tx, ctx, fields));
+}
+
+/**
+ * `createContent` inside a caller's transaction (used when creating content must be
+ * atomic with another change, e.g. using an AI suggestion). Same checks and audit.
+ */
+export async function createContentIn(
+  tx: GuardedTransactionClient,
+  ctx: TenantContext,
+  fields: ContentFields,
+): Promise<{ readonly contentId: string }> {
+  assertCan(ctx, "content.create");
+  const zone = await workspaceTimeZone(tx, ctx);
+  const scheduledAt = toInstant(fields.plannedAt, zone, "plannedAt");
+  const links = await resolveContentLinks(tx, ctx, fields);
+  const created = await tx.contentItem.create({
+    data: {
+      workspaceId: ctx.workspaceId,
+      ...toData(fields, links, scheduledAt),
+      status: "DRAFT",
+      createdByUserId: ctx.userId,
+    },
+    select: { id: true },
   });
+  await replaceAssetLinks(tx, ctx, created.id, links.assetIds);
+  await recordAudit(tx, ctx, {
+    action: "content.created",
+    entityType: "content",
+    entityId: created.id,
+    metadata: { type: fields.type, assets: links.assetIds.length },
+  });
+  return { contentId: created.id };
 }
 
 /** Edits a draft. Content past DRAFT must be moved back (withdraw/reopen) first. */
@@ -303,55 +314,64 @@ export async function updateContent(
   fields: ContentFields,
 ): Promise<{ readonly contentId: string }> {
   assertCan(ctx, "content.edit");
-  return db.$transaction(async (tx) => {
-    const existing = await tx.contentItem.findFirst({
-      where: { workspaceId: ctx.workspaceId, id: contentId },
-      select: {
-        title: true,
-        body: true,
-        type: true,
-        status: true,
-        campaignId: true,
-        pillarId: true,
-        audienceId: true,
-        goalId: true,
-        scheduledAt: true,
-        notes: true,
-        metadata: true,
-        assets: { orderBy: { position: "asc" }, select: { mediaAssetId: true } },
-      },
-    });
-    if (existing === null) throw notFound("content");
-    if (!isContentEditable(existing.status)) {
-      throw conflict("content", "content_locked", { status: existing.status });
-    }
-    const zone = await workspaceTimeZone(tx, ctx);
-    const scheduledAt = toInstant(fields.plannedAt, zone, "plannedAt");
-    const links = await resolveContentLinks(tx, ctx, fields, existing);
-    const data = toData(fields, links, scheduledAt);
-    const changed = changedFields(
-      { ...existing, metadata: contentMetadata(existing.metadata) },
-      data,
-    );
-    const currentAssets = existing.assets.map((link) => link.mediaAssetId);
-    const assetsChanged = currentAssets.join() !== links.assetIds.join();
-    if (assetsChanged) changed.push("assetIds");
-    if (changed.length === 0) return { contentId };
+  return db.$transaction((tx) => updateContentIn(tx, ctx, contentId, fields));
+}
 
-    const { count } = await tx.contentItem.updateMany({
-      where: { workspaceId: ctx.workspaceId, id: contentId, status: "DRAFT" },
-      data,
-    });
-    if (count === 0) throw conflict("content", "stale_status", { status: existing.status });
-    if (assetsChanged) await replaceAssetLinks(tx, ctx, contentId, links.assetIds);
-    await recordAudit(tx, ctx, {
-      action: "content.updated",
-      entityType: "content",
-      entityId: contentId,
-      metadata: { fields: changed },
-    });
-    return { contentId };
+/** `updateContent` inside a caller's transaction. Same checks and audit. */
+export async function updateContentIn(
+  tx: GuardedTransactionClient,
+  ctx: TenantContext,
+  contentId: string,
+  fields: ContentFields,
+): Promise<{ readonly contentId: string }> {
+  assertCan(ctx, "content.edit");
+  const existing = await tx.contentItem.findFirst({
+    where: { workspaceId: ctx.workspaceId, id: contentId },
+    select: {
+      title: true,
+      body: true,
+      type: true,
+      status: true,
+      campaignId: true,
+      pillarId: true,
+      audienceId: true,
+      goalId: true,
+      scheduledAt: true,
+      notes: true,
+      metadata: true,
+      assets: { orderBy: { position: "asc" }, select: { mediaAssetId: true } },
+    },
   });
+  if (existing === null) throw notFound("content");
+  if (!isContentEditable(existing.status)) {
+    throw conflict("content", "content_locked", { status: existing.status });
+  }
+  const zone = await workspaceTimeZone(tx, ctx);
+  const scheduledAt = toInstant(fields.plannedAt, zone, "plannedAt");
+  const links = await resolveContentLinks(tx, ctx, fields, existing);
+  const data = toData(fields, links, scheduledAt);
+  const changed = changedFields(
+    { ...existing, metadata: contentMetadata(existing.metadata) },
+    data,
+  );
+  const currentAssets = existing.assets.map((link) => link.mediaAssetId);
+  const assetsChanged = currentAssets.join() !== links.assetIds.join();
+  if (assetsChanged) changed.push("assetIds");
+  if (changed.length === 0) return { contentId };
+
+  const { count } = await tx.contentItem.updateMany({
+    where: { workspaceId: ctx.workspaceId, id: contentId, status: "DRAFT" },
+    data,
+  });
+  if (count === 0) throw conflict("content", "stale_status", { status: existing.status });
+  if (assetsChanged) await replaceAssetLinks(tx, ctx, contentId, links.assetIds);
+  await recordAudit(tx, ctx, {
+    action: "content.updated",
+    entityType: "content",
+    entityId: contentId,
+    metadata: { fields: changed },
+  });
+  return { contentId };
 }
 
 /**

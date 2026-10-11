@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { getDb } from "../db/client";
 import { withAction } from "../http/action-handler";
-import { getStorage } from "../storage";
+import { getStorageRouter } from "../storage/providers";
 import { requireWorkspaceAccess } from "../tenancy/access";
 
 import { createAudience, deleteAudience, updateAudience } from "./audience-service";
@@ -218,7 +218,8 @@ export const uploadMediaAction = withAction({
     const ctx = await requireWorkspaceAccess(slug, "content.create");
     return uploadMedia(
       getDb(),
-      getStorage(),
+      // Where new objects go now (platform admin setting); recorded on the row.
+      await getStorageRouter().writeTarget(),
       ctx,
       {
         name: file.name,
@@ -245,6 +246,6 @@ export const deleteMediaAction = withAction({
   input: deleteMediaInputSchema,
   handler: async ({ slug, assetId }, { logger }) => {
     const ctx = await requireWorkspaceAccess(slug, "content.edit");
-    return deleteMedia(getDb(), getStorage(), ctx, assetId, logger);
+    return deleteMedia(getDb(), getStorageRouter(), ctx, assetId, logger);
   },
 });

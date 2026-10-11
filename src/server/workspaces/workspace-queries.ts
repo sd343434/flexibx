@@ -19,6 +19,10 @@ import { getWorkspace } from "./workspace-service";
 /** Navigation entries the role may open (pages re-check on the server). */
 export interface ShellNavAccess {
   readonly content: boolean;
+  readonly ai: boolean;
+  readonly autopilot: boolean;
+  readonly ads: boolean;
+  readonly integrations: boolean;
   readonly calendar: boolean;
   readonly campaigns: boolean;
   readonly brand: boolean;
@@ -30,6 +34,10 @@ export interface ShellNavAccess {
 export function shellNavAccess(role: Role): ShellNavAccess {
   return {
     content: can(role, "content.view"),
+    ai: can(role, "content.create"),
+    autopilot: can(role, "automation.view"),
+    ads: can(role, "ads.view"),
+    integrations: can(role, "ads.view"),
     calendar: can(role, "content.view"),
     campaigns: can(role, "campaign.view"),
     brand: can(role, "brand.view"),

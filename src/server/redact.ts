@@ -8,7 +8,7 @@ export const REDACTED = "[REDACTED]";
  * `tokenUsage` stay visible for AI cost tracking.
  */
 const SECRET_KEY_PATTERN =
-  /pass(word|wd|phrase)?|secret|token$|authorization|cookie|api[-_]?key|private[-_]?key|credential|database[-_]?url|connection[-_]?string|signature|encryption[-_]?key/i;
+  /pass(word|wd|phrase)?|secret|token$|authorization|cookie|api[-_]?key|private[-_]?key|credential|database[-_]?url|connection[-_]?string|signature|encryption[-_]?key|ciphertext/i;
 
 /** `scheme://user:password@host` → `scheme://user:[REDACTED]@host` */
 const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/[^:/?#\s@]+):([^@/\s]+)@/gi;
@@ -17,12 +17,15 @@ const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/[^:/?#\s@]+):([^@/\s]+)@
 const BEARER_PATTERN = /\b(bearer)\s+[a-z0-9._~+/=-]+/gi;
 
 /**
- * Any URL that can carry a one-time invitation token: the invite page itself
- * (`/ar/invite/<token>`) and pages whose `next` parameter points at it
- * (`/ar/sign-in?next=%2Far%2Finvite%2F<token>`). next.config.ts uses this to keep such
- * URLs out of the development request log.
+ * Any URL that can carry a one-time secret: the invite page itself
+ * (`/ar/invite/<token>`), pages whose `next` parameter points at it
+ * (`/ar/sign-in?next=%2Far%2Finvite%2F<token>`), advertising OAuth callbacks
+ * (`/api/integrations/<platform>/callback?code=…&state=…`) and webhook endpoints
+ * (`/api/integrations/whatsapp/webhook?hub.verify_token=…`). next.config.ts uses this to
+ * keep such URLs out of the development request log.
  */
-export const INVITATION_URL_PATTERN = /(?:\/|%2F)invite(?:\/|%2F)/i;
+export const INVITATION_URL_PATTERN =
+  /(?:\/|%2F)invite(?:\/|%2F)|^\/api\/integrations\/[a-z]+\/(?:callback|webhook)(?:[?#]|$)/i;
 
 /** `/ar/invite/<one-time token>` → `/ar/invite/[REDACTED]`, also URL-encoded. */
 const INVITE_TOKEN_PATTERN = /((?:\/|%2F)invite(?:\/|%2F))[A-Za-z0-9_-]+/gi;

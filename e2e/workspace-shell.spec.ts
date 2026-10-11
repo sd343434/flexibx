@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Response } from "@playwright/test";
 
 import { expect, newClientPage, signUpVerifiedAndSignIn, test } from "./fixtures";
 
@@ -43,6 +43,26 @@ for (const { locale, dir, signOut } of [
     await page.getByTestId(`switch-to-${alpha}`).click();
     await expect(page).toHaveURL(`/${locale}/w/${alpha}`);
     await expect(page.getByTestId("workspace-name")).toHaveText(`Alpha ${id}`);
+
+    // A router prefetch of another workspace is not a visit (regression: background
+    // prefetches of the previous workspace's links used to set the last-workspace cookie
+    // after the switch, so the redirect below failed intermittently). Sent explicitly, and
+    // judged on the prefetch's own responses, so the check does not depend on timing.
+    await page.waitForLoadState("networkidle");
+    const prefetchCookies: string[] = [];
+    const onResponse = async (response: Response) => {
+      if (!response.url().includes(`/w/${beta}/`)) return;
+      prefetchCookies.push((await response.headerValue("set-cookie")) ?? "");
+    };
+    page.on("response", onResponse);
+    const status = await page.evaluate(async (url) => {
+      const response = await fetch(url, { headers: { rsc: "1", "next-router-prefetch": "1" } });
+      return response.status;
+    }, `/${locale}/w/${beta}/content`);
+    page.off("response", onResponse);
+    expect(status).toBe(200);
+    expect(prefetchCookies.length).toBeGreaterThan(0);
+    expect(prefetchCookies.join("\n")).not.toContain(`last_workspace=${beta}`);
 
     // /workspaces now goes to the last workspace; ?list=1 lists both.
     await page.goto(`/${locale}/workspaces`);

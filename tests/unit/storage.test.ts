@@ -1,3 +1,6 @@
+import { createServer } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
+
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/server/errors/app-error";
@@ -104,6 +107,45 @@ describe("MemoryStorageService", () => {
     await expect(
       storage.put("../../x", new Uint8Array(), { contentType: "image/png" }),
     ).rejects.toThrow(AppError);
+  });
+
+  it("does not delete when the request was already aborted", async () => {
+    const storage = new MemoryStorageService();
+    const key = buildWorkspaceKey(WS, "logos", "image/png");
+    await storage.put(key, new Uint8Array([1]), { contentType: "image/png" });
+    await expect(storage.delete(key, { signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(storage.objects.has(key)).toBe(true);
+  });
+});
+
+describe("S3StorageService delete abort", () => {
+  it("aborts a delete request that storage does not answer", async () => {
+    // A local endpoint that accepts the request and never answers (no real storage).
+    const sockets = new Set<Socket>();
+    const server = createServer(() => undefined);
+    server.on("connection", (socket) => sockets.add(socket));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const hung = new S3StorageService({
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "flexibx-test",
+      S3_ACCESS_KEY_ID: "test-access-key",
+      S3_SECRET_ACCESS_KEY: "test-secret-key",
+      S3_FORCE_PATH_STYLE: true,
+      S3_ENDPOINT: `http://127.0.0.1:${port}`,
+      S3_PUBLIC_BASE_URL: undefined,
+    });
+    try {
+      const started = performance.now();
+      const deleting = hung.delete(buildWorkspaceKey(WS, "generated-videos", "video/mp4"), {
+        signal: AbortSignal.timeout(100),
+      });
+      await expect(deleting).rejects.toMatchObject({ name: "AbortError" });
+      expect(performance.now() - started).toBeLessThan(5_000);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

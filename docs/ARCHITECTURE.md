@@ -33,7 +33,7 @@ src/
 │  ├─ tenancy/          Roles, permission matrix, TenantContext
 │  ├─ audit/            Append-only audit log
 │  ├─ workspaces/       Workspace service (soft delete), member repository
-│  ├─ storage/          StorageService interface, S3 + memory adapters
+│  ├─ storage/          StorageService interface, S3 / Wasabi / memory adapters, provider router
 │  └─ health/           Dependency health checks
 └─ generated/prisma/    Generated Prisma client (gitignored)
 ```
@@ -509,3 +509,102 @@ phases must keep are:
   storage objects after a failed post-commit delete, the soft 404 inside a member's
   workspace, and `SCHEDULED` being planning-only are accepted as documented in
   [`PHASE_3_MARKETING_CORE_OS.md` §12](PHASE_3_MARKETING_CORE_OS.md).
+
+## 11. Storage providers and platform administration
+
+Full description: [`STORAGE_PROVIDERS.md`](STORAGE_PROVIDERS.md). Rules later work must keep:
+
+- **Provider per object.** `media_assets` and `generated_video_files` record
+  `storage_provider` (immutable, trigger-enforced; existing rows are `LEGACY_S3`). Reads
+  and deletes go through `StorageRouter.forProvider(row.storageProvider)`; new writes
+  through `writeTarget()`, recording its provider. Never call a provider directly for an
+  existing object, and never fall back to another provider.
+- **Secrets in the environment only** (`S3_*`, `WASABI_*`); the database holds non-secret
+  settings (`platform_storage_settings`). Views and responses report key presence only.
+- **Switching the write provider moves no data**; it needs a typed confirmation and live
+  checks of the target and of every provider holding objects. Data migration between
+  providers does not exist yet.
+- **Platform admin** (`/{locale}/admin`) is separate from workspace roles: verified user
+  with `users.is_platform_admin`, set only by an operator in the database, re-checked on
+  every request; everyone else gets 404. `src/server/admin/` is the place for further
+  internal admin sections.
+- Wasabi is the **intended** initial provider; it is tested with test doubles only.
+
+## 12. Orchestration engine and the AI Marketing Manager
+
+Code: `src/server/orchestration/`. Migration `20261010120000_orchestration_core` (tables
+`automation_policies`, `agent_runs`, `agent_tasks`). Rules later capabilities must keep:
+
+- **One engine for every workflow.** A workflow is a fixed graph of tasks
+  (`WorkflowDefinition`); a run persists every task with its state, attempts, lease,
+  `run_after` and output. `executeRun` advances a run step by step and can be called again
+  from anywhere (request `after()`, the scheduler, the "continue" button) — a crashed or
+  interrupted runner loses nothing. Readiness, failure propagation, run outcome, backoff
+  and schedule slots are pure (`planner.ts`) and unit-tested.
+- **Reliability.** Retries with exponential backoff (`TaskError(code, retryable)`;
+  unexpected errors are retryable), per-task timeout via `AbortSignal`, leases recovered by
+  `recoverStaleTasks`, cancellation (a late result is discarded because writes require the
+  current lease token), idempotent runs (`(workspace_id, idempotency_key)` unique).
+- **Authority.** A run acts for a member (`requested_by_user_id`; for scheduled runs the
+  policy's delegate — the admin who enabled automation). Before every task the engine
+  re-checks that member still holds `automation.manage`; otherwise the run stops with
+  `actor_no_access`. Handlers receive that member's `TenantContext` and call the normal
+  services (same permission checks, audit and AI limits as a person).
+- **Risk classes and approvals.** Tasks are `INTERNAL`, `EXTERNAL` (publishing,
+  messaging) or `SPEND`. Only `INTERNAL` tasks run without a person. An `EXTERNAL`/`SPEND`
+  task must define `describe` (refused at `createRun` otherwise): deterministic code that
+  states the exact action (and, for `SPEND`, an integer amount in minor units plus an ISO
+  currency). The engine stores that snapshot and its SHA-256 over canonical JSON
+  (`approval-snapshot.ts`) and sets the task `NEEDS_APPROVAL`; its dependents wait (they
+  are not cancelled) and the run becomes `NEEDS_ATTENTION` once nothing else can move.
+  `decideApproval` (`approvals.ts`, `automation.approve` — owners and admins, membership
+  re-checked inside the transaction) records one immutable `agent_task_approvals` row per
+  request round, only while the task still waits for exactly the hash the person was
+  shown and the run is open. Approving grants **one** execution of that task: before the
+  claim the engine re-describes the action and re-checks the approver; a different hash
+  or a lost right voids the grant and asks again (`approval_stale`). The claim consumes
+  the grant, so a retry or anything else needs a new approval. Rejecting fails the task
+  (`approval_rejected`), which cancels its dependents and fails the run. Cancelling a run
+  voids unused grants; late or duplicate decisions are refused. An `EXTERNAL`/`SPEND` task
+  whose runner died is failed `outcome_unknown`, never replayed. Every request, decision
+  (with its snapshot), stale grant and use is audited. Decisions are protected by triggers
+  (no updates except the decider's account being deleted; grant must match the current
+  approved round). No real publishing or ad-spend handler exists yet.
+- **Emergency stop.** `automation_policies.paused` halts every run and the scheduler for
+  the workspace immediately: it is checked before each task and again inside the claim
+  transaction (workspace row lock shared with the stop), so it overrides approvals too;
+  resuming continues where runs stopped. Policy changes, stop/resume, runs, failures,
+  approvals and drafts are audited.
+- **Scheduling.** `pnpm automation:tick` (cron) recovers stale tasks, starts due planning
+  runs once per slot (compare-and-set on the policy version; missed slots are skipped, not
+  replayed) and advances active runs. Event-driven triggers are not implemented yet.
+- **First workflow: content planning** — observe (brand, goals, campaigns, pillars, the
+  next 7 days in the workspace time zone) → AI ideas through the AI engine → drafts only if
+  the policy allows (at most `max_drafts_per_run`, status DRAFT, never scheduled or
+  published) → report. UI: `/{locale}/w/{slug}/autopilot` (editors view, admins manage).
+
+## 13. Advertising platforms
+
+Full description: [`ADVERTISING.md`](ADVERTISING.md). Rules later work must keep: platform
+APIs live only in `src/server/ads/adapters/*` behind the `AdPlatformAdapter` contract and
+speak the unified model (`model.ts`, money in minor units); tokens are stored only as
+AES-256-GCM envelopes bound to workspace + platform and decrypted only inside
+`withPlatformToken`; OAuth states are hashed, single use, 10 minutes, bound to the person
+and workspace; anything that publishes or spends runs only as a `SPEND` task of the
+`ad_launch` workflow after a person approved its exact description. Meta, Snapchat and
+TikTok reads are implemented (Snapchat stores only an encrypted refresh token and mints
+access tokens per use; TikTok's long-term token does not expire); WhatsApp Business is a
+conversation channel on the same connection machinery (Embedded Signup, masked numbers and
+templates, signature-verified webhooks recorded once per workspace without personal data).
+Flexibx owns one developer app per platform and every workspace connects its own accounts
+(see "Multi-tenant integration model" in ADVERTISING.md).
+
+External writes (off unless `ADS_EXECUTION_ENABLED` / `WHATSAPP_SENDING_ENABLED` is
+`true`) go only through approved orchestration tasks: `ad_launch` creates a campaign PAUSED
+through the shared executor (`ads/execution.ts`, a per-plan ledger with
+IN_FLIGHT/UNCERTAIN steps reconciled by tag, never blindly retried), `ad_activate` turns
+it on after a second approval, and `whatsapp_send` sends one message to one opted-in
+contact (encrypted numbers, consent, approved templates or the 24-hour window, caps,
+exactly-once). Workspace spending limits per currency gate every creation and activation.
+Only Meta has a write path; Snapchat and TikTok writers are blocked boundaries. None of
+this has been exercised against a real platform.

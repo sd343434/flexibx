@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getDb } from "../db/client";
-import { getStorage } from "../storage";
+import { getStorageRouter } from "../storage/providers";
 import { requireWorkspaceAccess } from "../tenancy/access";
 import { isUuid, type TenantContext } from "../tenancy/context";
 import { assertCan, can, type Action } from "../tenancy/permissions";
@@ -223,7 +223,7 @@ export async function getMediaPage(slug: string) {
  */
 export async function getMediaObject(slug: string, assetId: string) {
   const ctx = await requireWorkspaceAccess(slug, "content.view");
-  return readMedia(getDb(), getStorage(), ctx, assetId);
+  return readMedia(getDb(), getStorageRouter(), ctx, assetId);
 }
 
 export async function getActivityPage(slug: string, before: string | undefined) {

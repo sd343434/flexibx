@@ -49,6 +49,8 @@ export default defineConfig({
       AUTH_IP_HEADER: E2E_IP_HEADER,
       // Media uploads are kept in the server process (no object storage in E2E runs).
       STORAGE_DRIVER: "test-memory",
+      // The deterministic local AI adapter (no external service, no key).
+      AI_PROVIDER: "fake",
     },
     url: `${baseURL}/api/health?scope=liveness`,
     reuseExistingServer: !process.env.CI,

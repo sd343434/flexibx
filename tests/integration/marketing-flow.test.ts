@@ -21,6 +21,7 @@ import {
 } from "@/app/[locale]/w/[workspaceSlug]/marketing-actions";
 import { GET as getMedia } from "@/app/api/w/[workspaceSlug]/media/[assetId]/route";
 import { WorkspaceRole } from "@/generated/prisma/enums";
+import { getAiStudioPage } from "@/server/ai/ai-queries";
 import { getSystemDb } from "@/server/db/client";
 import {
   createContentAction,
@@ -501,6 +502,10 @@ describe("page queries", () => {
       code: "FORBIDDEN",
     });
     expect((await getNewContentPage("acme-team")).timeZone).toBe("Asia/Riyadh");
+    // AI Studio follows content.create: listed for an editor.
+    expect((await getWorkspaceShell("acme-team")).nav.ai).toBe(true);
+    // The Autopilot is visible to editors (automation.view); managing it needs an admin.
+    expect((await getWorkspaceShell("acme-team")).nav.autopilot).toBe(true);
 
     actAs(client);
     await expect(getNewContentPage("acme-team")).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -510,12 +515,20 @@ describe("page queries", () => {
     expect((await getDashboardPage("acme-team")).activity).toBeNull();
     expect((await getWorkspaceShell("acme-team")).nav).toEqual({
       content: true,
+      ai: false,
+      autopilot: false,
+      ads: false,
+      integrations: false,
       calendar: true,
       campaigns: true,
       brand: true,
       media: true,
       activity: false,
       members: false,
+    });
+    // The hidden AI Studio entry matches the page's own check.
+    await expect(getAiStudioPage("acme-team", undefined)).rejects.toMatchObject({
+      code: "FORBIDDEN",
     });
 
     // Another workspace's member: the record does not exist for them; malformed ids neither.

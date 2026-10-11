@@ -16,6 +16,13 @@
     },
     "theme": {
       "toggle": "Toggle light and dark theme"
+    },
+    "loading": {
+      "page": "Loading",
+      "workspace": "Loading the workspace",
+      "workspaces": "Loading your workspaces",
+      "account": "Loading your account settings",
+      "invitation": "Loading the invitation"
     }
   },
   "home": {
@@ -176,11 +183,15 @@
       "home": "Home",
       "members": "Members",
       "content": "Content",
+      "ai": "AI Studio",
+      "autopilot": "Autopilot",
       "calendar": "Calendar",
       "campaigns": "Campaigns",
       "brand": "Brand",
       "media": "Media",
-      "activity": "Activity"
+      "activity": "Activity",
+      "ads": "Advertising",
+      "integrations": "Integrations"
     },
     "switcher": {
       "label": "Switch workspace",
@@ -295,6 +306,13 @@
       "action": "Choose a new password",
       "expiry": "This link expires in {minutes} minutes and can be used once. After the reset, every device signed in to your account is signed out.",
       "ignore": "If you didn't ask to reset your password, you can ignore this email; your password stays the same."
+    },
+    "videoExpiry": {
+      "subject": "Your AI video “{title}” will be deleted in {hours} hours",
+      "intro": "Your AI-generated video “{title}” in the workspace {workspace} will be deleted in about {hours} hours. Download it now if you want to keep it.",
+      "action": "Download your video",
+      "expiry": "It will be deleted automatically on {date}. AI videos are kept for 7 days to conserve workspace storage, and deleted videos cannot be recovered.",
+      "ignore": "If you have already downloaded it, you can ignore this email."
     }
   },
   "errors": {
@@ -338,7 +356,54 @@
     "schedule_in_past": "The scheduled time must be in the future.",
     "image_invalid": "Upload a PNG, JPEG or WebP image.",
     "file_required": "Choose a file to upload.",
-    "stale_status": "Someone else changed this item just now. Refresh and try again."
+    "stale_status": "Someone else changed this item just now. Refresh and try again.",
+    "ai_not_configured": "AI is not configured on this server yet.",
+    "ai_timeout": "The AI took too long to answer. Try again.",
+    "ai_unavailable": "The AI service is unavailable right now. Try again later.",
+    "ai_provider_busy": "The AI service is busy. Try again in a moment.",
+    "ai_refused": "The AI declined this request. Try rephrasing it.",
+    "ai_invalid_output": "The AI's answer could not be used. Try again.",
+    "ai_daily_cap": "This workspace reached today's limit of {maximum} AI generations. Try again tomorrow.",
+    "ai_already_used": "This suggestion was already used.",
+    "ai_not_usable": "This suggestion can no longer be used.",
+    "ai_draft_only": "AI assistance works on drafts only.",
+    "video_not_configured": "Video generation is not configured on this server yet.",
+    "video_unsupported": "This video length or format is not supported.",
+    "video_daily_budget": "This workspace reached today's video generation budget. Try again tomorrow.",
+    "video_approval_required": "This video costs more than a single request may spend without approval.",
+    "automation_paused": "Automation is stopped. Resume it before starting a run.",
+    "approval_not_pending": "This step is no longer waiting for a decision.",
+    "approval_changed": "This action changed since the page was loaded. Review it again.",
+    "ads_not_configured": "This advertising platform is not configured on this server.",
+    "ads_not_connected": "Connect the advertising platform first.",
+    "ads_oauth_invalid": "The connection could not be verified. Start again.",
+    "ads_permission_missing": "The platform did not grant the permission this needs. Reconnect and allow it.",
+    "ads_token_expired": "The platform access expired. Reconnect.",
+    "ads_rate_limited": "The platform asked us to slow down. Try again later.",
+    "ads_provider_error": "The platform or the AI could not complete this. Try again later.",
+    "ads_operation_unavailable": "This is not available for this platform yet.",
+    "ads_account_unavailable": "Select a connected ad account first.",
+    "ads_plan_locked": "This plan cannot be changed in its current state.",
+    "ads_execution_disabled": "Creating and activating campaigns is turned off on this server until it has been validated with the platform.",
+    "ads_spend_limit_missing": "Set a spending limit for this currency before creating or activating campaigns.",
+    "ads_spend_limit_exceeded": "This budget is above the workspace's spending limit.",
+    "ads_daily_limit_exceeded": "The average daily budget is above the workspace's daily limit.",
+    "ads_identity_missing": "No Page or profile is available to publish these ads as.",
+    "ads_destination_missing": "Add the web address the ad leads to.",
+    "ads_outcome_unknown": "The platform did not confirm the last change. Check the platform before trying again.",
+    "ads_external_objects_exist": "Objects already exist on the platform for this plan, so it can no longer be edited.",
+    "ads_not_created": "The campaign has not been created on the platform yet.",
+    "whatsapp_sending_disabled": "Sending WhatsApp messages is turned off on this server.",
+    "whatsapp_no_consent": "This contact has not opted in to WhatsApp messages, or opted out.",
+    "whatsapp_template_unavailable": "Use an approved template in the chosen language.",
+    "whatsapp_window_closed": "Free-form messages are only allowed within 24 hours of the customer's last message. Use an approved template.",
+    "whatsapp_number_unavailable": "Choose a connected business number of this account.",
+    "whatsapp_invalid_number": "Enter the number in international format, for example +966501234567.",
+    "whatsapp_rate_limited": "Too many messages for now. Try again later.",
+    "whatsapp_send_pending": "A message to this contact is still waiting for approval or its outcome is unknown. Check it before sending another.",
+    "ads_identity_ambiguous": "Several Facebook Pages can advertise for this connection, and Flexibx cannot choose one yet. Connect with an account that manages only the Page to advertise as.",
+    "whatsapp_sync_required": "Refresh this WhatsApp account (numbers and templates) first: its last sync is more than a day old.",
+    "whatsapp_marketing_opted_out": "This customer stopped marketing messages from your business on WhatsApp. Only utility templates or replies inside the 24-hour window can be sent."
   },
   "marketing": {
     "common": {
@@ -753,8 +818,986 @@
         "asset_created": "uploaded an image",
         "asset_updated": "updated an image",
         "asset_deleted": "deleted an image",
-        "other": "made a change"
+        "other": "made a change",
+        "ai_generated": "generated an AI suggestion",
+        "ai_failed": "tried an AI generation that failed",
+        "ai_applied": "used an AI suggestion",
+        "video_generated": "generated an AI video",
+        "video_expiry_reminder": "sent a reminder that an AI video will be deleted",
+        "video_files_deleted": "deleted an AI video after 7 days",
+        "video_deletion_failed": "will retry deleting an AI video",
+        "video_metadata_purged": "removed the records of an old AI video"
+      },
+      "systemActor": "Flexibx"
+    }
+  },
+  "ai": {
+    "title": "AI Studio",
+    "description": "Generate ideas, briefs and copy from your brand. Suggestions stay drafts until you use them.",
+    "forbidden": "AI Studio is available to roles that can create content.",
+    "notConfigured": "AI is not configured on this server yet, so nothing can be generated. Ask an administrator to enable an AI provider.",
+    "tabsLabel": "AI tools",
+    "label": "AI suggestion",
+    "reviewNotice": "Review it before use. Using a suggestion only creates or changes a draft — nothing is approved, scheduled or published.",
+    "forbiddenWarning": "Contains your brand's forbidden words: {words}",
+    "generate": "Generate",
+    "generating": "Generating…",
+    "regenerate": "Generate again",
+    "languages": {
+      "ar": "Arabic",
+      "en": "English"
+    },
+    "tools": {
+      "ideas": {
+        "tab": "Ideas",
+        "title": "Content ideas",
+        "description": "Get several ideas that fit your brand, pillars and goals."
+      },
+      "brief": {
+        "title": "Content brief",
+        "tab": "Brief",
+        "description": "Turn a topic into a clear brief: objective, audience, message, hook and structure."
+      },
+      "copy": {
+        "title": "Post copy",
+        "tab": "Copy",
+        "description": "Write a caption with a hook, a call to action, hashtags and optional variants."
       }
+    },
+    "fields": {
+      "language": "Output language",
+      "languageAuto": "Brand language",
+      "languageHint": "Leave as the brand language unless you need another one.",
+      "topic": "Topic",
+      "topicOptional": "Topic (optional)",
+      "copyTopic": "What is the post about?",
+      "topicHint": "Plain words are enough. Don't paste passwords or private data.",
+      "count": "Number of ideas",
+      "variants": "Extra variants",
+      "pillar": "Pillar",
+      "campaign": "Campaign",
+      "none": "None",
+      "contentType": "Content type",
+      "anyType": "Let the AI suggest",
+      "instructions": "Extra instructions (optional)",
+      "operation": "What should the AI do?",
+      "objective": "Objective",
+      "angle": "Angle",
+      "audience": "Audience",
+      "cta": "Call to action",
+      "rationale": "Why it fits",
+      "keyMessage": "Key message",
+      "hook": "Hook",
+      "tone": "Tone",
+      "supportingPoints": "Supporting points",
+      "structure": "Structure",
+      "caption": "Caption",
+      "hashtags": "Hashtags"
+    },
+    "use": {
+      "idea": "Create draft",
+      "brief": "Create draft from brief",
+      "copy": "Create draft",
+      "apply": "Use in this draft",
+      "notes": "Save to notes"
+    },
+    "result": {
+      "title": "Suggestion",
+      "empty": "Generate something to see suggestions here.",
+      "main": "Main version",
+      "variant": "Variant {number}",
+      "used": "Already used.",
+      "usedShort": "Used",
+      "openContent": "Open the draft",
+      "failed": "This attempt failed: {reason}",
+      "pending": "This attempt did not finish."
+    },
+    "history": {
+      "title": "Your recent suggestions",
+      "empty": "No suggestions yet."
+    },
+    "status": {
+      "PENDING": "Interrupted",
+      "SUCCEEDED": "Ready",
+      "FAILED": "Failed"
+    },
+    "failures": {
+      "timeout": "the AI took too long",
+      "unavailable": "the AI service was unavailable",
+      "rate_limited": "the AI service was busy",
+      "refused": "the AI declined the request",
+      "invalid_output": "the AI's answer could not be used"
+    },
+    "operations": {
+      "IDEAS": "Ideas",
+      "BRIEF": "Brief",
+      "COPY": "Copy",
+      "CONTENT_DRAFT": "Write a draft",
+      "CONTENT_REWRITE": "Rewrite and improve",
+      "CONTENT_ALTERNATIVES": "Alternative versions",
+      "CONTENT_HOOK": "Opening hooks",
+      "CONTENT_CTA": "Calls to action",
+      "CONTENT_BRIEF": "Brief from this draft",
+      "AD_PLAN": "Ad campaign plan"
+    },
+    "assist": {
+      "title": "AI assist",
+      "description": "Suggestions for this draft. Using one changes this draft only; it stays a draft."
+    },
+    "usage": {
+      "title": "AI usage",
+      "description": "Generations in this workspace over the last {days} days. Prompts and outputs are not shown here.",
+      "forbidden": "AI usage is visible to owners and admins.",
+      "attempts": "Attempts",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "applied": "Used",
+      "today": "Today",
+      "todayValue": "{count} of {cap} generations used today.",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "cost": "Estimated cost",
+      "costUnknown": "Not available",
+      "unreported": "{count, plural, one {# generation} other {# generations}} reported no token usage.",
+      "byOperation": "By operation",
+      "empty": "No generations yet."
+    },
+    "videos": {
+      "title": "AI videos",
+      "description": "Videos generated by AI in this workspace and when each one will be deleted.",
+      "forbidden": "AI videos are available to roles that can view content.",
+      "notice": {
+        "title": "Videos are deleted automatically after {days} days",
+        "body": "To conserve workspace storage, every AI-generated video — with its thumbnail and any processed versions — is deleted automatically {days} days ({hours} hours) after it was generated. Deleted videos cannot be recovered.",
+        "download": "Download any video you want to keep before its deletion time shown below.",
+        "timeZone": "Times are shown in the workspace time zone: {zone}."
+      },
+      "empty": "No AI videos yet. Generated videos will appear here with their deletion date.",
+      "generatedAt": "Generated {date}",
+      "details": "{seconds} s · {width}×{height}",
+      "deletesOn": "Will be deleted on {date} ({hours, plural, one {# hour} other {# hours}} left)",
+      "deletingNow": "Deletion time reached ({date}); the video is being deleted.",
+      "deletedOn": "Deleted on {date}. Only its details remain.",
+      "download": "Download",
+      "stage": {
+        "available": "Available",
+        "within48h": "Deleted within 48 hours",
+        "within24h": "Deleted within 24 hours",
+        "expired": "Expired",
+        "deleting": "Being deleted",
+        "deleted": "Deleted"
+      },
+      "beforeGeneration": {
+        "title": "Before you generate a video",
+        "body": "AI videos are kept for {days} days to conserve workspace storage, then deleted automatically together with their thumbnails and processed versions. Deleted videos cannot be recovered.",
+        "deadline": "A video generated now will be deleted on {date} ({zone}). Download it before then."
+      },
+      "expiringBanner": "{count, plural, one {# AI video will be deleted within 48 hours.} other {# AI videos will be deleted within 48 hours.}} Download any you want to keep.",
+      "expiringBannerLink": "Open AI videos",
+      "generateLink": "Generate a video",
+      "generate": {
+        "title": "Video Studio",
+        "description": "Turn a marketing brief into a reviewed video, step by step.",
+        "forbidden": "Video generation is available to roles that can create content.",
+        "notConfigured": "Video generation is not configured on this server. No request can be sent.",
+        "budgetNotice": "Budget policy is not decided yet. Only a local test provider exists: it makes placeholder clips, calls no external service and spends no money. Daily and per-request limits are provisional.",
+        "formTitle": "New video",
+        "fields": {
+          "title": "Title",
+          "duration": "Length",
+          "durationOption": "{seconds} seconds",
+          "aspectRatio": "Format",
+          "resolution": "Resolution",
+          "tier": "Quality",
+          "audio": "Include audio",
+          "objective": "Objective",
+          "objectiveHint": "What should this video achieve? For example: launch the new menu.",
+          "audience": "Audience",
+          "audienceHint": "Optional. Who should it speak to?",
+          "description": "What should the video show?",
+          "descriptionHint": "Describe the scene, subject and mood. Sent to the video provider only.",
+          "platform": "Platform",
+          "platforms": {
+            "instagram_reels": "Instagram Reels",
+            "tiktok": "TikTok",
+            "youtube_shorts": "YouTube Shorts",
+            "youtube": "YouTube",
+            "snapchat": "Snapchat",
+            "x": "X",
+            "linkedin": "LinkedIn"
+          },
+          "platformHint": "Choosing a platform suggests its usual format.",
+          "style": "Visual style",
+          "styles": {
+            "cinematic": "Cinematic",
+            "product_showcase": "Product showcase",
+            "lifestyle": "Lifestyle",
+            "minimal": "Minimal",
+            "energetic": "Energetic"
+          },
+          "language": "Language",
+          "languageHint": "For any on-screen text or speech.",
+          "languages": {
+            "ar": "Arabic",
+            "en": "English"
+          },
+          "tierHints": {
+            "DRAFT": "A quick draft to review the idea",
+            "STANDARD": "A higher-quality render"
+          },
+          "noDurations": "No lengths are available while generation is off."
+        },
+        "aspect": {
+          "landscape": "Landscape 16:9",
+          "portrait": "Portrait 9:16"
+        },
+        "tiers": {
+          "DRAFT": "Draft",
+          "STANDARD": "Standard"
+        },
+        "choose": "Choose…",
+        "submit": "Generate video",
+        "submitting": "Sending…",
+        "jobs": {
+          "title": "Recent requests",
+          "empty": "No video requests yet."
+        },
+        "job": {
+          "title": "Request status",
+          "empty": "Choose a request, or send a new one, to see its status here.",
+          "requestedAt": "Requested {date}",
+          "finishedAt": "Finished {date}",
+          "details": "{seconds} s · {aspect} · {resolution} · {tier}",
+          "attempts": "Attempt {count} of {max}",
+          "inProgress": "The video is being generated. Check again in a moment.",
+          "reconciliation": "The provider's answer was lost. Nothing will be resent; an operator must check this request.",
+          "review": "The video passed the technical checks. Review it, then accept or reject it.",
+          "expired": "The video file has been deleted under the 7-day retention policy.",
+          "refresh": "Check status",
+          "accept": "Accept",
+          "reject": "Reject",
+          "download": "Download video",
+          "openVideos": "All AI videos",
+          "regenerate": "Generate again",
+          "brief": "Brief sent to the provider"
+        },
+        "state": {
+          "RESERVED": "Queued",
+          "IN_PROGRESS": "Generating",
+          "READY_FOR_REVIEW": "Ready for review",
+          "ACCEPTED": "Accepted",
+          "REJECTED": "Rejected",
+          "FAILED": "Failed",
+          "LIMIT_REACHED": "Stopped",
+          "NEEDS_RECONCILIATION": "Needs checking",
+          "CANCELLED": "Cancelled"
+        },
+        "failure": {
+          "rejected": "The provider rejected this request.",
+          "refused": "The provider declined this content. Change the description and try again.",
+          "max_attempts": "Every attempt produced an unusable video.",
+          "max_wall_time": "Generation took too long and was stopped.",
+          "outcome_unknown": "The provider's answer was lost.",
+          "other": "The request could not be completed."
+        },
+        "providerStatus": {
+          "test": "Test provider · placeholder clips",
+          "off": "Generation off"
+        },
+        "workflow": {
+          "label": "Workflow",
+          "available": "Available",
+          "planned": "Planned",
+          "steps": {
+            "brief": "Brief",
+            "script": "Script & scenes",
+            "generate": "Generate",
+            "review": "Review",
+            "edit": "Edit & brand",
+            "versions": "Platform versions"
+          }
+        },
+        "sections": {
+          "brief": "Creative brief",
+          "briefHint": "What the video is for and who it speaks to.",
+          "settings": "Generation settings",
+          "settingsHint": "Format and quality of the clip."
+        },
+        "preview": {
+          "label": "Preview",
+          "empty": "Your video appears here",
+          "emptyHint": "Fill in the brief and generate. Every clip is checked before it reaches review.",
+          "generatingHint": "The provider is working on it. No progress estimate is available; check the status in a moment.",
+          "placeholder": "Test placeholder",
+          "placeholderHint": "The local test provider made a technical sample file to test the workflow. It is not an AI-generated video and cannot be played.",
+          "expired": "Deleted after 7 days",
+          "failed": "Not generated",
+          "video": "Generated video: {title}"
+        },
+        "failureHint": {
+          "rejected": "Check the settings, then generate again.",
+          "refused": "Change the description, then generate again.",
+          "max_attempts": "Generate again. If it happens again, simplify the description.",
+          "max_wall_time": "Try again later.",
+          "other": "Generate again. If it keeps failing, contact support."
+        },
+        "gallery": {
+          "title": "Recent generations",
+          "empty": "No videos yet. Your requests will appear here.",
+          "open": "Open",
+          "selected": "Shown in preview"
+        }
+      }
+    }
+  },
+  "admin": {
+    "title": "Platform administration",
+    "internal": "Internal: Flexibx staff only.",
+    "nav": {
+      "label": "Administration sections",
+      "storage": "Storage"
+    },
+    "error": "Something went wrong. Try again.",
+    "storage": {
+      "title": "Storage",
+      "description": "Where files (media library and generated videos) are stored, for the whole platform.",
+      "providers": {
+        "LEGACY_S3": "Original S3-compatible store",
+        "WASABI": "Wasabi"
+      },
+      "providerHints": {
+        "LEGACY_S3": "Configured by the S3_* server environment variables. Holds every file stored before provider tracking.",
+        "WASABI": "Region, endpoint and bucket below; access keys only from the server environment."
+      },
+      "providersTitle": "Providers",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "writeTarget": "New files go here",
+      "objects": "{media} media files · {videos} video files",
+      "check": {
+        "button": "Test connection",
+        "checking": "Testing…",
+        "ok": "Connection OK",
+        "failure": {
+          "access_denied": "Access denied: check the access keys and bucket policy.",
+          "bucket_not_found": "Bucket not found.",
+          "wrong_region": "The bucket is in another region, or the endpoint does not match.",
+          "timeout": "No answer in time.",
+          "unreachable": "The endpoint cannot be reached.",
+          "failed": "The connection test failed.",
+          "not_configured": "Not configured yet.",
+          "unsupported": "This provider cannot be tested."
+        }
+      },
+      "wasabi": {
+        "title": "Wasabi settings",
+        "region": "Region",
+        "regionHint": "The region of the bucket, as shown in the Wasabi console.",
+        "endpoint": "Endpoint",
+        "endpointHint": "The Wasabi S3 service URL for that region (https://s3.[region].wasabisys.com — confirm it in the Wasabi console).",
+        "bucket": "Bucket",
+        "save": "Save settings",
+        "saving": "Saving…",
+        "saved": "Settings saved.",
+        "unchanged": "Nothing changed.",
+        "locked": "Wasabi stores or receives files, so its region, endpoint and bucket cannot change here. Moving files needs a separate, planned migration.",
+        "credentialsPresent": "Access keys: set in the server environment.",
+        "credentialsMissing": "Access keys: missing. Set WASABI_ACCESS_KEY_ID and WASABI_SECRET_ACCESS_KEY in the server environment (never in this form).",
+        "missing": "Still needed: {fields}",
+        "fields": {
+          "region": "region",
+          "endpoint": "endpoint",
+          "bucket": "bucket",
+          "credentials": "access keys"
+        },
+        "errors": {
+          "region_invalid": "Enter a region such as the one shown in the Wasabi console (lowercase, e.g. xx-name-1).",
+          "endpoint_invalid": "Enter an https URL on wasabisys.com, without a path.",
+          "endpoint_region_mismatch": "The endpoint does not match the region. Use https://s3.[region].wasabisys.com for the region entered (for us-east-1, https://s3.wasabisys.com also works).",
+          "bucket_invalid": "Enter a valid bucket name (3–63 lowercase letters, digits, dots or hyphens).",
+          "invalid": "Check this value."
+        }
+      },
+      "change": {
+        "title": "Change where new files go",
+        "explain": "Only new files are affected. Existing files stay with the provider they were written to and are not moved or copied. The new provider must pass a live connection test. You can move new files away from a provider that is failing: its existing files stay there and cannot be opened or deleted until it works again.",
+        "target": "New provider",
+        "confirm": "Type {provider} to confirm",
+        "button": "Change provider",
+        "changing": "Checking and changing…",
+        "notReady": "Complete this provider's settings first.",
+        "changed": "New files now go to {provider}.",
+        "leftBehind": "{provider} still holds existing files and failed its connection test ({reason}). Those files were not moved: they stay on {provider} and cannot be opened or deleted until it works again.",
+        "unchanged": "This is already the current provider.",
+        "stale": "The settings changed meanwhile. Reload the page and try again.",
+        "unavailable": "{provider} failed its connection test, so nothing was changed. {reason}",
+        "confirmation_mismatch": "Type the provider name exactly as shown to confirm."
+      },
+      "policy": "Generated videos are deleted from storage 168 hours after generation, and their metadata 30 days after that. A provider may still bill a minimum storage period for deleted files, and copies in backups or versions are outside this policy."
+    }
+  },
+  "automation": {
+    "title": "AI Marketing Manager",
+    "description": "Plans your content on its own, within the rules you set. It never publishes or spends money.",
+    "forbidden": "The AI Marketing Manager is available to roles that can create content.",
+    "status": {
+      "active": "Active",
+      "off": "Scheduled planning off",
+      "paused": "Stopped"
+    },
+    "statusHint": {
+      "active": "Next planning run: {date}",
+      "off": "It runs only when someone starts it.",
+      "paused": "Emergency stop is on. Nothing starts until automation is resumed."
+    },
+    "stop": "Emergency stop",
+    "stopConfirm": "Stop all automation now?",
+    "resume": "Resume automation",
+    "runNow": "Plan content now",
+    "aiOff": "AI is not configured on this server, so planning runs stop at the planning step.",
+    "delegate": "Acts with the permissions of {name}.",
+    "readOnly": "Only administrators can change the policy or start runs.",
+    "policy": {
+      "title": "Automation policy",
+      "hint": "Set it once. The manager works within these rules and re-checks them before every step.",
+      "enabled": "Plan automatically on a schedule",
+      "cadence": "How often",
+      "cadences": {
+        "OFF": "Never",
+        "DAILY": "Every day",
+        "WEEKLY": "Every week"
+      },
+      "allowDrafts": "Create content drafts on its own",
+      "allowDraftsHint": "Drafts only. Nothing is scheduled or published without you.",
+      "maxDrafts": "Drafts per run, at most",
+      "save": "Save policy",
+      "saving": "Saving…"
+    },
+    "capabilities": {
+      "title": "What it may do",
+      "auto": "On its own",
+      "approval": "Only with your approval",
+      "notYet": "Not available yet",
+      "items": {
+        "observe": "Review your brand, goals, campaigns and calendar",
+        "plan": "Plan content ideas for empty days",
+        "drafts": "Create drafts (when the policy allows)",
+        "publish": "Publish or schedule posts",
+        "spend": "Launch paid campaigns or spend money",
+        "permissions": "Change permissions or settings",
+        "approvals": "Actions outside Flexibx and spending: only after approval, once per approval"
+      }
+    },
+    "approvals": {
+      "title": "Waiting for your approval",
+      "empty": "Nothing is waiting for approval.",
+      "requested": "Asked {date}",
+      "action": "Action",
+      "amount": "Amount",
+      "risk": {
+        "EXTERNAL": "Acts outside Flexibx",
+        "SPEND": "Spends money"
+      },
+      "note": "Note (optional)",
+      "approve": "Approve",
+      "reject": "Reject",
+      "approveConfirm": "Approve exactly this action, once?",
+      "approveSpendConfirm": "Approve spending {amount} on exactly this action, once?",
+      "rejectConfirm": "Reject this action? The run will stop.",
+      "cannotDecide": "Only owners and admins can approve or reject."
+    },
+    "exceptions": {
+      "title": "Needs your attention",
+      "empty": "Nothing needs your attention."
+    },
+    "runs": {
+      "title": "Activity",
+      "empty": "No runs yet. Start one with “Plan content now”.",
+      "manual": "Started by {name}",
+      "scheduled": "Scheduled run",
+      "started": "{date}",
+      "continue": "Continue",
+      "cancel": "Cancel run",
+      "draftsCreated": "{count, plural, =0 {No drafts created} one {# draft created} other {# drafts created}}",
+      "ideas": "{count, plural, one {# idea planned} other {# ideas planned}}",
+      "emptyDays": "{count, plural, =0 {Every one of the next 7 days already has content} one {# of the next 7 days had nothing planned} other {# of the next 7 days had nothing planned}}",
+      "openDraft": "Draft {number}"
+    },
+    "runState": {
+      "PENDING": "Waiting",
+      "RUNNING": "Working",
+      "SUCCEEDED": "Done",
+      "FAILED": "Failed",
+      "CANCELLED": "Cancelled",
+      "NEEDS_ATTENTION": "Needs attention"
+    },
+    "taskState": {
+      "PENDING": "Waiting",
+      "RUNNING": "Working",
+      "SUCCEEDED": "Done",
+      "FAILED": "Failed",
+      "SKIPPED": "Skipped",
+      "CANCELLED": "Cancelled",
+      "NEEDS_APPROVAL": "Needs approval"
+    },
+    "tasks": {
+      "observe": "Review the workspace",
+      "plan_ideas": "Plan ideas",
+      "create_drafts": "Create drafts",
+      "report": "Report"
+    },
+    "attempts": "attempt {count} of {max}",
+    "failure": {
+      "ai_not_configured": "AI is not configured on this server.",
+      "ai_daily_cap": "Today's AI generation limit was reached. The next run will try again.",
+      "actor_no_access": "The person this automation acts for no longer has permission. An administrator must save the policy again.",
+      "approval_required": "A step needs your approval before it can run.",
+      "timeout": "A step took too long and was stopped.",
+      "lease_expired": "A step was interrupted and could not finish.",
+      "approval_rejected": "A person rejected a step, so the run stopped.",
+      "outcome_unknown": "A step that acts outside Flexibx stopped unexpectedly. Check whether it happened before trying again.",
+      "invalid_action": "A step could not describe exactly what it would do, so it did not run.",
+      "other": "A step failed. The details are in the activity below."
+    }
+  },
+  "ads": {
+    "title": "Advertising",
+    "description": "Connect your ad accounts, see campaigns and results, and plan new campaigns. Nothing is launched or paid without your approval.",
+    "forbidden": "Your role cannot open advertising.",
+    "platformsTitle": "Ad platforms",
+    "notConfigured": "Not configured on this server yet (the platform's app credentials and an encryption key are needed).",
+    "connect": "Connect",
+    "reconnect": "Reconnect",
+    "refreshAccounts": "Refresh ad accounts",
+    "disconnect": "Disconnect",
+    "disconnectConfirm": "Disconnect and delete the stored access? You can also remove Flexibx in your platform settings.",
+    "platforms": {
+      "META": {
+        "name": "Meta (Facebook & Instagram)",
+        "scope": "Read ad accounts, campaigns, ad sets, ads and results (ads_read).",
+        "unavailable": "Available on this server when configured.",
+        "launchNote": "It needs the ads_management permission (Meta App Review) and a tested write path."
+      },
+      "SNAPCHAT": {
+        "name": "Snapchat Ads",
+        "scope": "Read organizations, ad accounts, campaigns, ad squads, ads and results (snapchat-marketing-api).",
+        "unavailable": "Available on this server when configured.",
+        "launchNote": "Creating Snapchat campaigns from Flexibx has not been built or tested against a real Snap ad account yet."
+      },
+      "TIKTOK": {
+        "name": "TikTok Ads",
+        "scope": "Read authorized ad accounts, campaigns, ad groups, ads and results (TikTok API for Business).",
+        "unavailable": "Available on this server when configured.",
+        "launchNote": "Creating TikTok campaigns from Flexibx has not been built or tested (TikTok sandbox) yet."
+      },
+      "WHATSAPP": {
+        "name": "WhatsApp Business",
+        "scope": "Find your WhatsApp Business accounts and read business numbers, message templates and message statuses (whatsapp_business_management).",
+        "unavailable": "Available on this server when configured.",
+        "launchNote": "WhatsApp is a conversation channel, not an ad account: campaigns that open WhatsApp are planned on a Meta ad account with the Messages objective."
+      }
+    },
+    "platformStatus": {
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "expired": "Access expired",
+      "needsPermission": "Needs permission",
+      "notConfigured": "Not configured",
+      "notAvailable": "Not available yet"
+    },
+    "connection": {
+      "as": "Connected as",
+      "permissions": "Granted permissions",
+      "expires": "Access expires",
+      "by": "Connected by",
+      "accounts": "Accounts",
+      "accountsSummary": "{total, plural, =0 {No accounts} one {# account} other {# accounts}}, {selected} selected",
+      "accessLost": "{count, plural, one {# account is} other {# accounts are}} no longer shared with Flexibx."
+    },
+    "connectionErrors": {
+      "permission_missing": "The platform did not grant the permission Flexibx needs to read ads. Reconnect and allow it.",
+      "token_expired": "The access expired. Reconnect to continue.",
+      "token_unreadable": "The stored access can no longer be read (the server's key changed). Reconnect.",
+      "rate_limited": "The platform asked us to slow down. Try again later.",
+      "provider_error": "The platform could not be reached. Try again later.",
+      "other": "The last check failed. Try again or reconnect."
+    },
+    "connectOutcome": {
+      "connected": "Connected. Choose the ad accounts to work with.",
+      "oauth_invalid": "That connection link was expired, already used or not yours. Start again.",
+      "denied": "The connection was cancelled on the platform.",
+      "forbidden": "Only owners and admins can connect ad platforms.",
+      "permission_missing": "The platform did not grant the permission to read ads. Connect again and allow it.",
+      "not_configured": "This platform is not configured on this server.",
+      "provider_error": "The platform could not complete the connection. Try again later."
+    },
+    "accounts": {
+      "title": "Ad accounts",
+      "hint": "Read-only. Select the accounts this workspace works with, then sync to read their campaigns and the last 30 days of results.",
+      "empty": "No ad accounts yet. Connect a platform first.",
+      "select": "Use this account",
+      "deselect": "Stop using",
+      "sync": "Sync now",
+      "neverSynced": "Not synced yet.",
+      "syncedAt": "Synced {date}",
+      "syncFailed": "The last sync failed. Try again or check the connection.",
+      "accessLost": "Access to this account is no longer granted. Reconnect and include it to use it again."
+    },
+    "accountStatus": {
+      "ACTIVE": "Active",
+      "DISABLED": "Disabled",
+      "UNSETTLED": "Payment due",
+      "PENDING": "Pending",
+      "CLOSED": "Closed",
+      "OTHER": "Other"
+    },
+    "deliveryStatus": {
+      "ACTIVE": "Active",
+      "PAUSED": "Paused",
+      "IN_REVIEW": "In review",
+      "REJECTED": "Rejected",
+      "ARCHIVED": "Archived",
+      "DELETED": "Deleted",
+      "OTHER": "Other"
+    },
+    "campaigns": {
+      "summary": "{campaigns, plural, =0 {No campaigns} one {# campaign} other {# campaigns}}, {adSets, plural, one {# ad set} other {# ad sets}}, {ads, plural, one {# ad} other {# ads}} · results for the last {days} days",
+      "truncated": "Only the first pages were read; some items are not shown.",
+      "name": "Campaign",
+      "objective": "Objective",
+      "status": "Status",
+      "impressions": "Impressions",
+      "clicks": "Clicks",
+      "spend": "Spend",
+      "snapchatClicks": "On Snapchat, clicks are swipe-ups."
+    },
+    "objectives": {
+      "AWARENESS": "Awareness",
+      "TRAFFIC": "Traffic",
+      "ENGAGEMENT": "Engagement",
+      "LEADS": "Leads",
+      "SALES": "Sales",
+      "APP_PROMOTION": "App promotion",
+      "MESSAGES": "Messages"
+    },
+    "plans": {
+      "title": "Campaign plans",
+      "empty": "No plans yet."
+    },
+    "planStatus": {
+      "DRAFT": "Draft",
+      "SUBMITTED": "Awaiting approval",
+      "LAUNCHED": "Launched",
+      "FAILED": "Failed",
+      "DISCARDED": "Discarded"
+    },
+    "planForm": {
+      "title": "Plan a campaign with AI",
+      "hint": "You set the budget and dates; the AI proposes the objective, audience, placements and ad using your brand, goals, audiences, images and this account's results.",
+      "account": "Ad account",
+      "budget": "Total budget",
+      "budgetHint": "In the account's currency, e.g. 1500.00",
+      "start": "Start date",
+      "end": "End date",
+      "request": "Anything to focus on (optional)",
+      "requestHint": "For example: a product, an offer or a city.",
+      "submit": "Propose a plan",
+      "pending": "Planning…",
+      "aiOff": "AI is not configured on this server, so plans cannot be proposed.",
+      "noAccounts": "Select a connected ad account first."
+    },
+    "review": {
+      "back": "← Back to advertising",
+      "invalid": "This plan's stored proposal is no longer valid.",
+      "campaign": "Campaign",
+      "objective": "Objective",
+      "rationale": "Why this plan",
+      "budgetAndDates": "Budget and dates",
+      "totalBudget": "Total budget",
+      "dailyAverage": "Average per day",
+      "duration": "Duration",
+      "days": "{count, plural, one {# day} other {# days}}",
+      "moneyNote": "You set the budget and dates. The AI never decides money.",
+      "audience": "Audience and placements",
+      "audienceDescription": "Audience",
+      "countries": "Countries",
+      "ages": "Ages",
+      "genders": "Genders",
+      "interests": "Interests",
+      "placements": "Placements",
+      "creative": "Ad",
+      "headline": "Headline",
+      "primaryText": "Primary text",
+      "callToAction": "Call to action",
+      "image": "Image",
+      "noImage": "No image chosen.",
+      "expected": "Expected results",
+      "expectedNone": {
+        "no_history": "No estimate: this account has no recent results to base one on.",
+        "insufficient_history": "No estimate: this account's recent results are too few to be reliable."
+      },
+      "expectedImpressions": "Impressions",
+      "expectedClicks": "Clicks",
+      "expectedBasis": "A range based on this account's last {days} days (click-through rate {ctr}%, cost per 1,000 impressions:). Not a guarantee.",
+      "launch": "Launch",
+      "launched": "Launched on the platform (campaign {id}).",
+      "submitted": "Waiting for an owner or admin to approve the exact launch.",
+      "openApprovals": "Open approvals",
+      "launchUnavailable": {
+        "not_configured": "Launching is not available: this platform is not configured on this server.",
+        "not_implemented": "Launching is not available: this platform has no integration yet.",
+        "not_supported": "Launching from Flexibx is not available yet for this platform. Review the plan and create it in the platform's own tools for now.",
+        "blocked": "Launching from Flexibx is not available yet for this platform: the required platform API behavior has not been verified. Create the campaign in the platform's own tools for now.",
+        "objective_unsupported": "This objective cannot be created from Flexibx on this platform yet. Supported here: awareness and traffic.",
+        "execution_disabled": "Creating campaigns on the platform is turned off on this server. An administrator must enable it after validating real platform credentials.",
+        "destination_missing": "Add a destination link (https) before requesting a launch.",
+        "spend_limit_missing": "Set a workspace spending limit for this currency before requesting a launch.",
+        "currency_unsupported": "Creating campaigns from Flexibx is not available yet for this account's currency: its budget units on the platform could not be verified.",
+        "placement_unsupported": "Creating campaigns from Flexibx supports chosen Facebook placements only. Instagram and automatic placements (which include Instagram) need an Instagram account, not supported yet. Edit the placements below."
+      },
+      "requestLaunch": "Request launch approval",
+      "requestLaunchConfirm": "Send exactly this launch for approval? Nothing is sent to the platform until it is approved.",
+      "adminOnly": "Only owners and admins can request a launch.",
+      "failed": "The launch did not complete. Nothing more will be sent without a new approval.",
+      "reopen": "Back to draft",
+      "externalActions": "What a launch would send",
+      "externalActionsHint": "The exact calls Flexibx would make to the platform (everything created paused). An approval covers exactly these, once.",
+      "edit": "Edit plan",
+      "save": "Save changes",
+      "discard": "Discard plan",
+      "discardConfirm": "Discard this plan?",
+      "campaignName": "Campaign name",
+      "whatsappDestination": "People who click open a WhatsApp conversation with your business (ads that click to WhatsApp). Your Facebook Page is needed when launching.",
+      "destination": "Destination link"
+    },
+    "genders": {
+      "ALL": "All",
+      "FEMALE": "Women",
+      "MALE": "Men"
+    },
+    "placements": {
+      "AUTOMATIC": "Automatic (platform chooses)",
+      "FACEBOOK_FEED": "Facebook feed",
+      "FACEBOOK_STORIES": "Facebook stories",
+      "FACEBOOK_REELS": "Facebook reels",
+      "INSTAGRAM_FEED": "Instagram feed",
+      "INSTAGRAM_STORIES": "Instagram stories",
+      "INSTAGRAM_REELS": "Instagram reels"
+    },
+    "ctas": {
+      "LEARN_MORE": "Learn more",
+      "SHOP_NOW": "Shop now",
+      "SIGN_UP": "Sign up",
+      "CONTACT_US": "Contact us",
+      "SEND_MESSAGE": "Send message",
+      "BOOK_NOW": "Book now",
+      "ORDER_NOW": "Order now"
+    },
+    "capabilities": {
+      "listAccounts": "Find ad accounts",
+      "readCampaigns": "Read campaigns, ad sets and ads",
+      "readInsights": "Read results",
+      "launchCampaign": "Create and launch campaigns",
+      "whatsappAccounts": "Find WhatsApp Business accounts",
+      "whatsappRead": "Read numbers and message templates",
+      "whatsappStatuses": "Record message statuses (verified webhooks)",
+      "whatsappSend": "Send WhatsApp messages"
+    },
+    "capabilityOn": "Available",
+    "capabilityOff": "Not available yet",
+    "manageLink": "Connections are managed on the Integrations page.",
+    "manageLinkLabel": "Open Integrations",
+    "execution": {
+      "title": "On the platform",
+      "hint": "What Flexibx has created on the platform for this plan. Everything is created paused; nothing is delivered or charged until activation is approved.",
+      "steps": {
+        "media": "Image",
+        "campaign": "Campaign",
+        "adset": "Ad set",
+        "creative": "Creative",
+        "ad": "Ad"
+      },
+      "stepStatus": {
+        "IN_FLIGHT": "Sending",
+        "SUCCEEDED": "Created",
+        "FAILED": "Failed",
+        "UNCERTAIN": "Outcome unknown (will be checked, never resent blindly)"
+      },
+      "platformStatus": "Status on the platform",
+      "checkedAt": "checked {date}",
+      "activation": "Activation",
+      "activationStatus": {
+        "NONE": "Not requested (paused)",
+        "REQUESTED": "Waiting for approval",
+        "ACTIVE": "Turned on — delivery depends on the status on the platform",
+        "UNCERTAIN": "Outcome unknown — check the platform before trying again",
+        "FAILED": "Failed"
+      },
+      "requestActivation": "Request activation approval",
+      "requestActivationConfirm": "Ask an owner or admin to approve turning this campaign on? It will start delivering and spending only after that approval.",
+      "activationPending": "Activation is waiting for an owner or admin to approve it."
+    },
+    "spendLimits": {
+      "title": "Spending limits",
+      "hint": "Campaigns are created or activated only within these limits, per currency. Required before any launch.",
+      "executionOn": "Creating campaigns on the platforms is enabled on this server (every launch and activation still needs approval).",
+      "executionOff": "Creating campaigns on the platforms is turned off on this server. Plans can be reviewed but not sent.",
+      "empty": "No spending limits yet.",
+      "currency": "Currency (e.g. SAR)",
+      "maxPlan": "Maximum per campaign",
+      "maxDaily": "Maximum daily average",
+      "save": "Save limit"
+    },
+    "optimization": {
+      "title": "Recommendations",
+      "hint": "Suggestions from your accounts' past results. They are not forecasts and nothing is changed automatically: budgets are never raised, and nothing is activated or sent without a person's approval.",
+      "empty": "No recommendations yet. Sync a selected account with enough results.",
+      "basis": "Based on historical results of the last {days} days (not a forecast).",
+      "none": "Nothing stands out in these results.",
+      "redistribute": "Consider moving part of the daily budget from “{from}” to “{to}” (total unchanged):",
+      "perDay": "per day",
+      "pauseNoClicks": "Consider pausing “{name}”: it spent without any clicks.",
+      "pauseLowCtr": "Consider pausing “{name}”: its click-through rate ({ctr}) is far below the account's median ({median}).",
+      "creativeRefresh": "Try a new creative variation for “{name}” (different image, headline or text).",
+      "insufficient": "Too little data to judge: {names}."
+    },
+    "identity": {
+      "title": "Facebook Page",
+      "hint": "The Page these ads are published as. Flexibx lists the Pages your connection may advertise on and never chooses between several for you. Changing it after a launch request needs a new approval.",
+      "none": "No Page chosen yet.",
+      "chosen": "Ads publish as: {name}",
+      "load": "Load my Pages",
+      "empty": "No Page with advertising access was found for this connection.",
+      "choose": "Page",
+      "save": "Use this Page",
+      "placementsHint": "Creating campaigns from Flexibx supports Facebook placements only (Instagram needs an Instagram account, not supported yet)."
+    }
+  },
+  "integrations": {
+    "title": "Integrations",
+    "description": "Connect the accounts this workspace uses, through each platform's own sign-in. Every workspace connects its own accounts; Flexibx never asks for developer credentials.",
+    "forbidden": "Your role cannot open integrations.",
+    "principles": {
+      "own": "Your accounts and access stay in this workspace only.",
+      "consent": "You choose what to share on the platform's own screen, and can disconnect at any time.",
+      "noSpend": "Connecting never launches campaigns, sends messages or spends money: those need a separate approval."
+    },
+    "platformsTitle": "Platforms",
+    "requirementsTitle": "What this platform still needs from Flexibx",
+    "requirements": {
+      "META": "Meta App Review (Advanced access to ads_read) and Business Verification before other businesses can connect. Launching also needs ads_management.",
+      "SNAPCHAT": "A Snap Marketing API app (Organization Admin). Launching is not built.",
+      "TIKTOK": "A TikTok API for Business app approved for ad account management and reporting. Launching is not built.",
+      "WHATSAPP": "Meta Tech Provider onboarding with App Review (Advanced access to whatsapp_business_management) and an Embedded Signup configuration. Sending messages also needs whatsapp_business_messaging, a registered business number, approved templates and each customer's opt-in; Meta bills delivered messages."
+    },
+    "whatsapp": {
+      "title": "WhatsApp Business accounts",
+      "hint": "Read-only. Select the accounts this workspace works with, then refresh to read their numbers and templates.",
+      "empty": "No WhatsApp Business accounts yet. Connect WhatsApp Business first.",
+      "select": "Use this account",
+      "deselect": "Stop using",
+      "sync": "Refresh",
+      "neverSynced": "Not read yet.",
+      "syncedAt": "Read {date}",
+      "syncFailed": "The last read failed. Try again or check the connection.",
+      "numbers": "Business phone numbers",
+      "noNumbers": "No numbers read yet.",
+      "number": "Number",
+      "verifiedName": "Display name",
+      "quality": "Quality",
+      "verification": "Verification",
+      "templates": "Message templates",
+      "noTemplates": "No templates read yet.",
+      "templateName": "Template",
+      "language": "Language",
+      "category": "Category",
+      "status": "Status",
+      "statuses": "Message statuses, last 7 days",
+      "statusesHint": "Counted from WhatsApp's signed notifications. No phone numbers or message contents are kept.",
+      "statusLabels": {
+        "sent": "Sent",
+        "delivered": "Delivered",
+        "read": "Read",
+        "failed": "Failed",
+        "received": "Customer messages",
+        "other": "Other"
+      },
+      "qualityLabels": {
+        "GREEN": "High",
+        "YELLOW": "Medium",
+        "RED": "Low",
+        "UNKNOWN": "Unknown"
+      },
+      "ctwa": "To bring people into WhatsApp conversations, plan a Meta campaign with the Messages objective: its ad set opens WhatsApp."
+    },
+    "messaging": {
+      "title": "WhatsApp messaging",
+      "sendingOn": "Sending is enabled on this server. Every message needs an owner's or admin's approval of that exact message.",
+      "sendingOff": "Sending WhatsApp messages is turned off on this server. Contacts and consent can be recorded; nothing is sent.",
+      "contacts": "Contacts",
+      "contactsHint": "Only people who agreed to receive WhatsApp messages from you. Numbers are stored encrypted and shown masked. A customer who writes STOP is opted out automatically.",
+      "noContacts": "No contacts yet.",
+      "account": "WhatsApp account",
+      "phone": "Phone number",
+      "phoneHint": "International format with the country code, e.g. +9665…",
+      "consentSource": "Where they opted in",
+      "consentSources": {
+        "website_form": "Website form",
+        "in_store": "In store",
+        "whatsapp_message": "They messaged us on WhatsApp",
+        "other": "Other (recorded)",
+        "whatsapp_keyword": "Wrote START on WhatsApp",
+        "staff": "Recorded by staff",
+        "user_preferences": "WhatsApp setting",
+        "error_131050": "Reported by WhatsApp"
+      },
+      "consentConfirmed": "This customer agreed to receive WhatsApp messages from this business.",
+      "addContact": "Add contact",
+      "consent": {
+        "OPTED_IN": "Opted in",
+        "OPTED_OUT": "Opted out"
+      },
+      "windowOpen": "24-hour window open",
+      "optOut": "Record opt-out",
+      "optOutConfirm": "Record that this contact does not want WhatsApp messages? Only they can opt in again, by writing START.",
+      "send": "Send one message",
+      "sendHint": "One message to one contact. It waits for an owner's or admin's approval and is sent once. Free text is only possible within 24 hours of the customer's last message; otherwise use an approved template.",
+      "adminOnly": "Owners and admins can ask to send; an owner or admin then approves each message.",
+      "sendUnready": "Sync a selected WhatsApp account (numbers and templates) and add an opted-in contact first.",
+      "sender": "From (business number)",
+      "recipient": "To (opted-in contact)",
+      "message": "Message",
+      "freeText": "Free text (service window only)",
+      "parameters": "Template parameters",
+      "parametersHint": "One per line, in the template's order.",
+      "text": "Text",
+      "textHint": "Only for free text.",
+      "requestSend": "Ask for approval to send",
+      "pending": "Saving…",
+      "messages": "Recent messages",
+      "messagesHint": "Statuses as reported by WhatsApp (sent, delivered, read, failed), in order.",
+      "noMessages": "No messages yet.",
+      "status": {
+        "PENDING": "Waiting for approval",
+        "SENDING": "Sending",
+        "UNCERTAIN": "Outcome unknown (not resent)",
+        "ACCEPTED": "Accepted by WhatsApp",
+        "SENT": "Sent",
+        "DELIVERED": "Delivered",
+        "READ": "Read",
+        "FAILED": "Failed",
+        "CANCELLED": "Not sent"
+      },
+      "marketingOptedOut": "Stopped marketing messages",
+      "consentEvents": {
+        "OPTED_IN": "Opted in",
+        "OPTED_OUT": "Opted out",
+        "MARKETING_OPTED_OUT": "Stopped marketing messages",
+        "MARKETING_RESUMED": "Resumed marketing messages"
+      },
+      "resolved": "Checked by an admin",
+      "resolve": "I checked it — release the contact",
+      "resolveConfirm": "Confirm you checked whether this message reached the customer (with the customer or in WhatsApp Manager). It will not be resent; further messages to this contact become possible again."
     }
   }
 }

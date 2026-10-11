@@ -56,6 +56,21 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
 }
 
 export const config = {
-  // Pages only: skip API routes, Next internals and files with an extension.
-  matcher: ["/((?!api|_next|_vercel|.*\\..*).*)"],
+  matcher: [
+    {
+      // Pages only: skip API routes, Next internals and files with an extension.
+      source: "/((?!api|_next|_vercel|.*\\..*).*)",
+      // Router prefetches are not visits. They run in the background, may finish after
+      // the person has already moved to another workspace, and would then write that
+      // older workspace into the last-workspace cookie. The proxy cannot tell them apart
+      // itself (Next strips `next-router-prefetch` from the request it receives), so they
+      // are excluded here. Nothing else here matters for a prefetch: the CSP applies to
+      // documents, locale prefixes are already in the URL, and the session is renewed by
+      // the next real request.
+      missing: [
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ],
+    },
+  ],
 };

@@ -56,13 +56,27 @@ model User {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships        WorkspaceMember[]
-  auditLogs          AuditLog[]
-  sessions           Session[]
-  accounts           Account[]
-  invitationsCreated WorkspaceInvitation[]
-  contentCreated     ContentItem[]
-  mediaUploaded      MediaAsset[]
+  memberships               WorkspaceMember[]
+  auditLogs                 AuditLog[]
+  sessions                  Session[]
+  accounts                  Account[]
+  invitationsCreated        WorkspaceInvitation[]
+  contentCreated            ContentItem[]
+  mediaUploaded             MediaAsset[]
+  aiGenerations             AiGeneration[]
+  generatedVideos           GeneratedVideo[]
+  videoJobs                 VideoGenerationJob[]
+  automationDelegate        AutomationPolicy[]     @relation("AutomationDelegate")
+  agentRunsRequested        AgentRun[]
+  agentTaskApprovals        AgentTaskApproval[]
+  adOAuthStates             AdOAuthState[]
+  adConnections             AdConnection[]
+  adPlansCreated            AdPlan[]
+  adSpendLimitsSet          AdSpendLimit[]
+  whatsappContactsAdded     WhatsAppContact[]
+  whatsappMessagesRequested WhatsAppMessage[]
+  whatsappMessagesResolved  WhatsAppMessage[]      @relation("WhatsAppMessageResolvedBy")
+  whatsappConsentActions    WhatsAppConsentEvent[] @relation("WhatsAppConsentActor")
 
   @@map("users")
 }
@@ -94,16 +108,37 @@ model Workspace {
   invitations WorkspaceInvitation[]
 
   // Marketing Core (Phase 3). Changed only through their own guarded models.
-  brand             Brand?
-  audiences         Audience[]
-  marketingGoals    MarketingGoal[]
-  contentPillars    ContentPillar[]
-  campaigns         Campaign[]
-  campaignGoals     CampaignGoal[]
-  campaignPillars   CampaignPillar[]
-  contentItems      ContentItem[]
-  mediaAssets       MediaAsset[]
-  contentItemAssets ContentItemAsset[]
+  brand                 Brand?
+  audiences             Audience[]
+  marketingGoals        MarketingGoal[]
+  contentPillars        ContentPillar[]
+  campaigns             Campaign[]
+  campaignGoals         CampaignGoal[]
+  campaignPillars       CampaignPillar[]
+  contentItems          ContentItem[]
+  mediaAssets           MediaAsset[]
+  contentItemAssets     ContentItemAsset[]
+  aiGenerations         AiGeneration[]
+  generatedVideos       GeneratedVideo[]
+  generatedVideoFiles   GeneratedVideoFile[]
+  videoJobs             VideoGenerationJob[]
+  videoAttempts         VideoGenerationAttempt[]
+  usageLedgerEntries    UsageLedgerEntry[]
+  automationPolicy      AutomationPolicy?
+  agentRuns             AgentRun[]
+  agentTasks            AgentTask[]
+  agentTaskApprovals    AgentTaskApproval[]
+  adOAuthStates         AdOAuthState[]
+  adConnections         AdConnection[]
+  adAccounts            AdAccount[]
+  adPlans               AdPlan[]
+  whatsappSnapshots     WhatsAppSnapshot[]
+  whatsappEvents        WhatsAppWebhookEvent[]
+  adExecutionSteps      AdExecutionStep[]
+  adSpendLimits         AdSpendLimit[]
+  whatsappContacts      WhatsAppContact[]
+  whatsappMessages      WhatsAppMessage[]
+  whatsappConsentEvents WhatsAppConsentEvent[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -520,6 +555,10 @@ model ContentItem {
   goal      MarketingGoal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
   createdBy User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   assets    ContentItemAsset[]
+  /// AI suggestions generated for this draft (Phase 4).
+  aiAssists AiGeneration[]     @relation("AiGenerationTarget")
+  /// AI suggestions that were used to create or change this item (Phase 4).
+  aiApplied AiGeneration[]     @relation("AiGenerationApplied")
 
   @@index([workspaceId, status, updatedAt(sort: Desc)])
   @@index([workspaceId, scheduledAt])
@@ -534,20 +573,23 @@ model ContentItem {
 
 /// An uploaded file. Bytes live in object storage under a server-generated key.
 model MediaAsset {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId      String   @map("workspace_id") @db.Uuid
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String          @map("workspace_id") @db.Uuid
   /// Display name only (sanitized); never used for storage paths.
-  filename         String   @db.VarChar(255)
-  contentType      String   @map("content_type") @db.VarChar(100)
-  sizeBytes        Int      @map("size_bytes")
-  storageKey       String   @unique @map("storage_key") @db.VarChar(512)
+  filename         String          @db.VarChar(255)
+  contentType      String          @map("content_type") @db.VarChar(100)
+  sizeBytes        Int             @map("size_bytes")
+  storageKey       String          @unique @map("storage_key") @db.VarChar(512)
+  /// Where the object is stored (set once; see StorageProvider). No default: every
+  /// writer must state the provider it wrote to (existing rows were backfilled).
+  storageProvider  StorageProvider @map("storage_provider")
   width            Int?
   height           Int?
-  altText          String?  @map("alt_text") @db.VarChar(500)
-  metadata         Json     @default("{}")
-  uploadedByUserId String?  @map("uploaded_by_user_id") @db.Uuid
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  altText          String?         @map("alt_text") @db.VarChar(500)
+  metadata         Json            @default("{}")
+  uploadedByUserId String?         @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   uploadedBy   User?              @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
@@ -573,4 +615,934 @@ model ContentItemAsset {
   @@index([workspaceId])
   @@index([mediaAssetId])
   @@map("content_item_assets")
+}
+
+// ── AI Marketing Engine (Phase 4) ────────────────────────────────────────────
+
+enum AiOperation {
+  IDEAS
+  BRIEF
+  COPY
+  CONTENT_DRAFT
+  CONTENT_REWRITE
+  CONTENT_ALTERNATIVES
+  CONTENT_HOOK
+  CONTENT_CTA
+  CONTENT_BRIEF
+  /// Advertising campaign proposal (see src/server/ads/planner.ts); never applied as content.
+  AD_PLAN
+
+  @@map("ai_operation")
+}
+
+enum AiGenerationStatus {
+  /// Reserved under the daily cap; the provider call is in progress (or never finished).
+  PENDING
+  SUCCEEDED
+  FAILED
+
+  @@map("ai_generation_status")
+}
+
+/// One AI generation attempt: usage accounting and, when it succeeded, the validated
+/// structured output a person may later use. Prompts are never stored.
+model AiGeneration {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String             @map("workspace_id") @db.Uuid
+  userId               String?            @map("user_id") @db.Uuid
+  operation            AiOperation
+  status               AiGenerationStatus @default(PENDING)
+  provider             String             @db.VarChar(40)
+  model                String?            @db.VarChar(100)
+  language             Locale
+  inputTokens          Int?               @map("input_tokens")
+  outputTokens         Int?               @map("output_tokens")
+  /// Estimated cost in millionths of a US dollar; null when it cannot be calculated.
+  costMicros           BigInt?            @map("cost_micros")
+  latencyMs            Int?               @map("latency_ms")
+  errorCode            String?            @map("error_code") @db.VarChar(40)
+  /// The draft this suggestion is for (content assistance only).
+  contentItemId        String?            @map("content_item_id") @db.Uuid
+  /// Validated output (SUCCEEDED only).
+  output               Json?
+  /// Server-side map of the short reference handles shown to the model (P1, C1) to ids.
+  references           Json               @default("{}")
+  appliedAt            DateTime?          @map("applied_at") @db.Timestamptz(3)
+  appliedContentItemId String?            @map("applied_content_item_id") @db.Uuid
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace          Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user               User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  contentItem        ContentItem? @relation("AiGenerationTarget", fields: [contentItemId], references: [id], onDelete: SetNull)
+  appliedContentItem ContentItem? @relation("AiGenerationApplied", fields: [appliedContentItemId], references: [id], onDelete: SetNull)
+  adPlans            AdPlan[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, userId, createdAt(sort: Desc)])
+  @@index([workspaceId, contentItemId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([contentItemId])
+  @@index([appliedContentItemId])
+  @@map("ai_generations")
+}
+
+// ── Generated video retention ──
+// Successfully generated AI videos are kept for exactly 7 days (168 hours) from the
+// server-side success timestamp; then every stored file (video, thumbnail, derivatives,
+// temporary files) is deleted by the retention job. The row itself is kept as job/cost
+// metadata under a separate retention period (docs/AI_VIDEO_RETENTION_POLICY.md).
+
+enum GeneratedVideoStatus {
+  /// Files are stored and downloadable until expires_at.
+  AVAILABLE
+  /// Expired; the retention job is deleting the files (retried with backoff).
+  DELETING
+  /// Every file is deleted; only metadata remains.
+  DELETED
+}
+
+enum GeneratedVideoFileKind {
+  VIDEO
+  THUMBNAIL
+  DERIVATIVE
+  TEMPORARY
+}
+
+/// One successfully generated AI video and its job/cost metadata.
+model GeneratedVideo {
+  id                    String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId           String               @map("workspace_id") @db.Uuid
+  /// Who requested the video; receives the expiry reminders.
+  userId                String?              @map("user_id") @db.Uuid
+  title                 String               @db.VarChar(200)
+  provider              String               @db.VarChar(40)
+  model                 String?              @db.VarChar(100)
+  providerJobId         String?              @map("provider_job_id") @db.VarChar(200)
+  durationSeconds       Int                  @map("duration_seconds")
+  width                 Int
+  height                Int
+  /// Cost in millionths of a US dollar; null when unknown.
+  costMicros            BigInt?              @map("cost_micros")
+  status                GeneratedVideoStatus @default(AVAILABLE)
+  /// Set by the database (now()) when the row is created; never changes.
+  succeededAt           DateTime             @default(dbgenerated("statement_timestamp()")) @map("succeeded_at") @db.Timestamptz(3)
+  /// Always succeeded_at + 168 hours (database trigger); never set by the application.
+  expiresAt             DateTime             @default(dbgenerated("(now() + '168:00:00'::interval)")) @map("expires_at") @db.Timestamptz(3)
+  reminder48hAt         DateTime?            @map("reminder_48h_at") @db.Timestamptz(3)
+  reminder24hAt         DateTime?            @map("reminder_24h_at") @db.Timestamptz(3)
+  deletionAttempts      Int                  @default(0) @map("deletion_attempts")
+  nextDeletionAttemptAt DateTime?            @map("next_deletion_attempt_at") @db.Timestamptz(3)
+  lastDeletionError     String?              @map("last_deletion_error") @db.VarChar(60)
+  filesDeletedAt        DateTime?            @map("files_deleted_at") @db.Timestamptz(3)
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  files     GeneratedVideoFile[]
+  job       VideoGenerationJob?
+
+  @@index([workspaceId, succeededAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@index([userId])
+  @@map("generated_videos")
+}
+
+/// A stored object belonging to a generated video. The row outlives the object as a
+/// tombstone (deleted_at) so deletion stays auditable and idempotent.
+model GeneratedVideoFile {
+  id              String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String                 @map("workspace_id") @db.Uuid
+  videoId         String                 @map("video_id") @db.Uuid
+  kind            GeneratedVideoFileKind
+  storageKey      String                 @unique @map("storage_key") @db.VarChar(300)
+  /// Where the object is stored (set once; see StorageProvider). No default: every
+  /// writer must state the provider it wrote to (existing rows were backfilled).
+  storageProvider StorageProvider        @map("storage_provider")
+  contentType     String                 @map("content_type") @db.VarChar(100)
+  byteSize        Int                    @map("byte_size")
+  deletedAt       DateTime?              @map("deleted_at") @db.Timestamptz(3)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  video     GeneratedVideo @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, videoId])
+  @@index([videoId])
+  @@map("generated_video_files")
+}
+
+// ── Generative video core (Phase 4) ──────────────────────────────────────────────
+// One requested clip (job) owns its provider submissions (attempts); its money moves
+// only through the append-only usage ledger (RESERVE → CAPTURE → RELEASE).
+// docs/AI_MARKETING_EMPLOYEE_ARCHITECTURE.md §4.2. Request, policy check and reservation
+// happen in one transaction, so a job is stored from RESERVED on.
+
+enum VideoJobState {
+  /// Worst-case cost reserved; no attempt yet.
+  RESERVED
+  IN_PROGRESS
+  /// A validated, stored clip waits for a person to accept or reject it.
+  READY_FOR_REVIEW
+  ACCEPTED
+  REJECTED
+  FAILED
+  /// A per-job bound (attempts, wall time) was reached.
+  LIMIT_REACHED
+  /// A submission's outcome is unknown and could not be reconciled: the reservation is
+  /// held and nothing is resubmitted until an operator resolves it.
+  NEEDS_RECONCILIATION
+  CANCELLED
+
+  @@map("video_job_state")
+}
+
+enum VideoAttemptState {
+  /// Written BEFORE the provider is called.
+  INTENDED
+  /// The provider accepted the submission (provider job id stored).
+  SUBMITTED
+  /// The provider reports an output; not yet stored.
+  OUTPUT_READY
+  /// Output downloaded, validated, stored and recorded.
+  VALIDATED
+  FAILED_RETRYABLE
+  FAILED_PERMANENT
+  REFUSED_BY_PROVIDER
+  TIMED_OUT
+  OUTCOME_UNKNOWN
+  CANCELLED
+
+  @@map("video_attempt_state")
+}
+
+enum UsageLedgerKind {
+  RESERVE
+  CAPTURE
+  RELEASE
+
+  @@map("usage_ledger_kind")
+}
+
+/// One requested generative clip. The prompt is business content (not audited).
+model VideoGenerationJob {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String        @map("workspace_id") @db.Uuid
+  userId           String?       @map("user_id") @db.Uuid
+  title            String        @db.VarChar(200)
+  prompt           String        @db.VarChar(2000)
+  durationSeconds  Int           @map("duration_seconds")
+  /// "16:9" or "9:16".
+  aspectRatio      String        @map("aspect_ratio") @db.VarChar(5)
+  /// "720p" or "1080p".
+  resolution       String        @db.VarChar(5)
+  audio            Boolean
+  /// DRAFT or STANDARD (PREMIUM needs an approval flow that does not exist yet).
+  tier             String        @db.VarChar(16)
+  state            VideoJobState @default(RESERVED)
+  maxAttempts      Int           @default(2) @map("max_attempts")
+  attemptCount     Int           @default(0) @map("attempt_count")
+  provider         String        @db.VarChar(40)
+  model            String        @db.VarChar(100)
+  rateCardVersion  String        @map("rate_card_version") @db.VarChar(40)
+  /// Millionths of a US dollar.
+  reservedMicros   BigInt        @map("reserved_micros")
+  capturedMicros   BigInt        @default(0) @map("captured_micros")
+  releasedMicros   BigInt        @default(0) @map("released_micros")
+  failureCode      String?       @map("failure_code") @db.VarChar(40)
+  generatedVideoId String?       @unique @map("generated_video_id") @db.Uuid
+  /// Wall-time bound: attempts still running after this instant time out.
+  deadlineAt       DateTime      @map("deadline_at") @db.Timestamptz(3)
+  /// The runner currently driving the job, and until when its claim holds.
+  leaseToken       String?       @map("lease_token") @db.Uuid
+  leaseExpiresAt   DateTime?     @map("lease_expires_at") @db.Timestamptz(3)
+  finishedAt       DateTime?     @map("finished_at") @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace      Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user           User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  generatedVideo GeneratedVideo?          @relation(fields: [generatedVideoId], references: [id], onDelete: SetNull)
+  attempts       VideoGenerationAttempt[]
+  ledgerEntries  UsageLedgerEntry[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, state, createdAt])
+  @@index([state, updatedAt])
+  @@index([userId])
+  @@map("video_generation_jobs")
+}
+
+/// One provider submission of a job (each may be billed).
+model VideoGenerationAttempt {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String            @map("workspace_id") @db.Uuid
+  jobId          String            @map("job_id") @db.Uuid
+  attemptNo      Int               @map("attempt_no")
+  /// hash(jobId, attemptNo): sent as the client reference; never reused.
+  idempotencyKey String            @map("idempotency_key") @db.VarChar(64)
+  state          VideoAttemptState @default(INTENDED)
+  provider       String            @db.VarChar(40)
+  model          String            @db.VarChar(100)
+  providerJobId  String?           @map("provider_job_id") @db.VarChar(200)
+  failureCode    String?           @map("failure_code") @db.VarChar(40)
+  billedSeconds  Int?              @map("billed_seconds")
+  costMicros     BigInt?           @map("cost_micros")
+  /// True when the cost is our estimate (the provider reported no billed units).
+  costEstimated  Boolean           @default(false) @map("cost_estimated")
+  outputSha256   String?           @map("output_sha256") @db.Char(64)
+  outputBytes    Int?              @map("output_bytes")
+  submittedAt    DateTime?         @map("submitted_at") @db.Timestamptz(3)
+  finishedAt     DateTime?         @map("finished_at") @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  job       VideoGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, attemptNo])
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, jobId])
+  @@index([provider, providerJobId])
+  @@map("video_generation_attempts")
+}
+
+/// Append-only money movements. Committed spend of a period = RESERVE − RELEASE;
+/// CAPTURE records the part of a reservation actually charged.
+model UsageLedgerEntry {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String          @map("workspace_id") @db.Uuid
+  jobId           String          @map("job_id") @db.Uuid
+  /// e.g. VIDEO_GENERATIVE.
+  category        String          @db.VarChar(40)
+  /// The UTC day of the job's reservation (all its entries count against that day).
+  period          DateTime        @db.Date
+  kind            UsageLedgerKind
+  amountMicros    BigInt          @map("amount_micros")
+  estimated       Boolean         @default(false)
+  rateCardVersion String          @map("rate_card_version") @db.VarChar(40)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  job       VideoGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, period, category])
+  @@index([jobId])
+  @@map("usage_ledger_entries")
+}
+
+// ── Orchestration core (AI Marketing Manager) ─────────────────────────────────────
+// Persistent, workspace-scoped runs of a workflow, made of tasks with dependencies,
+// retries, timeouts and leases. Every run executes under the workspace's automation
+// policy (emergency stop, cadence, what may happen without a person) and with the
+// authority of the member who granted it, re-checked before every task.
+// docs/AI_MARKETING_EMPLOYEE_ARCHITECTURE.md §2.
+
+enum AutomationCadence {
+  OFF
+  DAILY
+  WEEKLY
+
+  @@map("automation_cadence")
+}
+
+enum AgentRunTrigger {
+  MANUAL
+  SCHEDULE
+
+  @@map("agent_run_trigger")
+}
+
+enum AgentRunState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  /// Stopped on something a person must decide or fix (approval, lost access).
+  NEEDS_ATTENTION
+
+  @@map("agent_run_state")
+}
+
+enum AgentTaskState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// Not needed (a policy or the data made it unnecessary).
+  SKIPPED
+  CANCELLED
+  /// Consequential: waits for a person (no policy grants it).
+  NEEDS_APPROVAL
+
+  @@map("agent_task_state")
+}
+
+/// One per workspace. Defaults are conservative: nothing runs on a schedule and nothing
+/// is drafted until an administrator turns it on.
+model AutomationPolicy {
+  workspaceId     String            @id @map("workspace_id") @db.Uuid
+  /// Scheduled autonomy on/off.
+  enabled         Boolean           @default(false)
+  /// Emergency stop: no task starts while set (manual and scheduled runs alike).
+  paused          Boolean           @default(false)
+  pausedAt        DateTime?         @map("paused_at") @db.Timestamptz(3)
+  /// The member whose authority automation uses (who last enabled it); re-checked per task.
+  delegateUserId  String?           @map("delegate_user_id") @db.Uuid
+  planningCadence AutomationCadence @default(OFF) @map("planning_cadence")
+  nextPlanningAt  DateTime?         @map("next_planning_at") @db.Timestamptz(3)
+  /// May the manager create content drafts on its own? (Never publishes.)
+  allowDrafts     Boolean           @default(false) @map("allow_drafts")
+  maxDraftsPerRun Int               @default(3) @map("max_drafts_per_run")
+  version         Int               @default(0)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  delegate  User?     @relation("AutomationDelegate", fields: [delegateUserId], references: [id], onDelete: SetNull)
+
+  @@index([enabled, paused, nextPlanningAt])
+  @@index([delegateUserId])
+  @@map("automation_policies")
+}
+
+/// One execution of a workflow (e.g. content planning) in a workspace.
+model AgentRun {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  workflow          String          @db.VarChar(40)
+  trigger           AgentRunTrigger
+  state             AgentRunState   @default(PENDING)
+  requestedByUserId String?         @map("requested_by_user_id") @db.Uuid
+  /// Unique per workspace: a schedule slot or a manual request runs once.
+  idempotencyKey    String          @map("idempotency_key") @db.VarChar(120)
+  /// The report of a finished run (counts and ids; no generated text).
+  summary           Json?
+  failureCode       String?         @map("failure_code") @db.VarChar(60)
+  startedAt         DateTime?       @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime?       @map("finished_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedBy      User?               @relation(fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  tasks            AgentTask[]
+  approvals        AgentTaskApproval[]
+  adPlans          AdPlan[]
+  adActivations    AdPlan[]            @relation("AdPlanActivation")
+  whatsappMessages WhatsAppMessage[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([state, updatedAt])
+  @@index([requestedByUserId])
+  @@map("agent_runs")
+}
+
+/// One step of a run. Starts when every task in `dependsOn` succeeded or was skipped.
+model AgentTask {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String         @map("workspace_id") @db.Uuid
+  runId              String         @map("run_id") @db.Uuid
+  key                String         @db.VarChar(40)
+  handler            String         @db.VarChar(60)
+  /// INTERNAL, EXTERNAL or SPEND (only INTERNAL can run without a person today).
+  risk               String         @db.VarChar(20)
+  dependsOn          String[]       @default([]) @map("depends_on")
+  state              AgentTaskState @default(PENDING)
+  attempts           Int            @default(0)
+  maxAttempts        Int            @map("max_attempts")
+  timeoutMs          Int            @map("timeout_ms")
+  /// Not before this instant (retry backoff).
+  runAfter           DateTime       @default(now()) @map("run_after") @db.Timestamptz(3)
+  leaseToken         String?        @map("lease_token") @db.Uuid
+  leaseExpiresAt     DateTime?      @map("lease_expires_at") @db.Timestamptz(3)
+  output             Json?
+  failureCode        String?        @map("failure_code") @db.VarChar(60)
+  startedAt          DateTime?      @map("started_at") @db.Timestamptz(3)
+  finishedAt         DateTime?      @map("finished_at") @db.Timestamptz(3)
+  /// Approval requests made for this task so far (EXTERNAL/SPEND only; 0 = never asked).
+  approvalRound      Int            @default(0) @map("approval_round")
+  /// The action awaiting (or last given) approval: a deterministic description built by
+  /// the task's `describe`, and its SHA-256 over canonical JSON.
+  approvalRequest    Json?          @map("approval_request")
+  approvalHash       String?        @map("approval_hash") @db.VarChar(64)
+  /// A one-time grant: set by an APPROVED decision, cleared when the task is claimed
+  /// (or cancelled). Only ever set while the task is PENDING.
+  approvedDecisionId String?        @unique @map("approved_decision_id") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  run              AgentRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  approvedDecision AgentTaskApproval?  @relation("ApprovedDecision", fields: [approvedDecisionId], references: [id], onDelete: SetNull)
+  approvals        AgentTaskApproval[] @relation("TaskApprovals")
+
+  @@unique([runId, key])
+  @@index([workspaceId, runId])
+  @@index([state, runAfter])
+  @@index([state, leaseExpiresAt])
+  @@map("agent_tasks")
+}
+
+enum AgentApprovalDecision {
+  APPROVED
+  REJECTED
+
+  @@map("agent_approval_decision")
+}
+
+/// A person's decision on one approval request of an EXTERNAL or SPEND task. Immutable
+/// (a trigger refuses updates other than the decider's account being deleted; the tenant
+/// guard refuses deletes; workspace deletion still cascades). One decision per request
+/// round. The snapshot is the exact action that was decided on.
+model AgentTaskApproval {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String                @map("workspace_id") @db.Uuid
+  runId           String                @map("run_id") @db.Uuid
+  taskId          String                @map("task_id") @db.Uuid
+  round           Int
+  decision        AgentApprovalDecision
+  decidedByUserId String?               @map("decided_by_user_id") @db.Uuid
+  note            String?               @db.VarChar(500)
+  /// INTERNAL never needs approval: EXTERNAL or SPEND.
+  risk            String                @db.VarChar(20)
+  snapshot        Json
+  snapshotHash    String                @map("snapshot_hash") @db.VarChar(64)
+  /// SPEND only: the amount approved, in minor units of `currency`.
+  amountMinor     BigInt?               @map("amount_minor")
+  currency        String?               @db.Char(3)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  run       AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task      AgentTask  @relation("TaskApprovals", fields: [taskId], references: [id], onDelete: Cascade)
+  decidedBy User?      @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  grantedTo AgentTask? @relation("ApprovedDecision")
+
+  @@unique([taskId, round])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([runId])
+  @@index([decidedByUserId])
+  @@map("agent_task_approvals")
+}
+
+// ── Object storage providers (platform admin) ─────────────────────────────────────
+
+/// Where a stored object lives. Recorded on every object row and never changed in place:
+/// reads and deletes go to the provider the object was written to.
+/// - LEGACY_S3: the S3-compatible store configured by the S3_* environment variables —
+///   every object stored before provider tracking existed (never assumed to be Wasabi).
+/// - WASABI: the Wasabi account configured in the platform admin (non-secret settings
+///   below; access keys only from the WASABI_* environment variables).
+enum StorageProvider {
+  LEGACY_S3
+  WASABI
+}
+
+/// Platform-wide object-storage settings: a single row (id = 1), edited by platform
+/// administrators only. Non-secret values only — access keys are never stored here.
+/// `writeProvider` decides where NEW objects are written; existing objects keep their own
+/// recorded provider. Changing it never moves or copies data.
+model PlatformStorageSettings {
+  id             Int             @id @default(1)
+  writeProvider  StorageProvider @default(LEGACY_S3) @map("write_provider")
+  wasabiRegion   String?         @map("wasabi_region") @db.VarChar(32)
+  wasabiEndpoint String?         @map("wasabi_endpoint") @db.VarChar(255)
+  wasabiBucket   String?         @map("wasabi_bucket") @db.VarChar(63)
+  /// Incremented by every change; a change decided on an older version is refused.
+  version        Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("platform_storage_settings")
+}
+
+// ── Advertising platforms (Meta first; Snapchat, TikTok, WhatsApp later) ──────────
+//
+// One connection per workspace and platform, made through the platform's official OAuth
+// flow by an administrator. The access token is stored only as an AES-256-GCM envelope
+// bound to its workspace and platform (src/server/ads/token-vault.ts) and is never sent
+// to a browser, logged or audited. Platform-specific shapes stop at the adapter
+// (src/server/ads/adapters/*): everything stored here is the unified model.
+
+enum AdPlatform {
+  META
+  SNAPCHAT
+  TIKTOK
+  WHATSAPP
+
+  @@map("ad_platform")
+}
+
+enum AdConnectionStatus {
+  ACTIVE
+  /// The token expired or was invalidated by the platform; reconnect.
+  EXPIRED
+  /// Disconnected in Flexibx: the token was deleted.
+  REVOKED
+  /// The platform refused a required permission or the account check failed.
+  ERROR
+
+  @@map("ad_connection_status")
+}
+
+enum AdPlanStatus {
+  DRAFT
+  /// Sent to the approval workflow (agent run); edits are refused while submitted.
+  SUBMITTED
+  LAUNCHED
+  FAILED
+  DISCARDED
+
+  @@map("ad_plan_status")
+}
+
+/// A pending OAuth authorization: single use, short-lived, bound to the person and the
+/// workspace that started it. Only the SHA-256 of the state value is stored.
+model AdOAuthState {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String     @map("workspace_id") @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  platform    AdPlatform
+  stateHash   String     @unique @map("state_hash") @db.VarChar(64)
+  /// UI locale to return to after the platform redirects back.
+  locale      String     @db.VarChar(5)
+  expiresAt   DateTime   @map("expires_at") @db.Timestamptz(3)
+  consumedAt  DateTime?  @map("consumed_at") @db.Timestamptz(3)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@map("ad_oauth_states")
+}
+
+model AdConnection {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  platform          AdPlatform
+  status            AdConnectionStatus @default(ACTIVE)
+  /// The platform user who granted access (id and display name only).
+  externalUserId    String             @map("external_user_id") @db.VarChar(64)
+  externalUserName  String?            @map("external_user_name") @db.VarChar(200)
+  /// Permissions the platform reports as granted (e.g. ads_read).
+  scopes            String[]           @default([])
+  /// Encrypted access token envelope; null once disconnected.
+  tokenCiphertext   String?            @map("token_ciphertext")
+  tokenExpiresAt    DateTime?          @map("token_expires_at") @db.Timestamptz(3)
+  connectedByUserId String?            @map("connected_by_user_id") @db.Uuid
+  lastErrorCode     String?            @map("last_error_code") @db.VarChar(60)
+  lastCheckedAt     DateTime?          @map("last_checked_at") @db.Timestamptz(3)
+  version           Int                @default(0)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectedBy User?       @relation(fields: [connectedByUserId], references: [id], onDelete: SetNull)
+  accounts    AdAccount[]
+
+  @@unique([workspaceId, platform])
+  @@index([connectedByUserId])
+  @@map("ad_connections")
+}
+
+/// An advertising account the connection can see. `selected` accounts are the ones the
+/// workspace works with; `snapshot` is the last read-only sync in the unified model.
+model AdAccount {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String     @map("workspace_id") @db.Uuid
+  connectionId   String     @map("connection_id") @db.Uuid
+  platform       AdPlatform
+  externalId     String     @map("external_id") @db.VarChar(64)
+  name           String     @db.VarChar(200)
+  currency       String     @db.Char(3)
+  timeZone       String?    @map("time_zone") @db.VarChar(64)
+  /// Unified account status (ACTIVE, DISABLED, UNSETTLED, PENDING, CLOSED, OTHER).
+  externalStatus String     @map("external_status") @db.VarChar(20)
+  selected       Boolean    @default(false)
+  snapshot       Json?
+  lastSyncedAt   DateTime?  @map("last_synced_at") @db.Timestamptz(3)
+  syncErrorCode  String?    @map("sync_error_code") @db.VarChar(60)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace        Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection       AdConnection           @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  plans            AdPlan[]
+  /// WhatsApp Business accounts only: the last read of numbers and templates.
+  whatsappSnapshot WhatsAppSnapshot?
+  whatsappEvents   WhatsAppWebhookEvent[]
+  whatsappContacts WhatsAppContact[]
+  whatsappMessages WhatsAppMessage[]
+
+  @@unique([connectionId, externalId])
+  @@index([workspaceId, platform])
+  @@map("ad_accounts")
+}
+
+/// A proposed campaign for one ad account: the AI's suggestion, completed with the
+/// budget and dates a person chose. Money and dates are deterministic columns, never
+/// model output. Launching goes through the approval workflow (agent run).
+model AdPlan {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String       @map("workspace_id") @db.Uuid
+  accountId          String       @map("account_id") @db.Uuid
+  platform           AdPlatform
+  status             AdPlanStatus @default(DRAFT)
+  name               String       @db.VarChar(200)
+  /// The unified campaign spec (objective, audience, placements, creative).
+  proposal           Json
+  budgetTotalMinor   BigInt       @map("budget_total_minor")
+  currency           String       @db.Char(3)
+  startDate          DateTime     @map("start_date") @db.Date
+  endDate            DateTime     @map("end_date") @db.Date
+  aiGenerationId     String?      @map("ai_generation_id") @db.Uuid
+  runId              String?      @map("run_id") @db.Uuid
+  externalCampaignId String?      @map("external_campaign_id") @db.VarChar(64)
+  failureCode        String?      @map("failure_code") @db.VarChar(60)
+  createdByUserId    String?      @map("created_by_user_id") @db.Uuid
+  /// The identity the ads publish as (Facebook Page, Snap profile, TikTok identity),
+  /// resolved when the plan is submitted; part of the approved action.
+  identityExternalId String?      @map("identity_external_id") @db.VarChar(64)
+  /// The chosen identity's display name (shown for approval).
+  identityName       String?      @map("identity_name") @db.VarChar(200)
+  /// The identities the connection could advertise as when last listed: [{id, name}].
+  identityOptions    Json?        @map("identity_options")
+  identityCheckedAt  DateTime?    @map("identity_checked_at") @db.Timestamptz(3)
+  /// Activation of the created (paused) campaign: null (not requested), REQUESTED,
+  /// ACTIVE, UNCERTAIN (outcome unknown, reconcile first) or FAILED.
+  activationStatus   String?      @map("activation_status") @db.VarChar(20)
+  activationRunId    String?      @map("activation_run_id") @db.Uuid
+  /// The campaign's delivery status as last read from the platform (unified).
+  externalStatus     String?      @map("external_status") @db.VarChar(20)
+  externalCheckedAt  DateTime?    @map("external_checked_at") @db.Timestamptz(3)
+  version            Int          @default(0)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account       AdAccount         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  aiGeneration  AiGeneration?     @relation(fields: [aiGenerationId], references: [id], onDelete: SetNull)
+  run           AgentRun?         @relation(fields: [runId], references: [id], onDelete: SetNull)
+  activationRun AgentRun?         @relation("AdPlanActivation", fields: [activationRunId], references: [id], onDelete: SetNull)
+  createdBy     User?             @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  steps         AdExecutionStep[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([accountId])
+  @@index([aiGenerationId])
+  @@index([runId])
+  @@index([createdByUserId])
+  @@index([activationRunId])
+  @@map("ad_plans")
+}
+
+/// The last read of a WhatsApp Business account (an AdAccount on platform WHATSAPP): its
+/// business phone numbers (masked: last digits only) and message templates (name,
+/// language, category, status). Never customer numbers or message contents.
+model WhatsAppSnapshot {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String   @map("workspace_id") @db.Uuid
+  accountId    String   @unique @map("account_id") @db.Uuid
+  phoneNumbers Json     @map("phone_numbers")
+  templates    Json
+  fetchedAt    DateTime @map("fetched_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account   AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("whatsapp_snapshots")
+}
+
+/// One verified WhatsApp webhook event — an outgoing message's status or the fact that a
+/// customer wrote — recorded once per workspace (`event_hash` deduplicates Meta's
+/// retries and replays). Holds no phone numbers, message ids or contents: only the kind,
+/// the status, the business number's id, an error code and when it happened.
+model WhatsAppWebhookEvent {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String   @map("workspace_id") @db.Uuid
+  accountId     String   @map("account_id") @db.Uuid
+  eventHash     String   @map("event_hash") @db.Char(64)
+  /// "status" (an outgoing message's sent/delivered/read/failed) or "message" (inbound).
+  kind          String   @db.VarChar(20)
+  status        String   @db.VarChar(20)
+  phoneNumberId String   @map("phone_number_id") @db.VarChar(64)
+  errorCode     Int?     @map("error_code")
+  eventAt       DateTime @map("event_at") @db.Timestamptz(3)
+  receivedAt    DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account   AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, eventHash])
+  @@index([workspaceId, accountId, eventAt(sort: Desc)])
+  @@index([accountId])
+  @@map("whatsapp_webhook_events")
+}
+
+/// The execution ledger of a plan: one row per external object (media, campaign, ad set,
+/// creative, ad) and for activation. Each write is recorded IN_FLIGHT before it is sent
+/// and SUCCEEDED (with the external id), FAILED (definitely not done) or UNCERTAIN (may
+/// have happened: reconciled by lookup before anything is written again).
+model AdExecutionStep {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  planId      String   @map("plan_id") @db.Uuid
+  step        String   @db.VarChar(20)
+  status      String   @db.VarChar(20)
+  externalId  String?  @map("external_id") @db.VarChar(64)
+  errorCode   String?  @map("error_code") @db.VarChar(60)
+  attempts    Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan      AdPlan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, step])
+  @@index([workspaceId, planId])
+  @@map("ad_execution_steps")
+}
+
+/// A workspace's advertising spending limits, per currency. No campaign is created or
+/// activated without a limit for its currency: a plan's total budget and its average
+/// daily budget must stay within it. Changed only by owners and admins.
+model AdSpendLimit {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String   @map("workspace_id") @db.Uuid
+  currency            String   @db.Char(3)
+  maxPlanBudgetMinor  BigInt   @map("max_plan_budget_minor")
+  maxDailyBudgetMinor BigInt   @map("max_daily_budget_minor")
+  updatedByUserId     String?  @map("updated_by_user_id") @db.Uuid
+  version             Int      @default(0)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  updatedBy User?     @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, currency])
+  @@index([updatedByUserId])
+  @@map("ad_spend_limits")
+}
+
+/// A person the workspace may message on WhatsApp — only with their recorded opt-in. The
+/// number is stored encrypted (token vault, bound to the workspace) and as a keyed hash
+/// for lookups (inbound messages, opt-outs); only its last 4 digits are ever shown.
+model WhatsAppContact {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId           String    @map("workspace_id") @db.Uuid
+  accountId             String    @map("account_id") @db.Uuid
+  phoneHash             String    @map("phone_hash") @db.Char(64)
+  phoneCiphertext       String    @map("phone_ciphertext")
+  maskedNumber          String    @map("masked_number") @db.VarChar(20)
+  /// OPTED_IN or OPTED_OUT.
+  consentStatus         String    @map("consent_status") @db.VarChar(20)
+  /// Where the opt-in was given (e.g. website_form, in_store, whatsapp_message).
+  consentSource         String    @map("consent_source") @db.VarChar(40)
+  consentAt             DateTime  @map("consent_at") @db.Timestamptz(3)
+  optedOutAt            DateTime? @map("opted_out_at") @db.Timestamptz(3)
+  /// The customer's last message to the business (opens the 24-hour service window).
+  lastInboundAt         DateTime? @map("last_inbound_at") @db.Timestamptz(3)
+  /// The customer stopped MARKETING messages (Meta user_preferences / error 131050);
+  /// utility templates and service replies are still allowed. Cleared only by the
+  /// customer (resume).
+  marketingOptedOutAt   DateTime? @map("marketing_opted_out_at") @db.Timestamptz(3)
+  marketingOptOutSource String?   @map("marketing_opt_out_source") @db.VarChar(40)
+  addedByUserId         String?   @map("added_by_user_id") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace     Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account       AdAccount              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  addedBy       User?                  @relation(fields: [addedByUserId], references: [id], onDelete: SetNull)
+  messages      WhatsAppMessage[]
+  consentEvents WhatsAppConsentEvent[]
+
+  @@unique([workspaceId, accountId, phoneHash])
+  @@index([accountId])
+  @@index([addedByUserId])
+  @@map("whatsapp_contacts")
+}
+
+/// One outbound WhatsApp message, sent only through an approved orchestration task. Its
+/// lifecycle: PENDING → SENDING → ACCEPTED (Meta returned a message id) → SENT →
+/// DELIVERED → READ, or FAILED; UNCERTAIN when the send may have happened without a
+/// confirmation (never re-sent automatically). `idempotency_key` makes a repeated request
+/// for the same message to the same contact return the existing one.
+model WhatsAppMessage {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  accountId         String    @map("account_id") @db.Uuid
+  contactId         String    @map("contact_id") @db.Uuid
+  phoneNumberId     String    @map("phone_number_id") @db.VarChar(64)
+  /// TEMPLATE or TEXT.
+  kind              String    @db.VarChar(20)
+  templateName      String?   @map("template_name") @db.VarChar(512)
+  templateLanguage  String?   @map("template_language") @db.VarChar(20)
+  /// Template body parameters or the free-form text (business-authored).
+  content           Json
+  status            String    @db.VarChar(20)
+  externalMessageId String?   @unique @map("external_message_id") @db.VarChar(128)
+  errorCode         Int?      @map("error_code")
+  idempotencyKey    String    @map("idempotency_key") @db.Char(64)
+  runId             String?   @map("run_id") @db.Uuid
+  requestedByUserId String?   @map("requested_by_user_id") @db.Uuid
+  sentAt            DateTime? @map("sent_at") @db.Timestamptz(3)
+  statusAt          DateTime? @map("status_at") @db.Timestamptz(3)
+  /// An owner/admin looked at an UNCERTAIN message (checked the recipient's phone or
+  /// WhatsApp Manager) and released the contact for further sends. Status stays UNCERTAIN.
+  resolvedAt        DateTime? @map("resolved_at") @db.Timestamptz(3)
+  resolvedByUserId  String?   @map("resolved_by_user_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account     AdAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  contact     WhatsAppContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  run         AgentRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+  requestedBy User?           @relation(fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  resolvedBy  User?           @relation("WhatsAppMessageResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([accountId])
+  @@index([contactId])
+  @@index([runId])
+  @@index([requestedByUserId])
+  @@index([resolvedByUserId])
+  @@map("whatsapp_messages")
+}
+
+/// Append-only consent history of a WhatsApp contact: every opt-in, opt-out, marketing
+/// opt-out and marketing resume, with its source and time. Never updated or deleted.
+model WhatsAppConsentEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  contactId   String   @map("contact_id") @db.Uuid
+  /// OPTED_IN, OPTED_OUT, MARKETING_OPTED_OUT or MARKETING_RESUMED.
+  kind        String   @db.VarChar(30)
+  /// Where it came from: website_form, in_store, whatsapp_message, other (staff-recorded
+  /// opt-in); staff; whatsapp_keyword; user_preferences; error_131050.
+  source      String   @db.VarChar(40)
+  occurredAt  DateTime @map("occurred_at") @db.Timestamptz(3)
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   WhatsAppContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  actor     User?           @relation("WhatsAppConsentActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, contactId, occurredAt(sort: Desc)])
+  @@index([contactId])
+  @@index([actorUserId])
+  @@map("whatsapp_consent_events")
 }
