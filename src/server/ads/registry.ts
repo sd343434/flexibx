@@ -59,6 +59,7 @@ export function getAdAdapters(): AdAdapters {
               appSecret,
               version: env.META_GRAPH_VERSION,
               requestWriteAccess: env.ADS_EXECUTION_ENABLED === "true",
+              ...(env.META_CONFIG_ID === undefined ? {} : { configId: env.META_CONFIG_ID }),
             }),
           }
         : { platform: "META", available: false, reason: "not_configured" },

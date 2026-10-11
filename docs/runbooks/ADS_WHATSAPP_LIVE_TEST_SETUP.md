@@ -9,21 +9,25 @@ Do the steps in order. Never paste secret values into tickets, chats or logs. Ea
 secret belongs only in the server's environment (`.env` locally, or the host's secret
 store).
 
-## 0. Current state (checked 2026-10-11)
+## 0. Current state (checked 2026-10-11, updated after the migration and Meta app setup)
 
 | Setting                                                                        | Local `.env`                  |
 | ------------------------------------------------------------------------------ | ----------------------------- |
 | `DATABASE_URL`, `APP_URL`                                                      | set (`http://localhost:3000`) |
 | `AUTH_SECRET`, `ENCRYPTION_KEY`                                                | present but empty             |
 | `META_APP_ID`, `META_APP_SECRET`, `META_GRAPH_VERSION`, `META_REDIRECT_URI`    | absent                        |
+| `META_CONFIG_ID`                                                               | absent                        |
 | `WHATSAPP_CONFIG_ID`, `WHATSAPP_REDIRECT_URI`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | absent                        |
 | `ADS_EXECUTION_ENABLED`, `WHATSAPP_SENDING_ENABLED`                            | absent (= off)                |
 
-There are no Meta app, test ad account, Page, WABA, templates or webhook subscriptions
-yet. The persistent databases are behind on migrations:
+In the Meta App Dashboard, a Business app with the "Create & manage ads with Marketing
+API" use case exists, with `ads_read`, `ads_management` and `pages_show_list` ready for
+testing, `pages_manage_ads` added for App Review, and a Facebook Login for Business
+configuration (User access token). Its redirect URI is not registered yet (no public
+HTTPS origin). There is no test ad account, WABA, template or webhook subscription yet.
 
-- `flexibx` has 15 of 19 applied;
-- `flexibx_test` has 12 of 19.
+Migrations: `flexibx` has all 19 applied (after a verified backup); `flexibx_test` has 12
+of 19 (left untouched).
 
 ## 1. Server basics
 
@@ -46,10 +50,18 @@ yet. The persistent databases are behind on migrations:
    - `META_APP_ID` and `META_APP_SECRET`, from App settings → Basic.
    - `META_GRAPH_VERSION=v26.0`. This is the default; set it explicitly anyway.
 3. Add the **Facebook Login for Business** product.
-4. Under Valid OAuth Redirect URIs, add both of these:
+4. Facebook Login for Business → **Configurations** → **Create configuration**:
+   - Login variation: General.
+   - Access token: **User access token** (each customer connects with their own
+     Facebook account; not a system user token).
+   - Permissions: `ads_read`, `ads_management`, `pages_show_list`, `pages_manage_ads`.
+   - Put the configuration id in `META_CONFIG_ID`. Business apps use this id
+     (`config_id`) instead of a permission list in the login dialog; without it Flexibx
+     sends `scope`, which only classic Facebook Login apps accept.
+5. Facebook Login for Business → **Settings** → Valid OAuth Redirect URIs, add both:
    - `{APP_URL}/api/integrations/meta/callback`
    - `{APP_URL}/api/integrations/whatsapp/callback`
-5. Permissions. While the app is in Development mode, these work only for people who
+6. Permissions. While the app is in Development mode, these work only for people who
    have an app role (admin, developer or tester). Request Advanced Access through App
    Review before anyone else can use them.
 
@@ -62,11 +74,12 @@ yet. The persistent databases are behind on migrations:
    | `whatsapp_business_management` | reading the WABA, its numbers and templates        |
    | `whatsapp_business_messaging`  | sending messages                                   |
 
-   Flexibx asks for the three write permissions only when `ADS_EXECUTION_ENABLED=true`,
-   and it refuses every write unless all three were granted. A connection made before
-   you turn the flag on must be reconnected.
+   With `META_CONFIG_ID`, the configuration decides which permissions are asked for.
+   Without it, Flexibx asks for the three write permissions only when
+   `ADS_EXECUTION_ENABLED=true`. Either way it refuses every write unless all three were
+   granted, and a connection made without them must be reconnected.
 
-6. Complete **Business Verification** for the portfolio. It is required for Advanced
+7. Complete **Business Verification** for the portfolio. It is required for Advanced
    Access to `ads_management` and the WhatsApp permissions.
 
 ## 3. Test ad account and Page

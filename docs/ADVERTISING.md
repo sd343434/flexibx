@@ -199,7 +199,13 @@ Official flow (Graph / Marketing API, version from `META_GRAPH_VERSION`, default
 released 2026-07-29):
 
 1. Login dialog `https://www.facebook.com/{version}/dialog/oauth` with `client_id`,
-   `redirect_uri`, `state`, `response_type=code`, `scope=ads_read`.
+   `redirect_uri`, `state`, `response_type=code`, and either:
+   - Business apps (Facebook Login for Business, `META_CONFIG_ID` set): `config_id` and
+     `override_default_response_type=true`, no `scope` — Documented: "config_id has
+     replaced scope (which should not be used)"; the configuration (User access token)
+     lists the permissions;
+   - classic Facebook Login apps: `scope=ads_read` (plus the write permissions when
+     `ADS_EXECUTION_ENABLED=true`).
 2. Server-to-server code exchange `GET https://graph.facebook.com/{version}/oauth/access_token`
    (`client_id`, `client_secret`, `redirect_uri`, `code`), then a long-lived token
    (`grant_type=fb_exchange_token`, ~60 days).

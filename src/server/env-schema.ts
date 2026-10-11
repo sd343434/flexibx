@@ -194,6 +194,10 @@ export function parseVideoRetentionEnv(source: EnvSource): VideoRetentionEnv {
  * - META_GRAPH_VERSION: Graph / Marketing API version (default v26.0).
  * - META_REDIRECT_URI: OAuth redirect; default {APP_URL}/api/integrations/meta/callback
  *   (must be registered as a valid OAuth redirect URI in the Meta app).
+ * - META_CONFIG_ID: the Facebook Login for Business configuration id (Business apps).
+ *   When set, the login dialog asks for that configuration (`config_id`) instead of a
+ *   permission list (`scope`), which Facebook Login for Business does not use; the
+ *   permissions are then the configuration's, and the granted ones are still checked.
  * Snapchat Ads is available only when SNAPCHAT_CLIENT_ID and SNAPCHAT_CLIENT_SECRET (a
  * Snap Marketing API OAuth app from Snapchat Ads Manager → Business Details) are set AND
  * ENCRYPTION_KEY exists.
@@ -232,6 +236,12 @@ export const adsEnvSchema = z
         .default("v26.0"),
     ),
     META_REDIRECT_URI: optional(z.url({ protocol: /^https?$/ })),
+    META_CONFIG_ID: optional(
+      z
+        .string()
+        .trim()
+        .regex(/^\d{5,32}$/, "must be the numeric Facebook Login for Business configuration id"),
+    ),
     SNAPCHAT_CLIENT_ID: optional(
       z
         .string()
@@ -278,6 +288,10 @@ export const adsEnvSchema = z
       message: "SNAPCHAT_CLIENT_ID and SNAPCHAT_CLIENT_SECRET must be set together",
     },
   )
+  .refine((env) => env.META_CONFIG_ID === undefined || env.META_APP_ID !== undefined, {
+    path: ["META_CONFIG_ID"],
+    message: "META_CONFIG_ID needs the Meta app (META_APP_ID and META_APP_SECRET)",
+  })
   .refine((env) => env.WHATSAPP_CONFIG_ID === undefined || env.META_APP_ID !== undefined, {
     path: ["WHATSAPP_CONFIG_ID"],
     message: "WHATSAPP_CONFIG_ID needs the Meta app (META_APP_ID and META_APP_SECRET)",

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inclusiveDays } from "@/server/ads/adapter";
 import { majorToMinor, readCampaignSpec } from "@/server/ads/model";
@@ -176,6 +176,41 @@ describe("advertising env", () => {
         META_GRAPH_VERSION: "v25.0",
       }),
     ).toMatchObject({ META_APP_ID: "1234567890", META_GRAPH_VERSION: "v25.0" });
+  });
+
+  it("accepts a numeric Facebook Login for Business configuration id only with the Meta app", () => {
+    const app = { META_APP_ID: "1234567890", META_APP_SECRET: "s".repeat(32) };
+    expect(parseAdsEnv({ ...app, META_CONFIG_ID: "1402673982022294" })).toMatchObject({
+      META_CONFIG_ID: "1402673982022294",
+    });
+    expect(parseAdsEnv({ ...app, META_CONFIG_ID: "" }).META_CONFIG_ID).toBeUndefined();
+    expect(() => parseAdsEnv({ ...app, META_CONFIG_ID: "config-abc" })).toThrow(/META_CONFIG_ID/);
+    expect(() => parseAdsEnv({ META_CONFIG_ID: "1402673982022294" })).toThrow(/META_CONFIG_ID/);
+  });
+
+  describe("registry", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it("hands META_CONFIG_ID to the Meta login dialog", async () => {
+      vi.stubEnv("APP_URL", "https://app.test");
+      vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/unused");
+      vi.stubEnv("META_APP_ID", "1234567890");
+      vi.stubEnv("META_APP_SECRET", "s".repeat(32));
+      vi.stubEnv("ENCRYPTION_KEY", randomBytes(32).toString("base64"));
+      vi.stubEnv("META_CONFIG_ID", "1402673982022294");
+      vi.resetModules();
+      const { getAdAdapters } = await import("@/server/ads/registry");
+      const meta = getAdAdapters().META;
+      if (!meta.available) throw new Error("Meta should be available");
+      const url = new URL(
+        meta.adapter.authorizeUrl({ state: "s".repeat(43), redirectUri: "https://app.test/cb" }),
+      );
+      expect(url.searchParams.get("config_id")).toBe("1402673982022294");
+      expect(url.searchParams.has("scope")).toBe(false);
+    });
   });
 });
 

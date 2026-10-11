@@ -30,7 +30,11 @@ import {
 // Meta (Facebook and Instagram ads) through the official Graph / Marketing API.
 //
 // Connection: the Facebook Login dialog (www.facebook.com/{version}/dialog/oauth) with a
-// single-use `state`, then a server-to-server code exchange (graph.facebook.com/
+// single-use `state` — for a Business app with Facebook Login for Business, the dialog
+// names the app's login configuration (`config_id`, `response_type=code`,
+// `override_default_response_type=true`; Meta: "config_id has replaced scope") and the
+// permissions are the configuration's; otherwise it lists the permissions (`scope`) —
+// then a server-to-server code exchange (graph.facebook.com/
 // {version}/oauth/access_token) and an exchange for a long-lived user token
 // (grant_type=fb_exchange_token, ~60 days). Only `ads_read` is requested: reading ad
 // accounts, campaigns, ad sets, ads and insights. Every Graph call carries
@@ -60,6 +64,11 @@ export interface MetaAdapterConfig {
    * never needs them; a connection without them simply cannot create campaigns.
    */
   readonly requestWriteAccess?: boolean;
+  /**
+   * Facebook Login for Business configuration id (META_CONFIG_ID). When set, the dialog
+   * uses it instead of `scope`; the permissions actually granted are checked either way.
+   */
+  readonly configId?: string;
 }
 
 type Json = Record<string, unknown>;
@@ -279,6 +288,11 @@ export function createMetaAdapter(config: MetaAdapterConfig): AdPlatformAdapter 
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);
       url.searchParams.set("response_type", "code");
+      if (config.configId !== undefined) {
+        url.searchParams.set("config_id", config.configId);
+        url.searchParams.set("override_default_response_type", "true");
+        return url.toString();
+      }
       url.searchParams.set(
         "scope",
         [

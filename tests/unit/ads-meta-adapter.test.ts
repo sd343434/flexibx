@@ -67,6 +67,32 @@ describe("Meta OAuth", () => {
     expect(url.toString()).not.toContain(APP_SECRET);
   });
 
+  it("names the Facebook Login for Business configuration instead of a scope when one is set", () => {
+    for (const requestWriteAccess of [false, true]) {
+      const adapter = createMetaAdapter({
+        appId: "1234567890",
+        appSecret: APP_SECRET,
+        version: "v26.0",
+        configId: "1402673982022294",
+        requestWriteAccess,
+      });
+      const url = new URL(
+        adapter.authorizeUrl({ state: "s".repeat(43), redirectUri: "https://app.test/cb" }),
+      );
+      expect(url.origin + url.pathname).toBe("https://www.facebook.com/v26.0/dialog/oauth");
+      // Meta: config_id has replaced scope, which should not be sent with it.
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        client_id: "1234567890",
+        redirect_uri: "https://app.test/cb",
+        state: "s".repeat(43),
+        response_type: "code",
+        config_id: "1402673982022294",
+        override_default_response_type: "true",
+      });
+      expect(url.toString()).not.toContain(APP_SECRET);
+    }
+  });
+
   it("exchanges the code server-side for a long-lived token and reads granted permissions", async () => {
     const { adapter, calls } = fakeGraph({
       "/oauth/access_token": (url) =>
