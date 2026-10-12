@@ -197,7 +197,10 @@ export async function Suggestion({
       );
       break;
     case "AD_PLAN":
-      // Advertising proposals belong to the advertising area; the server never shows them here.
+    case "SOCIAL_REPLY":
+    case "SOCIAL_LEARNING":
+      // Advertising proposals and social agents' work belong to their own areas; the server
+      // never shows them here.
       break;
   }
 

@@ -35,6 +35,9 @@ export default async function AdminLayout({ children, params }: AdminLayoutProps
           <Link href="/admin/storage" className="font-medium underline-offset-4 hover:underline">
             {t("nav.storage")}
           </Link>
+          <Link href="/admin/credits" className="font-medium underline-offset-4 hover:underline">
+            {t("nav.credits")}
+          </Link>
         </nav>
         {children}
       </main>

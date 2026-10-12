@@ -139,6 +139,17 @@ model Workspace {
   whatsappContacts      WhatsAppContact[]
   whatsappMessages      WhatsAppMessage[]
   whatsappConsentEvents WhatsAppConsentEvent[]
+  creditAccount         CreditAccount?
+  creditHolds           CreditHold[]
+  creditLedgerEntries   CreditLedgerEntry[]
+  creditRecharges       CreditRecharge[]
+  socialChannels        SocialChannel[]
+  socialAgents          SocialAgent[]
+  socialInteractions    SocialInteraction[]
+  socialReplies         SocialReply[]
+  socialLessons         SocialLesson[]
+  socialAutoReplyClaims SocialAutoReplyClaim[]
+  socialPosts           SocialPost[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -548,17 +559,19 @@ model ContentItem {
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  campaign  Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  pillar    ContentPillar?     @relation(fields: [pillarId], references: [id], onDelete: SetNull)
-  audience  Audience?          @relation(fields: [audienceId], references: [id], onDelete: SetNull)
-  goal      MarketingGoal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
-  createdBy User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  assets    ContentItemAsset[]
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign    Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  pillar      ContentPillar?     @relation(fields: [pillarId], references: [id], onDelete: SetNull)
+  audience    Audience?          @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  goal        MarketingGoal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  createdBy   User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  assets      ContentItemAsset[]
   /// AI suggestions generated for this draft (Phase 4).
-  aiAssists AiGeneration[]     @relation("AiGenerationTarget")
+  aiAssists   AiGeneration[]     @relation("AiGenerationTarget")
   /// AI suggestions that were used to create or change this item (Phase 4).
-  aiApplied AiGeneration[]     @relation("AiGenerationApplied")
+  aiApplied   AiGeneration[]     @relation("AiGenerationApplied")
+  /// Publications of this item to the workspace's Facebook Pages.
+  socialPosts SocialPost[]
 
   @@index([workspaceId, status, updatedAt(sort: Desc)])
   @@index([workspaceId, scheduledAt])
@@ -631,6 +644,10 @@ enum AiOperation {
   CONTENT_BRIEF
   /// Advertising campaign proposal (see src/server/ads/planner.ts); never applied as content.
   AD_PLAN
+  /// A reply draft to a comment or message by an AI social agent (src/server/social).
+  SOCIAL_REPLY
+  /// An AI social agent reviewing its feedback and proposing better guidance.
+  SOCIAL_LEARNING
 
   @@map("ai_operation")
 }
@@ -1545,4 +1562,485 @@ model WhatsAppConsentEvent {
   @@index([contactId])
   @@index([actorUserId])
   @@map("whatsapp_consent_events")
+}
+
+// ── Credits (Flexibx's own services; never the customer's advertising budget) ────
+// A workspace pays for Flexibx's AI work in credits. The subscription allowance renews
+// every period and expires at its end; purchased credits do not expire. Every paid task
+// holds its price first (insufficient credits or a reached cap refuse it before any
+// provider call), then captures it on success or releases it on failure. Every movement
+// is an append-only ledger entry. Advertising spend is a separate thing (AdSpendLimit):
+// it is paid by the customer to the platform and never touches credits.
+
+enum CreditEntryKind {
+  /// The period's subscription allowance was granted (renewal).
+  SUBSCRIPTION_GRANT
+  /// Unused subscription allowance expired at the end of its period.
+  SUBSCRIPTION_EXPIRE
+  /// Credits bought (manual invoice or a payment provider).
+  PURCHASE
+  /// Automatic top-up below the threshold, within the monthly ceiling.
+  AUTO_RECHARGE
+  /// Correction by a platform administrator (positive or negative).
+  ADJUSTMENT
+  /// A task's price set aside before it runs.
+  HOLD
+  /// The part of a hold actually charged.
+  CAPTURE
+  /// The part of a hold given back (failure, cancellation, or less than held).
+  RELEASE
+
+  @@map("credit_entry_kind")
+}
+
+enum CreditHoldStatus {
+  HELD
+  CAPTURED
+  RELEASED
+
+  @@map("credit_hold_status")
+}
+
+enum CreditRechargeStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+
+  @@map("credit_recharge_status")
+}
+
+/// One per workspace, created on first use with the default plan.
+model CreditAccount {
+  workspaceId           String   @id @map("workspace_id") @db.Uuid
+  /// Plan code (src/server/billing/plans.ts); changed by a platform administrator.
+  planCode              String   @map("plan_code") @db.VarChar(40)
+  periodStart           DateTime @map("period_start") @db.Timestamptz(3)
+  periodEnd             DateTime @map("period_end") @db.Timestamptz(3)
+  /// Remaining subscription allowance of the current period (expires at its end).
+  subscriptionCredits   Int      @map("subscription_credits")
+  /// Purchased credits (never expire).
+  purchasedCredits      Int      @map("purchased_credits")
+  /// Credits set aside by running tasks (already taken from the two balances above).
+  heldCredits           Int      @default(0) @map("held_credits")
+  /// Spending caps the workspace sets for itself (null = none): credits per day (in the
+  /// workspace time zone), per period, and per feature per period.
+  dailyCap              Int?     @map("daily_cap")
+  periodCap             Int?     @map("period_cap")
+  featureCaps           Json     @default("{}") @map("feature_caps")
+  /// Optional automatic top-up: when the balance falls below the threshold, buy
+  /// `autoRechargeAmount`, never more than `autoRechargePeriodMax` credits per period.
+  autoRechargeEnabled   Boolean  @default(false) @map("auto_recharge_enabled")
+  autoRechargeThreshold Int?     @map("auto_recharge_threshold")
+  autoRechargeAmount    Int?     @map("auto_recharge_amount")
+  autoRechargePeriodMax Int?     @map("auto_recharge_period_max")
+  updatedByUserId       String?  @map("updated_by_user_id") @db.Uuid
+  version               Int      @default(0)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("credit_accounts")
+}
+
+/// A task's price set aside before it runs; settled once (captured or released).
+model CreditHold {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String           @map("workspace_id") @db.Uuid
+  /// Priced feature (src/server/billing/prices.ts), e.g. ai_text, ad_plan, social_reply.
+  feature             String           @db.VarChar(40)
+  amount              Int
+  /// How the hold was taken from the balances (given back the same way).
+  subscriptionPortion Int              @map("subscription_portion")
+  purchasedPortion    Int              @map("purchased_portion")
+  status              CreditHoldStatus @default(HELD)
+  capturedAmount      Int?             @map("captured_amount")
+  /// One hold per task attempt: a retry with the same key never holds twice.
+  idempotencyKey      String           @map("idempotency_key") @db.VarChar(160)
+  /// What the hold pays for (e.g. ai_generation:<id>).
+  reference           String?          @db.VarChar(160)
+  priceVersion        String           @map("price_version") @db.VarChar(40)
+  userId              String?          @map("user_id") @db.Uuid
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  settledAt           DateTime?        @map("settled_at") @db.Timestamptz(3)
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  entries   CreditLedgerEntry[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, status])
+  @@map("credit_holds")
+}
+
+/// Append-only: every credit movement with the balances after it.
+model CreditLedgerEntry {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Strictly increasing order of entries (several share a timestamp in one transaction).
+  sequence           BigInt          @unique @default(autoincrement())
+  workspaceId        String          @map("workspace_id") @db.Uuid
+  kind               CreditEntryKind
+  /// Signed change of the available balance (subscription + purchased).
+  amount             Int
+  subscriptionAfter  Int             @map("subscription_after")
+  purchasedAfter     Int             @map("purchased_after")
+  heldAfter          Int             @map("held_after")
+  holdId             String?         @map("hold_id") @db.Uuid
+  feature            String?         @db.VarChar(40)
+  /// AI provider and model of a captured task, and its cost to Flexibx when the
+  /// provider's price is configured (null = unknown, never estimated).
+  provider           String?         @db.VarChar(40)
+  model              String?         @db.VarChar(120)
+  providerCostMicros BigInt?         @map("provider_cost_micros")
+  actorUserId        String?         @map("actor_user_id") @db.Uuid
+  /// Invoice or payment reference, or an administrator's note.
+  externalRef        String?         @map("external_ref") @db.VarChar(160)
+  /// One manual grant per submitted form: a resubmission with the same key changes nothing.
+  requestKey         String?         @map("request_key") @db.VarChar(80)
+  note               String?         @db.VarChar(300)
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  hold      CreditHold? @relation(fields: [holdId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, requestKey])
+  @@index([workspaceId, sequence(sort: Desc)])
+  @@index([holdId])
+  @@map("credit_ledger_entries")
+}
+
+/// An automatic top-up attempt (charged through the payment provider, once per key).
+model CreditRecharge {
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String               @map("workspace_id") @db.Uuid
+  amount         Int
+  status         CreditRechargeStatus @default(PENDING)
+  idempotencyKey String               @map("idempotency_key") @db.VarChar(160)
+  provider       String?              @db.VarChar(40)
+  externalRef    String?              @map("external_ref") @db.VarChar(160)
+  failureCode    String?              @map("failure_code") @db.VarChar(60)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  settledAt      DateTime?            @map("settled_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt])
+  @@map("credit_recharges")
+}
+
+// ── AI Social Manager ─────────────────────────────────────────────────────────────
+// AI agents that answer a business's Facebook Page and Instagram comments and messages.
+// An agent works from the business's own knowledge (information, FAQ, policies, tone),
+// drafts a reply for every new interaction (paid in credits), and either waits for a
+// person (SUGGEST) or, in AUTO mode, sends low-risk replies itself within the limits the
+// workspace set. Every human decision teaches it: edits and approvals become examples,
+// rejections become rules, and a periodic self-review proposes better guidance that a
+// person applies. Page access tokens are never stored: each send fetches the Page's
+// token from the workspace's Meta connection right before the call.
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+
+  @@map("social_platform")
+}
+
+enum SocialAgentMode {
+  /// Every reply waits for a person.
+  SUGGEST
+  /// Low-risk replies are sent automatically within the agent's limits; others wait.
+  AUTO
+
+  @@map("social_agent_mode")
+}
+
+enum SocialInteractionKind {
+  COMMENT
+  MESSAGE
+
+  @@map("social_interaction_kind")
+}
+
+enum SocialInteractionStatus {
+  /// Received; no draft yet (drafting runs right after, or on the next tick).
+  NEW
+  /// A draft is ready and waits for a person.
+  AWAITING_REVIEW
+  /// The agent says a person must handle it (complaint, sensitive, out of scope).
+  ESCALATED
+  /// A reply is being sent.
+  SENDING
+  REPLIED
+  /// The send may or may not have reached the platform: check before retrying.
+  UNCERTAIN
+  /// Drafting or sending failed (see lastError); a person can retry.
+  FAILED
+  /// A person chose not to reply.
+  IGNORED
+
+  @@map("social_interaction_status")
+}
+
+enum SocialReplyDecision {
+  PENDING
+  APPROVED
+  EDITED
+  REJECTED
+  /// Sent automatically by an AUTO agent.
+  AUTO
+
+  @@map("social_reply_decision")
+}
+
+enum SocialLessonKind {
+  /// A worked example (customer message → the reply a person approved or wrote).
+  EXAMPLE
+  /// A rule from a rejection ("never promise delivery dates").
+  RULE
+  /// A proposed rewrite of the agent's guidance from its self-review.
+  GUIDANCE
+
+  @@map("social_lesson_kind")
+}
+
+enum SocialLessonStatus {
+  ACTIVE
+  PROPOSED
+  APPLIED
+  DISMISSED
+
+  @@map("social_lesson_status")
+}
+
+/// A Facebook Page or Instagram professional account the workspace manages here.
+model SocialChannel {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String         @map("workspace_id") @db.Uuid
+  platform    SocialPlatform
+  /// Page id (Facebook) or Instagram professional account id.
+  externalId  String         @map("external_id") @db.VarChar(64)
+  /// The Facebook Page an Instagram account belongs to (its token is the Page's).
+  pageId      String         @map("page_id") @db.VarChar(64)
+  name        String         @db.VarChar(200)
+  /// The agent answering this channel (null = none; interactions are only collected).
+  agentId     String?        @map("agent_id") @db.Uuid
+  /// Meta webhook subscription done for this Page (subscribed_apps).
+  subscribed  Boolean        @default(false)
+  enabled     Boolean        @default(true)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent        SocialAgent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  interactions SocialInteraction[]
+  posts        SocialPost[]
+
+  @@unique([workspaceId, platform, externalId])
+  @@index([platform, externalId])
+  @@index([agentId])
+  @@map("social_channels")
+}
+
+/// An AI agent with its own knowledge, voice and limits.
+model SocialAgent {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String          @map("workspace_id") @db.Uuid
+  name            String          @db.VarChar(120)
+  /// customer_service, sales or community (shapes the instructions).
+  role            String          @db.VarChar(40)
+  active          Boolean         @default(false)
+  mode            SocialAgentMode @default(SUGGEST)
+  /// auto (the customer's language), ar or en.
+  language        String          @default("auto") @db.VarChar(8)
+  tone            String          @default("") @db.VarChar(500)
+  businessInfo    String          @default("") @map("business_info") @db.VarChar(6000)
+  /// [{ "q": "...", "a": "..." }], at most 30.
+  faq             Json            @default("[]")
+  policies        String          @default("") @db.VarChar(4000)
+  escalation      String          @default("") @db.VarChar(2000)
+  forbidden       String          @default("") @db.VarChar(2000)
+  /// Guidance the agent works by; improved over time by applied self-review proposals.
+  guidance        String          @default("") @db.VarChar(6000)
+  guidanceVersion Int             @default(0) @map("guidance_version")
+  /// AUTO mode only: categories that may be answered without a person, the minimum
+  /// confidence, and the most automatic replies per day.
+  autoCategories  String[]        @default([]) @map("auto_categories")
+  minConfidence   Int             @default(85) @map("min_confidence")
+  dailyAutoCap    Int             @default(50) @map("daily_auto_cap")
+  /// The member whose authority the agent acts with when no person is present (set when
+  /// it is activated; re-checked before every draft and send).
+  delegateUserId  String?         @map("delegate_user_id") @db.Uuid
+  version         Int             @default(0)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channels     SocialChannel[]
+  interactions SocialInteraction[]
+  replies      SocialReply[]
+  lessons      SocialLesson[]
+
+  @@index([workspaceId])
+  @@map("social_agents")
+}
+
+/// A comment or message received on a channel (the inbox).
+/// One automatic reply per platform message across every workspace that manages the Page:
+/// when two workspaces connect the same Page (an agency and its client) and both run AUTO
+/// agents, only the first to claim a comment or message may answer it automatically; the
+/// other leaves its draft for a person. The key is the platform's own ids, so a claim
+/// reveals nothing about the other workspace (callers never read another workspace's row).
+model SocialAutoReplyClaim {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String            @map("workspace_id") @db.Uuid
+  interactionId     String            @map("interaction_id") @db.Uuid
+  platform          SocialPlatform
+  channelExternalId String            @map("channel_external_id") @db.VarChar(64)
+  externalId        String            @map("external_id") @db.VarChar(128)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  interaction       SocialInteraction @relation(fields: [interactionId], references: [id], onDelete: Cascade)
+
+  @@unique([platform, channelExternalId, externalId])
+  @@index([workspaceId])
+  @@index([interactionId])
+  @@map("social_auto_reply_claims")
+}
+
+model SocialInteraction {
+  id               String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String                  @map("workspace_id") @db.Uuid
+  channelId        String                  @map("channel_id") @db.Uuid
+  agentId          String?                 @map("agent_id") @db.Uuid
+  kind             SocialInteractionKind
+  /// Comment id or message id on the platform (deduplicates webhook redeliveries).
+  externalId       String                  @map("external_id") @db.VarChar(128)
+  /// The post (comments) or the sender (messages) the reply goes to.
+  threadExternalId String                  @map("thread_external_id") @db.VarChar(128)
+  authorExternalId String?                 @map("author_external_id") @db.VarChar(128)
+  authorName       String?                 @map("author_name") @db.VarChar(200)
+  text             String                  @db.VarChar(8000)
+  receivedAt       DateTime                @map("received_at") @db.Timestamptz(3)
+  status           SocialInteractionStatus @default(NEW)
+  /// The agent's reading: question, complaint, praise, lead, spam or other.
+  category         String?                 @db.VarChar(20)
+  sentiment        String?                 @db.VarChar(20)
+  lastError        String?                 @map("last_error") @db.VarChar(60)
+  /// Drafting attempts (bounded; failures stay visible).
+  draftAttempts    Int                     @default(0) @map("draft_attempts")
+  /// A drafting attempt holds the message until then (see DRAFT_LEASE_MS).
+  draftingUntil    DateTime?               @map("drafting_until") @db.Timestamptz(3)
+  version          Int                     @default(0)
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace       Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel         SocialChannel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  agent           SocialAgent?           @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  replies         SocialReply[]
+  autoReplyClaims SocialAutoReplyClaim[]
+
+  @@unique([workspaceId, channelId, externalId])
+  @@index([workspaceId, status, receivedAt(sort: Desc)])
+  @@index([channelId])
+  @@index([agentId])
+  @@map("social_interactions")
+}
+
+/// A reply drafted by an agent, the decision on it, and its delivery.
+model SocialReply {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String              @map("workspace_id") @db.Uuid
+  interactionId   String              @map("interaction_id") @db.Uuid
+  agentId         String              @map("agent_id") @db.Uuid
+  generationId    String?             @map("generation_id") @db.Uuid
+  draftText       String?             @map("draft_text") @db.VarChar(2000)
+  confidence      Int
+  needsHuman      Boolean             @map("needs_human")
+  reason          String              @db.VarChar(500)
+  guidanceVersion Int                 @map("guidance_version")
+  decision        SocialReplyDecision @default(PENDING)
+  /// The text actually sent (the draft, or a person's edit).
+  finalText       String?             @map("final_text") @db.VarChar(2000)
+  decidedByUserId String?             @map("decided_by_user_id") @db.Uuid
+  decidedAt       DateTime?           @map("decided_at") @db.Timestamptz(3)
+  rejectReason    String?             @map("reject_reason") @db.VarChar(500)
+  /// NOT_SENT, SENDING, SENT, UNCERTAIN or FAILED.
+  sendStatus      String              @default("NOT_SENT") @map("send_status") @db.VarChar(20)
+  externalReplyId String?             @map("external_reply_id") @db.VarChar(128)
+  sentAt          DateTime?           @map("sent_at") @db.Timestamptz(3)
+  sendError       String?             @map("send_error") @db.VarChar(60)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  interaction SocialInteraction @relation(fields: [interactionId], references: [id], onDelete: Cascade)
+  agent       SocialAgent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([interactionId])
+  @@index([agentId, createdAt(sort: Desc)])
+  @@map("social_replies")
+}
+
+/// What an agent learned: examples, rules and guidance proposals.
+model SocialLesson {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String             @map("workspace_id") @db.Uuid
+  agentId         String             @map("agent_id") @db.Uuid
+  kind            SocialLessonKind
+  status          SocialLessonStatus
+  /// edit, approval, rejection, self_review or manual.
+  source          String             @db.VarChar(20)
+  customerText    String?            @map("customer_text") @db.VarChar(2000)
+  draftText       String?            @map("draft_text") @db.VarChar(2000)
+  /// The approved/edited reply (EXAMPLE), the rule (RULE) or the proposed guidance (GUIDANCE).
+  content         String             @db.VarChar(6000)
+  replyId         String?            @map("reply_id") @db.Uuid
+  createdByUserId String?            @map("created_by_user_id") @db.Uuid
+  decidedByUserId String?            @map("decided_by_user_id") @db.Uuid
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent     SocialAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, kind, status, createdAt(sort: Desc)])
+  @@index([workspaceId])
+  @@map("social_lessons")
+}
+
+/// An approved content item published to a Facebook Page at its time (text and link).
+/// Queued only from APPROVED or SCHEDULED content (the approval gate stays); published
+/// once (claim SCHEDULED → PUBLISHING); a lost answer is UNCERTAIN and is looked up on
+/// the Page before anything is posted again.
+model SocialPost {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  contentItemId     String    @map("content_item_id") @db.Uuid
+  channelId         String    @map("channel_id") @db.Uuid
+  /// SCHEDULED, PUBLISHING, PUBLISHED, UNCERTAIN, FAILED or CANCELLED.
+  status            String    @default("SCHEDULED") @db.VarChar(20)
+  scheduledAt       DateTime  @map("scheduled_at") @db.Timestamptz(3)
+  /// The exact text and link that are (or were) published.
+  message           String    @db.VarChar(10000)
+  link              String?   @db.VarChar(2000)
+  externalPostId    String?   @map("external_post_id") @db.VarChar(128)
+  publishedAt       DateTime? @map("published_at") @db.Timestamptz(3)
+  errorCode         String?   @map("error_code") @db.VarChar(60)
+  requestedByUserId String?   @map("requested_by_user_id") @db.Uuid
+  version           Int       @default(0)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentItem ContentItem   @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  channel     SocialChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([contentItemId, channelId])
+  @@index([status, scheduledAt])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([channelId])
+  @@map("social_posts")
 }

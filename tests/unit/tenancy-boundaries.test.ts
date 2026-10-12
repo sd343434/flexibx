@@ -56,6 +56,9 @@ describe("tenancy boundaries", () => {
     expect(users.sort()).toEqual([
       // Platform admin: the admin flag lookup, platform-wide storage settings and
       // per-provider object counts (no workspace data is read or written).
+      // Platform admin credits: the workspace is found by slug; every credit read and
+      // write then goes through the guarded client with its id.
+      "src/server/admin/credits-admin-actions.ts",
       "src/server/admin/platform-admin.ts",
       "src/server/admin/storage-admin-actions.ts",
       // Advertising OAuth callback: looks the single-use state up by its hash (the
@@ -71,6 +74,10 @@ describe("tenancy boundaries", () => {
       // due policies, stale tasks and active runs only; every run executes per workspace
       // through the guarded client (scheduler.ts, engine.ts), as `pnpm automation:tick`.
       "src/server/orchestration/runtime.ts",
+      // AI Social Manager: the signed Page/Instagram webhook carries no workspace (channels
+      // are found by account id) and the scheduler sweep selects due work across
+      // workspaces; every row is then read and written through the guarded client.
+      "src/server/social/social-runtime.ts",
       // Storage router: reads the platform storage settings singleton only.
       "src/server/storage/providers.ts",
       "src/server/tenancy/access.ts",

@@ -28,6 +28,8 @@ import {
 } from "../../marketing-actions";
 import { guardPage, openWorkspacePage, type WorkspaceRouteParams } from "../../page-data";
 
+import { PublishingCard } from "./publishing-card";
+
 export default async function ContentRoute({
   params,
   searchParams,
@@ -144,6 +146,14 @@ export default async function ContentRoute({
           </ActionButton>
         </Card>
       ) : null}
+
+      <PublishingCard
+        slug={slug}
+        locale={locale}
+        contentId={content.id}
+        status={content.status}
+        timeZone={timeZone}
+      />
 
       {content.canEdit && data.options !== null ? (
         <Card title={t("content.editTitle")}>

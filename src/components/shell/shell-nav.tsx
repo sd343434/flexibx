@@ -3,6 +3,8 @@
 import {
   Bot,
   CalendarDays,
+  Coins,
+  MessagesSquare,
   FileText,
   History,
   House,
@@ -25,6 +27,8 @@ export interface ShellNavItem {
     | "autopilot"
     | "ads"
     | "integrations"
+    | "social"
+    | "billing"
     | "calendar"
     | "campaigns"
     | "brand"
@@ -42,6 +46,8 @@ const ICONS = {
   autopilot: Bot,
   ads: Target,
   integrations: PlugZap,
+  social: MessagesSquare,
+  billing: Coins,
   calendar: CalendarDays,
   campaigns: Megaphone,
   brand: Palette,
@@ -67,7 +73,7 @@ export function ShellNav({
   return (
     <nav
       aria-label={label}
-      className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:overflow-visible lg:px-0"
+      className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:min-h-0 lg:overflow-x-hidden lg:overflow-y-auto lg:p-1"
     >
       <ul className="flex gap-1 lg:flex-col">
         {items.map((item) => {

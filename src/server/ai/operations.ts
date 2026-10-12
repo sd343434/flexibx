@@ -89,6 +89,34 @@ const adPlanSchema = z.strictObject({
   rationale: text(600),
 });
 
+// A reply to one customer comment or message (AI Social Manager). The model also reads
+// the interaction (category, sentiment) and says how sure it is and whether a person must
+// take over; `reply` is null when it should not answer at all (spam, abuse).
+export const SOCIAL_CATEGORIES = [
+  "question",
+  "complaint",
+  "praise",
+  "lead",
+  "spam",
+  "other",
+] as const;
+const socialReplySchema = z.strictObject({
+  category: z.enum(SOCIAL_CATEGORIES),
+  sentiment: z.enum(["positive", "neutral", "negative"]),
+  reply: text(1000).nullable(),
+  confidence: z.number().int().min(0).max(100),
+  needsHuman: z.boolean(),
+  reason: text(300),
+});
+
+// The agent's self-review: a full rewrite of its guidance from the feedback it received,
+// with the changes listed so a person can decide whether to apply it.
+const socialLearningSchema = z.strictObject({
+  guidance: text(6000),
+  changes: z.array(text(300)).min(1).max(10),
+  rationale: text(600),
+});
+
 const variantSchema = z.strictObject({ caption: text(3000), hook: text(300), cta: text(200) });
 
 const copySchema = z.strictObject({
@@ -119,6 +147,8 @@ export const OUTPUT_SCHEMAS = {
   CONTENT_CTA: z.strictObject({ ctas: z.array(text(200)).min(1).max(5) }),
   CONTENT_BRIEF: briefSchema,
   AD_PLAN: adPlanSchema,
+  SOCIAL_REPLY: socialReplySchema,
+  SOCIAL_LEARNING: socialLearningSchema,
 } as const satisfies Record<AiOperation, z.ZodType>;
 
 export type AiOutput<O extends AiOperation> = z.output<(typeof OUTPUT_SCHEMAS)[O]>;
@@ -128,9 +158,15 @@ export type BriefOutput = AiOutput<"BRIEF">;
 export type CopyOutput = AiOutput<"COPY">;
 export type DraftOutput = AiOutput<"CONTENT_DRAFT">;
 export type AdPlanOutput = AiOutput<"AD_PLAN">;
+export type SocialReplyOutput = AiOutput<"SOCIAL_REPLY">;
+export type SocialLearningOutput = AiOutput<"SOCIAL_LEARNING">;
 
 /** Operations that never become content (they belong to another area, e.g. advertising). */
-export const NON_CONTENT_OPERATIONS = ["AD_PLAN"] as const satisfies AiOperation[];
+export const NON_CONTENT_OPERATIONS = [
+  "AD_PLAN",
+  "SOCIAL_REPLY",
+  "SOCIAL_LEARNING",
+] as const satisfies AiOperation[];
 
 export function isContentOperation(operation: AiOperation): boolean {
   return !(NON_CONTENT_OPERATIONS as readonly AiOperation[]).includes(operation);
@@ -166,6 +202,8 @@ export const MAX_OUTPUT_TOKENS: Readonly<Record<AiOperation, number>> = {
   CONTENT_CTA: 600,
   CONTENT_BRIEF: 1500,
   AD_PLAN: 1500,
+  SOCIAL_REPLY: 700,
+  SOCIAL_LEARNING: 2500,
 };
 
 /**
@@ -190,6 +228,8 @@ export function choiceCount(operation: AiOperation, output: AnyAiOutput): number
     case "CONTENT_DRAFT":
     case "CONTENT_REWRITE":
     case "AD_PLAN":
+    case "SOCIAL_REPLY":
+    case "SOCIAL_LEARNING":
       return 1;
   }
 }

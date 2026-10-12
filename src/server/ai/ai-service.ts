@@ -2,6 +2,12 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { AiOperation, BrandLanguage } from "@/generated/prisma/enums";
 
 import { recordAudit } from "../audit/audit-log";
+import { creditsSettingsFromEnv, type CreditsSettings } from "../billing/config";
+import { autoRecharge } from "../billing/billing-service";
+import { AI_GENERATION_KEY, captureHold, holdCredits, releaseHold } from "../billing/credits";
+import { getPaymentProvider, type PaymentProvider } from "../billing/payments";
+import { logger } from "../logger";
+import { featureForOperation, providerCostMicros } from "../billing/pricing";
 import type { GuardedPrismaClient } from "../db/prisma";
 import type { Db, GuardedTransactionClient } from "../db/types";
 import { AppError } from "../errors/app-error";
@@ -61,6 +67,10 @@ export interface AiRuntime {
   readonly provider: AiProvider | null;
   readonly timeoutMs: number;
   readonly now?: () => Date;
+  /** Credits settings (default: this deployment's environment). */
+  readonly credits?: CreditsSettings;
+  /** Payment provider for automatic top-up (default: this deployment's, none yet). */
+  readonly payments?: PaymentProvider | null;
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -117,15 +127,21 @@ export function resolveLanguage(
 }
 
 /**
- * Estimated cost in millionths of a dollar. Only providers with a known price table can
- * be estimated; none exists yet (the fake provider is free), so this is always null.
+ * Cost to Flexibx in millionths of a dollar, from the configured token prices
+ * (AI_INPUT_PRICE_USD_PER_MTOK / AI_OUTPUT_PRICE_USD_PER_MTOK). The fake provider is
+ * free; without configured prices or reported token counts the cost is unknown (null).
  */
 export function estimateCostMicros(
-  _provider: string,
+  provider: string,
   _model: string | null,
-  _usage: { readonly inputTokens: number | null; readonly outputTokens: number | null },
+  usage: { readonly inputTokens: number | null; readonly outputTokens: number | null },
+  prices: { readonly inputPerMTok: number | null; readonly outputPerMTok: number | null } = {
+    inputPerMTok: null,
+    outputPerMTok: null,
+  },
 ): bigint | null {
-  return null;
+  if (provider === "fake") return null;
+  return providerCostMicros(usage, prices);
 }
 
 /** First instant of `now`'s day in the workspace time zone. */
@@ -136,8 +152,10 @@ export function startOfWorkspaceDay(now: Date, zone: string): Date {
 const nowOf = (runtime: AiRuntime) => (runtime.now ?? (() => new Date()))();
 
 /**
- * Records a PENDING generation if today's cap allows it. The workspace row lock makes
- * concurrent reservations take turns, so the cap cannot be exceeded.
+ * Records a PENDING generation if today's cap allows it, and holds its price in credits
+ * in the same transaction (refused without enough credits or past a credits cap, before
+ * any provider call). The workspace row lock makes concurrent reservations take turns,
+ * so neither cap can be exceeded.
  */
 async function reserveGeneration(
   db: GuardedPrismaClient,
@@ -149,8 +167,9 @@ async function reserveGeneration(
     readonly contentItemId: string | null;
     readonly references: Readonly<Record<string, string>>;
     readonly now: Date;
+    readonly credits: CreditsSettings;
   },
-): Promise<string> {
+): Promise<{ readonly generationId: string; readonly holdId: string }> {
   return db.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${ctx.workspaceId}::uuid FOR UPDATE`;
     const zone = await workspaceTimeZone(tx, ctx);
@@ -175,7 +194,20 @@ async function reserveGeneration(
       },
       select: { id: true },
     });
-    return row.id;
+    const hold = await holdCredits(
+      tx,
+      {
+        workspaceId: ctx.workspaceId,
+        feature: featureForOperation(data.operation),
+        idempotencyKey: `${AI_GENERATION_KEY}${row.id}`,
+        reference: `${AI_GENERATION_KEY}${row.id}`,
+        userId: ctx.userId,
+        timeZone: zone,
+        now: data.now,
+      },
+      data.credits,
+    );
+    return { generationId: row.id, holdId: hold.holdId };
   });
 }
 
@@ -225,13 +257,15 @@ export async function generate(
     maxOutputTokens: MAX_OUTPUT_TOKENS[spec.operation],
   };
 
-  const generationId = await reserveGeneration(db, ctx, {
+  const credits = runtime.credits ?? creditsSettingsFromEnv();
+  const { generationId, holdId } = await reserveGeneration(db, ctx, {
     operation: spec.operation,
     provider: provider.name,
     language,
     contentItemId: spec.contentItemId,
     references: context.references,
     now: nowOf(runtime),
+    credits,
   });
 
   let outcome:
@@ -275,10 +309,13 @@ export async function generate(
     };
   }
 
-  // Record the outcome and its audit entry together (never a success without output).
+  // Record the outcome, settle its credits and audit it together (never a success
+  // without output; the customer is charged only for a success).
+  const settledAt = nowOf(runtime);
   await db.$transaction(async (tx) => {
     const where = { workspaceId: ctx.workspaceId, id: generationId, status: "PENDING" as const };
     if (outcome.ok) {
+      const cost = estimateCostMicros(provider.name, outcome.model, outcome.usage, credits.prices);
       await tx.aiGeneration.updateMany({
         where,
         data: {
@@ -286,12 +323,21 @@ export async function generate(
           model: outcome.model,
           inputTokens: outcome.usage.inputTokens,
           outputTokens: outcome.usage.outputTokens,
-          costMicros: estimateCostMicros(provider.name, outcome.model, outcome.usage),
+          costMicros: cost,
           latencyMs: outcome.latencyMs,
           output: outcome.output as Prisma.InputJsonValue,
         },
       });
+      await captureHold(
+        tx,
+        ctx.workspaceId,
+        holdId,
+        { provider: provider.name, model: outcome.model, providerCostMicros: cost },
+        settledAt,
+        credits,
+      );
     } else {
+      await releaseHold(tx, ctx.workspaceId, holdId, `ai_${outcome.failure}`, settledAt, credits);
       await tx.aiGeneration.updateMany({
         where,
         data: {
@@ -320,6 +366,19 @@ export async function generate(
   });
 
   if (!outcome.ok) throw failureError(outcome.failure);
+  // Top up when the balance fell below the workspace's threshold (if it chose to). A
+  // top-up problem never undoes the generation the person already has.
+  try {
+    await autoRecharge(
+      db,
+      ctx.workspaceId,
+      credits,
+      runtime.payments === undefined ? getPaymentProvider() : runtime.payments,
+      settledAt,
+    );
+  } catch (error) {
+    logger.warn({ err: error, workspaceId: ctx.workspaceId }, "Automatic credit top-up failed");
+  }
   return { generationId };
 }
 

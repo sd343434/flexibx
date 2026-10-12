@@ -36,6 +36,11 @@ export const ACTIONS = [
   "ads.view",
   "ads.plan",
   "ads.manage",
+  // AI Social Manager: see the inbox and agents / decide on and send replies / set up
+  // agents, channels and automatic replies.
+  "social.view",
+  "social.reply",
+  "social.manage",
 ] as const;
 
 export type Action = (typeof ACTIONS)[number];
@@ -64,6 +69,8 @@ const MANAGER_ACTIONS = [
   "campaign.manage",
   "ads.view",
   "ads.plan",
+  "social.view",
+  "social.reply",
 ] as const satisfies readonly Action[];
 
 const ADMIN_ACTIONS = [
@@ -77,6 +84,7 @@ const ADMIN_ACTIONS = [
   "automation.manage",
   "automation.approve",
   "ads.manage",
+  "social.manage",
 ] as const satisfies readonly Action[];
 
 const OWNER_ACTIONS = [

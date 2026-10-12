@@ -52,6 +52,19 @@ export const TENANT_MODELS = {
   WhatsAppContact: { workspaceId: "required", appendOnly: false },
   WhatsAppMessage: { workspaceId: "required", appendOnly: false },
   WhatsAppConsentEvent: { workspaceId: "required", appendOnly: true },
+  // Credits (Flexibx's own services).
+  CreditAccount: { workspaceId: "required", appendOnly: false },
+  CreditHold: { workspaceId: "required", appendOnly: false },
+  CreditLedgerEntry: { workspaceId: "required", appendOnly: true },
+  CreditRecharge: { workspaceId: "required", appendOnly: false },
+  // AI Social Manager.
+  SocialChannel: { workspaceId: "required", appendOnly: false },
+  SocialAgent: { workspaceId: "required", appendOnly: false },
+  SocialInteraction: { workspaceId: "required", appendOnly: false },
+  SocialReply: { workspaceId: "required", appendOnly: false },
+  SocialLesson: { workspaceId: "required", appendOnly: false },
+  SocialAutoReplyClaim: { workspaceId: "required", appendOnly: false },
+  SocialPost: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */

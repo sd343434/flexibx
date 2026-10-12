@@ -78,6 +78,26 @@ export const AUDIT_ACTIONS = [
   // Advertising platforms. Metadata: platform, account/plan ids, external ids, unified
   // statuses, error codes, counts, granted permission names and amounts — never tokens,
   // authorization codes, state values or raw platform responses.
+  // Credits: the workspace's caps and automatic top-up; credits added or a plan changed
+  // by a platform administrator (metadata: amounts, plan codes, references only).
+  "billing.settings_updated",
+  "billing.credits_added",
+  "billing.plan_changed",
+  "billing.auto_recharge",
+  // AI Social Manager: agents, channels, replies and what the agents learned.
+  "social.agent_saved",
+  "social.agent_activated",
+  "social.agent_paused",
+  "social.channel_saved",
+  "social.reply_sent",
+  "social.reply_rejected",
+  "social.reply_uncertain",
+  "social.interaction_ignored",
+  "social.guidance_applied",
+  "social.lesson_dismissed",
+  "social.post_queued",
+  "social.post_published",
+  "social.post_uncertain",
   "ads.connect_started",
   "ads.connected",
   "ads.connect_failed",

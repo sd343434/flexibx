@@ -23,6 +23,8 @@ export interface ShellNavAccess {
   readonly autopilot: boolean;
   readonly ads: boolean;
   readonly integrations: boolean;
+  readonly social: boolean;
+  readonly billing: boolean;
   readonly calendar: boolean;
   readonly campaigns: boolean;
   readonly brand: boolean;
@@ -38,6 +40,8 @@ export function shellNavAccess(role: Role): ShellNavAccess {
     autopilot: can(role, "automation.view"),
     ads: can(role, "ads.view"),
     integrations: can(role, "ads.view"),
+    social: can(role, "social.view"),
+    billing: can(role, "billing.view"),
     calendar: can(role, "content.view"),
     campaigns: can(role, "campaign.view"),
     brand: can(role, "brand.view"),

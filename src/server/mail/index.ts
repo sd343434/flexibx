@@ -16,6 +16,10 @@ export function getMailer(): Mailer {
     mailer = createMailer(process.env.NODE_ENV, logger, {
       transport: env.MAIL_TRANSPORT,
       outboxDir: env.MAIL_OUTBOX_DIR,
+      resend:
+        env.RESEND_API_KEY === undefined || env.MAIL_FROM === undefined
+          ? undefined
+          : { apiKey: env.RESEND_API_KEY, from: env.MAIL_FROM },
     });
   }
   return mailer;

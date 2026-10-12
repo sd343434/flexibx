@@ -167,11 +167,78 @@ export class UnconfiguredMailer implements Mailer {
   }
 }
 
+/** Resend (https://resend.com) over its HTTPS API: no SDK, the request is plain fetch. */
+export interface ResendOptions {
+  readonly apiKey: string;
+  /** Verified sender, e.g. `Flexibx <no-reply@mail.example.com>`. */
+  readonly from: string;
+  readonly fetch?: typeof fetch;
+  readonly timeoutMs?: number;
+}
+
+export const RESEND_ENDPOINT = "https://api.resend.com/emails";
+
+/**
+ * Real delivery. "sent" only when Resend accepted the message (2xx with an id); anything
+ * else throws SERVICE_UNAVAILABLE so callers never report an unsent email as sent. The
+ * API key travels in the Authorization header only and is never logged; errors carry the
+ * HTTP status, never the response body (it can echo the recipient).
+ */
+export class ResendMailer implements Mailer {
+  readonly transport = "resend";
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(private readonly options: ResendOptions) {
+    if (options.apiKey.trim() === "") throw new Error("RESEND_API_KEY is required");
+    if (options.from.trim() === "") throw new Error("MAIL_FROM is required");
+    this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  async send(message: MailMessage): Promise<{ readonly status: MailDeliveryStatus }> {
+    const rendered = renderMail(message);
+    const fail = (reason: string, status?: number) =>
+      new AppError("SERVICE_UNAVAILABLE", {
+        message: "The email provider did not accept the email",
+        metadata: {
+          reason,
+          template: message.template,
+          ...(status === undefined ? {} : { status }),
+        },
+      });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(RESEND_ENDPOINT, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.options.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          from: this.options.from,
+          to: [message.to],
+          subject: rendered.subject,
+          text: rendered.text,
+          html: rendered.html,
+        }),
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 15_000),
+      });
+    } catch {
+      throw fail("mail_provider_unreachable");
+    }
+    if (!response.ok) throw fail("mail_provider_rejected", response.status);
+    const body = (await response.json().catch(() => null)) as { id?: unknown } | null;
+    if (typeof body?.id !== "string") throw fail("mail_provider_unexpected", response.status);
+    return { status: "sent" };
+  }
+}
+
 export interface MailerOptions {
   /** MAIL_TRANSPORT: unset = the environment default; `test-outbox` = OutboxMailer. */
-  readonly transport?: "test-outbox" | undefined;
+  readonly transport?: "test-outbox" | "resend" | undefined;
   /** MAIL_OUTBOX_DIR: required with `test-outbox`. */
   readonly outboxDir?: string | undefined;
+  /** RESEND_API_KEY and MAIL_FROM: required with `resend`. */
+  readonly resend?: Omit<ResendOptions, "fetch" | "timeoutMs"> | undefined;
 }
 
 interface MailerLogger extends MailLogger {
@@ -179,9 +246,9 @@ interface MailerLogger extends MailLogger {
 }
 
 /**
- * The transport for an environment. No real provider exists yet (adding one is a later
- * phase), so production gets UnconfiguredMailer — unless the test outbox is configured
- * explicitly (end-to-end runs of the production build), which is logged loudly.
+ * The transport for an environment. `resend` is real delivery; without it production gets
+ * UnconfiguredMailer — unless the test outbox is configured explicitly (end-to-end runs
+ * of the production build), which is logged loudly.
  */
 export function createMailer(
   nodeEnv: string | undefined,
@@ -197,6 +264,12 @@ export function createMailer(
       "Test mail outbox is active: emails are written to disk, none are sent",
     );
     return new OutboxMailer(options.outboxDir);
+  }
+  if (options.transport === "resend") {
+    if (options.resend === undefined) {
+      throw new Error("MAIL_TRANSPORT=resend requires RESEND_API_KEY and MAIL_FROM");
+    }
+    return new ResendMailer(options.resend);
   }
   if (nodeEnv === "production") return new UnconfiguredMailer();
   if (nodeEnv === "test") return new MemoryMailer();

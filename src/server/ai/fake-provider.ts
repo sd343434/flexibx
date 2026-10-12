@@ -50,6 +50,8 @@ const COPY = {
     audience: "الجمهور الأساسي للعلامة",
     cta: "اكتشف المزيد",
     rationale: "تنسجم مع ركائز المحتوى ونبرة العلامة.",
+    reply: "شكراً لتواصلك! يسعدنا مساعدتك، راسلنا على الخاص وسنخدمك فوراً.",
+    guidance: "رحّب بالعميل باسمه، وأجب بإيجاز من المعلومات المتاحة، واطلب التواصل الخاص للتفاصيل.",
     caption: "نص تجريبي يوضح شكل المنشور المقترح.",
     hook: "هل جربت هذا من قبل؟",
     tone: "ودودة وواضحة",
@@ -65,6 +67,10 @@ const COPY = {
     audience: "The brand's core audience",
     cta: "Learn more",
     rationale: "Fits the content pillars and the brand's tone.",
+    reply:
+      "Thanks for reaching out! We're happy to help — send us a private message and we'll take care of it.",
+    guidance:
+      "Greet the customer by name, answer briefly from the available information, and invite a private message for details.",
     caption: "Sample text that shows the shape of the suggested post.",
     hook: "Have you tried this before?",
     tone: "Friendly and clear",
@@ -205,6 +211,29 @@ function sampleOutput(request: AiRequest, unknownReferences: boolean): unknown {
         rationale: words.rationale,
       };
     }
+    case "SOCIAL_REPLY": {
+      // Deterministic reading of the fenced customer message: complaints and money talk
+      // go to a person; praise and questions get a confident reply.
+      // Only the customer's message (the last fenced block), never the agent's knowledge.
+      const blocks = request.user.split("<<<DATA");
+      const lowered = (blocks.at(-1) ?? "").toLowerCase();
+      const complaint = /(complain|refund|angry|شكوى|استرجاع|سيء)/u.test(lowered);
+      const spam = /(free money|click here|ربح سريع)/u.test(lowered);
+      return {
+        category: spam ? "spam" : complaint ? "complaint" : "question",
+        sentiment: complaint ? "negative" : "neutral",
+        reply: spam ? null : `${words.reply} (${String(seed % 1000)})`,
+        confidence: complaint ? 40 : 92,
+        needsHuman: complaint,
+        reason: words.rationale,
+      };
+    }
+    case "SOCIAL_LEARNING":
+      return {
+        guidance: `${words.guidance} (${String(seed % 1000)})`,
+        changes: [words.point],
+        rationale: words.rationale,
+      };
   }
 }
 

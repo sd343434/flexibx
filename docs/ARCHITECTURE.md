@@ -634,3 +634,98 @@ place that turns `AI_PROVIDER` into a provider, for people and for automation:
   (`text.format: json_object`) and offer no tools. 429 → `rate_limited` (not retried);
   408/409/5xx/network → `unavailable` (retried once); a refusal → `refused`; incomplete or
   empty output → `invalid_output`. Tested against a stand-in for the API only.
+
+## 15. Credits (usage-based billing)
+
+Code: `src/server/billing/`. Migration `20261012100000_credits`.
+
+- **Accounts**: one `credit_accounts` row per workspace, created lazily under a lock on
+  the workspace row. Two balances: `subscription` credits (granted each period by the
+  plan, they expire at renewal) and `purchased` credits (kept). Subscription credits are
+  spent first. Plans (`pricing.ts`, provisional `PRICE_VERSION`): trial
+  (`CREDITS_TRIAL_MONTHLY`), starter, growth and pay-as-you-go.
+- **Hold → capture/release**: `generate()` (`ai-service.ts`, the single AI pipeline)
+  holds the task's price in the same transaction that creates the generation row
+  (idempotency key `ai_generation:{id}`); a success captures it (with the provider's
+  token cost when known), any failure releases it. A workspace without enough credits,
+  or over its daily, period or per-feature cap, is refused before the provider is called
+  (`credits_insufficient`, `credits_daily_cap`, …).
+- **Ledger**: `credit_ledger_entries` is append-only (trigger) and ordered by a
+  `sequence` column; every grant, hold, capture, release and admin adjustment writes one
+  entry. Balances never go negative (CHECK constraints).
+- **Settings and admin**: the billing page shows balances, usage and the ledger; owners
+  and admins (`billing.manage`) set caps. Auto-recharge is refused while no payment
+  provider is configured (`getPaymentProvider()` returns null: choosing one is an
+  operator decision). Platform admins grant credits and change plans at
+  `/admin/credits` (audited) and see the provider-cost report there. Each rendered grant
+  form carries a request key (`credit_ledger_entries.request_key`, unique per workspace):
+  a double submit or a retried request is applied once.
+- **Abandoned holds**: a hold never settled (the outcome write failed or the process
+  stopped after the provider call) is released by the scheduler tick after 15 minutes
+  (`releaseStaleHolds`), and a generation still pending behind it is marked failed.
+- **Provisional prices**: the costs and plans (`PRICE_VERSION` `2026-10-provisional`) are
+  shown to users with a notice that they are provisional and may change before the
+  commercial launch; they are not a final price list.
+
+## 16. AI social manager
+
+Code: `src/server/social/`. Migrations `20261012110000_social_manager` and
+`20261012120000_social_publishing`.
+
+- **Channels**: Facebook Pages and their linked Instagram accounts, read from the
+  workspace's Meta connection (`/me/accounts`). Page tokens are fetched for each call and
+  never stored; every Graph call carries `appsecret_proof`. Pages are listed with Graph's
+  cursor pagination (100 per request, at most 20 requests). **Permissions**: the Meta
+  connection must grant `pages_read_engagement`, `pages_manage_engagement`,
+  `pages_manage_metadata`, `pages_messaging`, `pages_manage_posts`,
+  `instagram_basic` and `instagram_manage_comments`. The ads login does not request them
+  (it asks for ads scopes only), so with a Business login configuration
+  (`META_CONFIG_ID`) they must be added to that configuration; without them every call
+  fails as `permission_missing`. Instagram webhooks also need the app's `instagram`
+  webhook object set up in the Meta dashboard.
+- **Receiving**: `POST /api/integrations/meta/webhook` reads the body under a 1 MiB cap
+  while it streams (`readBodyCapped`: 413 as soon as it passes the cap, also for chunked
+  bodies without a length) and verifies the HMAC of the raw body (`META_APP_SECRET`)
+  before parsing; comments (Page feed, Instagram) and Page messages
+  become `social_interactions` (deduplicated by platform id; echoes, the Page's own
+  comments and stale events are skipped). Drafting runs after the answer (`after()`);
+  the scheduler sweep (`automation-tick`) catches anything missed. A drafting attempt
+  holds the message for 5 minutes (`drafting_until`) and records its draft only while it
+  still holds the claim, so the webhook and the sweep never draft the same message twice.
+- **Agents**: an agent has business information, tone, FAQ, policies, goals, allowed
+  categories and a mode. `SOCIAL_REPLY` classifies and drafts; in `REVIEW` mode every
+  draft waits for a person (`social.reply`). `AUTO` mode sends only when all hold:
+  confidence ≥ the agent's minimum, an allowed category, inside Meta's 24-hour window for
+  messages, a delegate who still has `social.manage`, the workspace's emergency stop off,
+  and under the agent's daily automatic-reply cap. Complaints and low confidence are
+  escalated, never auto-sent. The decision itself is atomic (`decideAutomatically`): the
+  daily cap is counted and used under a lock on the agent, and the platform message is
+  claimed in `social_auto_reply_claims`, unique on the platform's ids (not per workspace).
+  When two workspaces manage the same Page (each with its own copy of the comment), only
+  the first claim answers automatically; the other workspace's draft waits for a person.
+- **Sending**: claimed once (`NOT_SENT → SENDING`); a lost answer is `UNCERTAIN` and is
+  looked up on the platform before anything is sent again; sends stuck in `SENDING` for
+  10 minutes become `UNCERTAIN`. Sends made by the system (the sweep, automatic replies)
+  wait while the emergency stop is on, and an automatic reply also waits until its
+  delegate again has `social.manage`.
+- **Learning**: every approval, edit and rejection becomes a lesson (an example or a
+  rule). After enough feedback the sweep runs `SOCIAL_LEARNING`, which _proposes_ new
+  guidance; a person applies or dismisses it (`guidanceVersion` increases). Nothing the
+  agent learns changes its behaviour without that approval.
+- **Publishing**: approved or scheduled content can be queued to a Facebook Page from the
+  content page (`content.publish`). The sweep publishes due posts (text and link; images
+  and Instagram publishing are not supported yet), re-checks the approval first, claims
+  each post once (the approval is part of the claim), and treats a lost answer as
+  `UNCERTAIN` (looked up among the Page's own `published_posts`); a post stuck in
+  `PUBLISHING` for 10 minutes also becomes `UNCERTAIN`. "Publish now" means the next
+  scheduler tick; under the emergency stop posts wait.
+- **Metrics**: counts and median response time from real rows only.
+
+## 17. Email delivery
+
+`src/server/mail/`. `MAIL_TRANSPORT=resend` delivers through Resend's HTTPS API with
+`fetch` (no SDK): `RESEND_API_KEY` (server-only, header only, never logged) and
+`MAIL_FROM` (a sender on a domain verified in Resend) are required, and the env schema
+refuses one without the other. A message is "sent" only when Resend returns an id;
+anything else fails explicitly with `SERVICE_UNAVAILABLE`. Without it, production still
+gets `UnconfiguredMailer` (every send fails).

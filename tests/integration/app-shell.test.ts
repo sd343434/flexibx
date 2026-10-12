@@ -369,14 +369,22 @@ describe("rendered shell", () => {
     expect(html).toContain('href="/ar/workspaces?list=1"');
     expect(html).not.toMatch(/href="\/en\/w\//);
     // Every shell label the EDITOR's shell shows (Activity needs audit.view, Advertising
-    // ads.view — managers and above).
-    const hidden = new Set([ar.shell.nav.activity, ar.shell.nav.ads, ar.shell.nav.integrations]);
+    // ads.view, the social manager social.view — managers and above; billing admins).
+    const hidden = new Set([
+      ar.shell.nav.activity,
+      ar.shell.nav.ads,
+      ar.shell.nav.integrations,
+      ar.shell.nav.social,
+      ar.shell.nav.billing,
+    ]);
     for (const label of Object.values(ar.shell).flatMap((group) => Object.values(group))) {
       if (!label.includes("{") && !hidden.has(label)) expect(html).toContain(label);
     }
     expect(html).not.toContain(ar.shell.nav.activity);
     expect(html).not.toContain(ar.shell.nav.ads);
     expect(html).not.toContain(ar.shell.nav.integrations);
+    expect(html).not.toContain(ar.shell.nav.social);
+    expect(html).not.toContain(ar.shell.nav.billing);
     for (const english of [
       "Switch workspace",
       "All workspaces",

@@ -2,6 +2,8 @@ import "server-only";
 
 import type { AiRuntime } from "../ai/ai-service";
 import { providerFromEnv } from "../ai/configured-provider";
+import { creditsSettingsFromEnv } from "../billing/config";
+import { releaseStaleHolds } from "../billing/credits";
 import { getDb, getSystemDb } from "../db/client";
 import { getAiEnv } from "../env";
 import { logger } from "../logger";
@@ -96,11 +98,30 @@ export interface ScheduledTickSummary {
   readonly advanced: number;
   /** Advanced runs by outcome: a final state (lower case) or paused/waiting/yielded. */
   readonly runs: Readonly<Record<string, number>>;
+  /** AI Social Manager: drafts made, replies sent, sends marked uncertain, self-reviews. */
+  readonly social: {
+    readonly published: number;
+    readonly drafted: number;
+    readonly sent: number;
+    readonly uncertain: number;
+    readonly reviewed: number;
+  };
+  /** Credit holds never settled (abandoned AI calls) released on this tick. */
+  readonly creditHoldsReleased: number;
 }
 
 /** One tick for POST /api/internal/automation-tick (same work as `pnpm automation:tick`). */
 export async function runScheduledAutomationTick(): Promise<ScheduledTickSummary> {
   const summary = await automationTick({ ...getOrchestrationDeps(), system: getSystemDb() });
+  // The AI Social Manager's own sweep (drafts, unsent replies, stuck sends, self-review).
+  const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
+  const social = await socialSweep(getSocialDeps(), getSystemDb());
+  const creditHoldsReleased = await releaseStaleHolds(
+    getSystemDb(),
+    getDb(),
+    new Date(),
+    creditsSettingsFromEnv(),
+  );
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
     const key = outcome.status === "finished" ? outcome.state.toLowerCase() : outcome.status;
@@ -112,5 +133,7 @@ export async function runScheduledAutomationTick(): Promise<ScheduledTickSummary
     skippedNoDelegate: summary.skippedNoDelegate,
     advanced: summary.executed.length,
     runs,
+    social,
+    creditHoldsReleased,
   };
 }

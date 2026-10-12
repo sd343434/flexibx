@@ -2,12 +2,14 @@ import "server-only";
 
 import {
   parseAdsEnv,
+  parseBillingEnv,
   parseAiEnv,
   parseAuthEnv,
   parseServerEnv,
   parseStorageEnv,
   parseVideoEnv,
   type AdsEnv,
+  type BillingEnv,
   type AiEnv,
   type AuthEnv,
   type ServerEnv,
@@ -24,6 +26,7 @@ let authEnv: AuthEnv | undefined;
 let aiEnv: AiEnv | undefined;
 let videoEnv: VideoEnv | undefined;
 let adsEnv: AdsEnv | undefined;
+let billingEnv: BillingEnv | undefined;
 
 export function getEnv(): ServerEnv {
   serverEnv ??= parseServerEnv(process.env);
@@ -58,4 +61,10 @@ export function getVideoEnv(): VideoEnv {
 export function getAdsEnv(): AdsEnv {
   adsEnv ??= parseAdsEnv(process.env);
   return adsEnv;
+}
+
+/** Credits settings are validated only when credits are first used. */
+export function getBillingEnv(): BillingEnv {
+  billingEnv ??= parseBillingEnv(process.env);
+  return billingEnv;
 }

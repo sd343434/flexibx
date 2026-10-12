@@ -168,6 +168,8 @@ export function newContentFields(
     case "CONTENT_CTA":
     case "CONTENT_BRIEF":
     case "AD_PLAN":
+    case "SOCIAL_REPLY":
+    case "SOCIAL_LEARNING":
       throw new TypeError(`${operation} does not create content`);
   }
 }

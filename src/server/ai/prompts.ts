@@ -84,6 +84,10 @@ export function outputShape(operation: AiOperation, params: PromptParams): strin
       return '{"ctas": string[3-5]}';
     case "AD_PLAN":
       return `{"objective": ${AD_OBJECTIVES_SHAPE}, "campaignName": string, "audience": {"description": string, "countries": ISO 3166-1 alpha-2 codes[1-10], "ageMin": 18-65, "ageMax": 18-65, "genders": "ALL" | "FEMALE" | "MALE", "interests": string[0-10]}, "placements": (${AD_PLACEMENTS_SHAPE})[1-7], "creative": {"headline": string, "primaryText": string, "callToAction": ${AD_CTA_SHAPE}, "assetRef": "M1".."M9" | null}, "rationale": string}`;
+    case "SOCIAL_REPLY":
+      return '{"category": "question" | "complaint" | "praise" | "lead" | "spam" | "other", "sentiment": "positive" | "neutral" | "negative", "reply": string (at most 1000 characters) | null, "confidence": 0-100, "needsHuman": boolean, "reason": string}';
+    case "SOCIAL_LEARNING":
+      return '{"guidance": string (the complete new guidance, at most 6000 characters), "changes": string[1-10], "rationale": string}';
   }
 }
 
@@ -100,6 +104,10 @@ const TASKS: Readonly<Record<AiLanguage, Readonly<Record<AiOperation, string>>>>
     CONTENT_BRIEF: "استخرج موجز محتوى (brief) من المسودة الحالية.",
     AD_PLAN:
       "اقترح حملة إعلانية مدفوعة واحدة لهذا الحساب الإعلاني: الهدف، الجمهور، أماكن الظهور، والإعلان. الميزانية والمدة يحددهما الإنسان ولا تقترح أرقاماً مالية أو نتائج متوقعة. اختر أماكن الظهور من المتاحة على منصة الحساب فقط. اختر صورة من الصور المعروضة (M1…) إن ناسبت، وإلا null.",
+    SOCIAL_REPLY:
+      "أنت وكيل خدمة عملاء لهذا النشاط التجاري على وسائل التواصل. اقرأ تعليق العميل أو رسالته واكتب رداً قصيراً ودوداً بلغته، معتمداً فقط على معلومات النشاط والأسئلة الشائعة والسياسات والإرشادات والأمثلة المعروضة. لا تعد بشيء غير موجود فيها (أسعار، مواعيد، خصومات، توافر). إن لم تكن المعلومة متوفرة فاطلب التواصل برسالة خاصة أو قل إن الفريق سيتابع. اجعل needsHuman صحيحاً للشكاوى الحساسة والطلبات المالية والمواضيع الممنوعة وكل ما تحدده قواعد التصعيد. اجعل reply قيمة null للرسائل المزعجة أو المسيئة. confidence مدى ثقتك بأن الرد صحيح ومناسب للإرسال دون تعديل.",
+    SOCIAL_LEARNING:
+      "أنت تراجع أداء وكيل خدمة العملاء لتحسين إرشاداته. ادرس الإرشادات الحالية والردود التي عدّلها الفريق والردود التي رفضها مع أسبابها، واستخرج الأنماط المتكررة، ثم اكتب نسخة كاملة محسّنة من الإرشادات تمنع تكرار الأخطاء وتحافظ على ما نجح. لا تضف معلومات عن النشاط غير موجودة في البيانات. اذكر التغييرات في changes.",
   },
   en: {
     IDEAS: "Suggest varied content ideas that serve the brand and its audience.",
@@ -113,6 +121,10 @@ const TASKS: Readonly<Record<AiLanguage, Readonly<Record<AiOperation, string>>>>
     CONTENT_BRIEF: "Derive a content brief from the current draft.",
     AD_PLAN:
       "Propose one paid advertising campaign for this ad account: objective, audience, placements and the ad itself. The person sets the budget and dates: never propose amounts or predicted results. Choose placements only from those listed as available on the account's platform. Pick one of the listed images (M1…) if it fits, otherwise null.",
+    SOCIAL_REPLY:
+      "You are this business's customer service agent on social media. Read the customer's comment or message and write a short, friendly reply in their language, using only the business information, FAQ, policies, guidance and examples shown. Never promise anything they do not state (prices, dates, discounts, availability). When the answer is not there, invite them to a private message or say the team will follow up. Set needsHuman to true for sensitive complaints, money matters, forbidden topics and anything the escalation rules name. Set reply to null for spam or abuse. confidence is how sure you are that the reply is correct and fit to send unchanged.",
+    SOCIAL_LEARNING:
+      "You are reviewing a customer service agent's work to improve its guidance. Study the current guidance, the replies the team edited and the replies it rejected with their reasons, find the recurring patterns, then write a complete improved version of the guidance that prevents the mistakes and keeps what worked. Do not add business facts that are not in the data. List the changes in changes.",
   },
 };
 
@@ -124,6 +136,8 @@ const LABELS = {
     context: "بيانات مساحة العمل",
     request: "طلب المستخدم",
     extra: "بيانات الإعلان",
+    knowledge: "معرفة الوكيل وإرشاداته",
+    customer: "رسالة العميل",
     noRequest: "لا يوجد طلب إضافي.",
   },
   en: {
@@ -133,6 +147,8 @@ const LABELS = {
     context: "Workspace data",
     request: "The person's request",
     extra: "Advertising data",
+    knowledge: "The agent's knowledge and guidance",
+    customer: "The customer's message",
     noRequest: "No additional request.",
   },
 } as const;
@@ -148,6 +164,7 @@ export function buildUserPrompt(
   params: PromptParams,
 ): string {
   const l = LABELS[language];
+  const social = operation === "SOCIAL_REPLY" || operation === "SOCIAL_LEARNING";
   const lines = [
     `# ${l.task}`,
     TASKS[language][operation],
@@ -165,8 +182,14 @@ export function buildUserPrompt(
     "",
     ...(params.extra === undefined || params.extra === null
       ? []
-      : [`# ${l.extra}`, DATA_OPEN, sanitizeUntrusted(params.extra), DATA_CLOSE, ""]),
-    `# ${l.request}`,
+      : [
+          `# ${social ? l.knowledge : l.extra}`,
+          DATA_OPEN,
+          sanitizeUntrusted(params.extra),
+          DATA_CLOSE,
+          "",
+        ]),
+    `# ${operation === "SOCIAL_REPLY" ? l.customer : l.request}`,
     DATA_OPEN,
     params.request === null || params.request.trim() === ""
       ? l.noRequest

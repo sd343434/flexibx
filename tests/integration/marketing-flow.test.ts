@@ -525,6 +525,8 @@ describe("page queries", () => {
       media: true,
       activity: false,
       members: false,
+      social: false,
+      billing: false,
     });
     // The hidden AI Studio entry matches the page's own check.
     await expect(getAiStudioPage("acme-team", undefined)).rejects.toMatchObject({

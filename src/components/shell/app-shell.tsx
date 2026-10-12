@@ -31,6 +31,7 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
   const home = `/w/${workspace.slug}`;
   const sections = [
     "content",
+    "social",
     "ai",
     "autopilot",
     "ads",
@@ -41,6 +42,7 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
     "media",
     "activity",
     "members",
+    "billing",
   ] as const;
   const navItems: ShellNavItem[] = [
     { id: "home", href: home, label: t("nav.home") },
@@ -60,7 +62,7 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
         </Link>
         <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
         <ShellNav items={navItems} label={t("nav.label")} />
-        <div className="mt-auto hidden space-y-4 rounded-3xl bg-feature p-5 text-feature-foreground lg:block dark:[--brand-loop:#ffffff]">
+        <div className="mt-auto hidden shrink-0 space-y-4 rounded-3xl bg-feature p-5 text-feature-foreground lg:block dark:[--brand-loop:#ffffff]">
           <BrandSymbol className="h-8 w-16" />
           <p className="text-lg leading-snug font-bold">{t("brand.tagline")}</p>
         </div>

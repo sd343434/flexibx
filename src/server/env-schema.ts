@@ -94,13 +94,27 @@ export const authEnvSchema = z.object({
 
 /**
  * Mail transport selection. Unset: the environment default (memory in test, log in
- * development, explicit failure in production). `test-outbox` writes rendered emails to
- * MAIL_OUTBOX_DIR for end-to-end tests — never for a real deployment.
+ * development, explicit failure in production). `resend` delivers through Resend's HTTPS
+ * API (RESEND_API_KEY, server-only and never logged; MAIL_FROM, a verified sender).
+ * `test-outbox` writes rendered emails to MAIL_OUTBOX_DIR for end-to-end tests — never
+ * for a real deployment.
  */
-export const mailEnvSchema = z.object({
-  MAIL_TRANSPORT: optional(z.enum(["test-outbox"])),
-  MAIL_OUTBOX_DIR: optional(z.string().trim().min(1)),
-});
+export const mailEnvSchema = z
+  .object({
+    MAIL_TRANSPORT: optional(z.enum(["test-outbox", "resend"])),
+    MAIL_OUTBOX_DIR: optional(z.string().trim().min(1)),
+    RESEND_API_KEY: optional(z.string().trim().min(1)),
+    MAIL_FROM: optional(z.string().trim().min(3).max(320)),
+  })
+  .refine(
+    (env) =>
+      env.MAIL_TRANSPORT !== "resend" ||
+      (env.RESEND_API_KEY !== undefined && env.MAIL_FROM !== undefined),
+    {
+      message: "MAIL_TRANSPORT=resend requires RESEND_API_KEY and MAIL_FROM",
+      path: ["MAIL_TRANSPORT"],
+    },
+  );
 
 export type MailEnv = z.infer<typeof mailEnvSchema>;
 
@@ -206,6 +220,44 @@ export function parseVideoRetentionEnv(source: EnvSource): VideoRetentionEnv {
 }
 
 /**
+ * Credits (Flexibx's own services). Prices and plans are provisional (src/server/billing/
+ * pricing.ts); these settings tune them without a deploy.
+ * - CREDITS_TRIAL_MONTHLY: credits a new workspace's trial plan grants per period
+ *   (default 200).
+ * - AI_INPUT_PRICE_USD_PER_MTOK / AI_OUTPUT_PRICE_USD_PER_MTOK: the configured AI
+ *   provider's token prices, so the cost of each call is recorded. Unset = cost unknown
+ *   (never estimated).
+ * - CREDIT_VALUE_USD: what one credit is sold for, for the margin report. Unset = unknown.
+ */
+const decimal = (max: number) =>
+  optional(
+    z
+      .string()
+      .trim()
+      .regex(/^\d{1,6}(\.\d{1,6})?$/, "must be a decimal number")
+      .transform(Number)
+      .refine((value) => value <= max, `must be at most ${String(max)}`),
+  );
+
+export const billingEnvSchema = z.object({
+  CREDITS_TRIAL_MONTHLY: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(0).max(1_000_000).default(200),
+  ),
+  AI_INPUT_PRICE_USD_PER_MTOK: decimal(1000),
+  AI_OUTPUT_PRICE_USD_PER_MTOK: decimal(1000),
+  CREDIT_VALUE_USD: decimal(1000),
+});
+
+export type BillingEnv = z.infer<typeof billingEnvSchema>;
+
+export function parseBillingEnv(source: EnvSource): BillingEnv {
+  const result = billingEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("billing", result.error.issues);
+  return result.data;
+}
+
+/**
  * AI Marketing Manager scheduler.
  * - AUTOMATION_CRON_SECRET: bearer secret for POST /api/internal/automation-tick, the
  *   endpoint a scheduler calls every few minutes (≥ 32 characters). Unset = the endpoint
@@ -304,6 +356,11 @@ export const adsEnvSchema = z
     ),
     WHATSAPP_REDIRECT_URI: optional(z.url({ protocol: /^https?$/ })),
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: optional(
+      z.string().trim().min(24, "must be a random string of at least 24 characters"),
+    ),
+    // Verify Token of the Page/Instagram webhook (AI Social Manager), entered in the Meta
+    // app dashboard for {APP_URL}/api/integrations/meta/webhook. Unset = webhook disabled.
+    META_WEBHOOK_VERIFY_TOKEN: optional(
       z.string().trim().min(24, "must be a random string of at least 24 characters"),
     ),
     // External writes are OFF unless explicitly enabled after credentialed validation:

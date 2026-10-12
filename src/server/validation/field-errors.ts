@@ -59,6 +59,23 @@ export const VALIDATION_CODES = [
   "approval_not_pending",
   "approval_changed",
   // Advertising platforms.
+  // AI Social Manager.
+  "social_not_configured",
+  "social_page_unavailable",
+  "social_platform_error",
+  "social_reply_locked",
+  "social_reply_empty",
+  "social_cannot_verify",
+  "social_nothing_to_learn",
+  "social_content_not_approved",
+  // Credits.
+  "credits_insufficient",
+  "credits_daily_cap",
+  "credits_period_cap",
+  "credits_feature_cap",
+  "credits_amount_invalid",
+  "credits_plan_unknown",
+  "credits_payment_unavailable",
   "ads_not_configured",
   "ads_not_connected",
   "ads_oauth_invalid",

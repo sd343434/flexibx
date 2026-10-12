@@ -191,7 +191,9 @@
       "media": "Media",
       "activity": "Activity",
       "ads": "Advertising",
-      "integrations": "Integrations"
+      "integrations": "Integrations",
+      "social": "AI social manager",
+      "billing": "Credits"
     },
     "switcher": {
       "label": "Switch workspace",
@@ -405,7 +407,22 @@
     "whatsapp_send_pending": "A message to this contact is still waiting for approval or its outcome is unknown. Check it before sending another.",
     "ads_identity_ambiguous": "Several Facebook Pages can advertise for this connection, and Flexibx cannot choose one yet. Connect with an account that manages only the Page to advertise as.",
     "whatsapp_sync_required": "Refresh this WhatsApp account (numbers and templates) first: its last sync is more than a day old.",
-    "whatsapp_marketing_opted_out": "This customer stopped marketing messages from your business on WhatsApp. Only utility templates or replies inside the 24-hour window can be sent."
+    "whatsapp_marketing_opted_out": "This customer stopped marketing messages from your business on WhatsApp. Only utility templates or replies inside the 24-hour window can be sent.",
+    "credits_insufficient": "Not enough credits: this task needs {required} and {available} are available. Add credits on the Credits page.",
+    "credits_daily_cap": "The workspace's daily credit cap ({maximum}) is reached. It resets tomorrow, or an owner can raise it.",
+    "credits_period_cap": "The workspace's credit cap for this period ({maximum}) is reached.",
+    "credits_feature_cap": "The workspace's credit cap for this kind of task ({maximum}) is reached this period.",
+    "credits_amount_invalid": "The credit amount is not valid, or the settings changed meanwhile — reload and try again.",
+    "credits_plan_unknown": "This plan does not exist.",
+    "credits_payment_unavailable": "Automatic top-up needs a payment method, which is not set up on this server yet.",
+    "social_not_configured": "Facebook and Instagram are not configured on this server.",
+    "social_page_unavailable": "This Page is no longer available to your Meta connection. Refresh the Pages.",
+    "social_platform_error": "Meta could not complete this. Try again later.",
+    "social_reply_locked": "This was already decided or changed meanwhile. Reload the page.",
+    "social_reply_empty": "Write a reply (at most 2000 characters).",
+    "social_cannot_verify": "Private messages cannot be checked automatically: look at the conversation and say whether it was sent.",
+    "social_nothing_to_learn": "No new feedback yet: approve, edit or reject some replies first.",
+    "social_content_not_approved": "Only approved or scheduled content can be published."
   },
   "marketing": {
     "common": {
@@ -940,7 +957,9 @@
       "CONTENT_HOOK": "Opening hooks",
       "CONTENT_CTA": "Calls to action",
       "CONTENT_BRIEF": "Brief from this draft",
-      "AD_PLAN": "Ad campaign plan"
+      "AD_PLAN": "Ad campaign plan",
+      "SOCIAL_REPLY": "Social reply draft",
+      "SOCIAL_LEARNING": "Agent self-review"
     },
     "assist": {
       "title": "AI assist",
@@ -1157,7 +1176,8 @@
     "internal": "Internal: Flexibx staff only.",
     "nav": {
       "label": "Administration sections",
-      "storage": "Storage"
+      "storage": "Storage",
+      "credits": "Credits"
     },
     "error": "Something went wrong. Try again.",
     "storage": {
@@ -1236,6 +1256,36 @@
         "confirmation_mismatch": "Type the provider name exactly as shown to confirm."
       },
       "policy": "Generated videos are deleted from storage 168 hours after generation, and their metadata 30 days after that. A provider may still bill a minimum storage period for deleted files, and copies in backups or versions are outside this policy."
+    },
+    "credits": {
+      "hint": "Find a workspace by its slug to see its credits, add credits against an invoice, correct a balance or change its plan. Every change is in the workspace's credit history and the audit log.",
+      "slug": "Workspace slug",
+      "find": "Find",
+      "notFound": "No workspace with this slug.",
+      "plan": "Plan",
+      "balance": "Plan credits {subscription} · purchased {purchased} · held {held}",
+      "charged": "Charged this period: {credits} credits",
+      "cost": "AI provider cost this period",
+      "margin": "Margin this period",
+      "unknown": "Unknown (set the provider's prices and the credit value)",
+      "unknownCount": "{count} charged tasks without a known provider cost",
+      "saving": "Saving…",
+      "add": {
+        "title": "Add or correct credits",
+        "kind": "Type",
+        "purchase": "Purchase (invoice)",
+        "adjustment": "Correction",
+        "amount": "Credits",
+        "amountHint": "A correction may be negative; a balance never goes below zero.",
+        "reference": "Invoice or payment reference",
+        "note": "Note",
+        "submit": "Apply"
+      },
+      "planChange": {
+        "title": "Change plan",
+        "hint": "A new period starts now with the new plan's credits; unused credits of the old plan expire. Purchased credits stay.",
+        "submit": "Change plan"
+      }
     }
   },
   "automation": {
@@ -1826,6 +1876,335 @@
     "contact": {
       "title": "Anything else",
       "body": "To have workspace data deleted, ask the workspace owner, or contact the operator of this Flexibx service."
+    }
+  },
+  "billing": {
+    "title": "Credits",
+    "forbidden": "Only owners and admins can see the workspace's credits.",
+    "description": "Credits pay for Flexibx's AI work: ideas and copy, ad plans and your AI social agents' replies.",
+    "provisional": "Early access: the credit costs, plans and terms on this page are provisional and may change before Flexibx's commercial launch. They are not a final price list.",
+    "separation": "Credits never pay for advertising. Your ad budget is paid by you directly to the ad platform and limited on the Ads page.",
+    "balance": {
+      "available": "Available credits",
+      "split": "{subscription} from your plan · {purchased} purchased",
+      "held": "{held} set aside for tasks running now"
+    },
+    "plan": {
+      "title": "Plan",
+      "period": "Current period: {start} – {end}",
+      "expiry": "Your plan's credits renew each period; unused plan credits expire at its end. Purchased credits do not expire under the current provisional terms."
+    },
+    "plans": {
+      "trial": "Trial",
+      "starter": "Starter",
+      "growth": "Growth",
+      "payg": "Pay as you go"
+    },
+    "usage": {
+      "title": "Used this period",
+      "today": "{today} today"
+    },
+    "features": {
+      "ai_text": "AI ideas, briefs and copy",
+      "ad_plan": "AI ad campaign plan",
+      "social_reply": "AI social reply draft",
+      "social_learning": "AI agent self-review"
+    },
+    "prices": {
+      "title": "What each task costs",
+      "hint": "A task's credits are set aside before it runs and charged only if it succeeds. A failed task costs nothing.",
+      "credits": "{count, plural, one {# credit} other {# credits}}",
+      "used": "{count} used this period",
+      "version": "Provisional costs: subject to change before launch."
+    },
+    "caps": {
+      "title": "Spending caps",
+      "hint": "Stop AI work automatically once the workspace has used this many credits. Leave empty for no cap.",
+      "daily": "Credits per day",
+      "period": "Credits per period",
+      "feature": "Per period for {feature}",
+      "emptyHint": "Empty = no cap",
+      "save": "Save caps",
+      "saving": "Saving…",
+      "none": "No cap"
+    },
+    "auto": {
+      "enabled": "Top up automatically",
+      "hint": "When the balance falls below the threshold, buy the amount below — never more than the ceiling per period.",
+      "unavailable": "Not available yet: no payment method is set up on this server. Credits are added by Flexibx against an invoice.",
+      "threshold": "When the balance falls below",
+      "amount": "Buy this many credits",
+      "periodMax": "At most per period",
+      "periodMaxHint": "A hard ceiling on automatic purchases.",
+      "on": "On",
+      "off": "Off"
+    },
+    "recharges": {
+      "title": "Automatic top-ups",
+      "PENDING": "Pending",
+      "SUCCEEDED": "Done",
+      "FAILED": "Failed"
+    },
+    "ledger": {
+      "title": "Credit history",
+      "empty": "No credit movements yet.",
+      "after": "balance {balance}",
+      "kinds": {
+        "SUBSCRIPTION_GRANT": "Plan credits added",
+        "SUBSCRIPTION_EXPIRE": "Unused plan credits expired",
+        "PURCHASE": "Credits purchased",
+        "AUTO_RECHARGE": "Automatic top-up",
+        "ADJUSTMENT": "Correction by Flexibx",
+        "HOLD": "Set aside for a task",
+        "CAPTURE": "Charged for a completed task",
+        "RELEASE": "Returned (task failed or cost less)"
+      }
+    }
+  },
+  "social": {
+    "title": "AI social manager",
+    "forbidden": "You do not have access to the social inbox.",
+    "description": "AI agents answer your Facebook Page and Instagram comments and messages from your business's own knowledge. You approve, edit or reject — and every decision makes them better.",
+    "setup": {
+      "notConfigured": "Facebook and Instagram are not configured on this server yet.",
+      "notConnected": "Connect your Meta account first to manage your Pages here.",
+      "openIntegrations": "Open Integrations",
+      "aiOff": "AI is turned off on this server: new comments are collected, but no replies are drafted.",
+      "webhookOff": "Live updates from Meta are not set up on this server: use “Fetch recent comments” to bring new comments in."
+    },
+    "stats": {
+      "label": "Last 30 days",
+      "received": "Received",
+      "replied": "Replied",
+      "waiting": "Waiting for you",
+      "acceptance": "Sent without changes",
+      "response": "Median response time",
+      "automatic": "Answered automatically",
+      "edited": "Edited by the team",
+      "rejected": "Rejected",
+      "minutes": "{count, plural, one {# minute} other {# minutes}}",
+      "hint": "Real counts from the last 30 days; nothing is estimated."
+    },
+    "inbox": {
+      "title": "Inbox",
+      "filters": "Show",
+      "filter": {
+        "review": "To review",
+        "escalated": "Needs a person",
+        "attention": "Needs attention",
+        "replied": "Replied",
+        "all": "All"
+      },
+      "cost": "Each drafted reply costs {count, plural, one {# credit} other {# credits}} and is charged only if the draft succeeds.",
+      "empty": "Nothing here right now.",
+      "someone": "Someone",
+      "agent": "Agent",
+      "confidence": "confidence {value}%",
+      "needsHuman": "the agent asks a person to handle this",
+      "noDraft": "No reply drafted (spam or abuse).",
+      "reason": "Why"
+    },
+    "platforms": {
+      "FACEBOOK": "Facebook",
+      "INSTAGRAM": "Instagram"
+    },
+    "kinds": {
+      "COMMENT": "Comment",
+      "MESSAGE": "Message"
+    },
+    "status": {
+      "NEW": "New",
+      "AWAITING_REVIEW": "To review",
+      "ESCALATED": "Needs a person",
+      "SENDING": "Sending",
+      "REPLIED": "Replied",
+      "UNCERTAIN": "Check needed",
+      "FAILED": "Failed",
+      "IGNORED": "Ignored"
+    },
+    "categories": {
+      "question": "Question",
+      "complaint": "Complaint",
+      "praise": "Praise",
+      "lead": "Potential customer",
+      "spam": "Spam",
+      "other": "Other"
+    },
+    "errors": {
+      "window_closed": "Private messages can only be answered within 24 hours of the customer's last message.",
+      "agent_delegate_missing": "The member who started this agent can no longer reply. Start the agent again.",
+      "credits_insufficient": "Not enough credits to draft a reply. Add credits on the Credits page.",
+      "credits_daily_cap": "The workspace's daily credit cap is reached.",
+      "credits_period_cap": "The workspace's credit cap for this period is reached.",
+      "credits_feature_cap": "The credit cap for social replies is reached this period.",
+      "ai_not_configured": "AI is turned off on this server.",
+      "ai_timeout": "The AI took too long. Try again.",
+      "ai_unavailable": "The AI is unavailable right now. Try again later.",
+      "ai_invalid_output": "The AI's answer was not usable. Try again.",
+      "not_sent_confirmed": "Confirmed not sent. You can send it again.",
+      "no_answer": "Meta did not answer: check the post before sending again.",
+      "token_expired": "The Meta connection expired. Reconnect it in Integrations.",
+      "permission_missing": "Meta did not grant permission to reply on this Page. Reconnect and allow it.",
+      "rate_limited": "Meta is limiting requests. Try again later.",
+      "social_page_unavailable": "This Page is no longer available to your Meta connection.",
+      "ads_not_connected": "Your Meta account is not connected.",
+      "ads_token_expired": "The Meta connection expired. Reconnect it in Integrations.",
+      "other": "Something went wrong. Try again."
+    },
+    "actions": {
+      "approve": "Approve and send",
+      "editLabel": "Edit the reply",
+      "editAndSend": "Send this version",
+      "sending": "Working…",
+      "rejectReason": "Why not? (teaches the agent)",
+      "rejectHint": "E.g. “Never promise delivery times”. Leave empty to just reject.",
+      "reject": "Reject",
+      "retry": "Send again",
+      "redraft": "New draft ({count, plural, one {# credit} other {# credits}})",
+      "ignore": "No reply needed"
+    },
+    "uncertain": {
+      "hint": "Meta did not confirm this reply. Check before sending again — it may already be published.",
+      "check": "Check on Facebook/Instagram",
+      "sent": "It was sent",
+      "notSent": "It was not sent"
+    },
+    "channels": {
+      "title": "Pages and accounts",
+      "hint": "The Facebook Pages and Instagram accounts your Meta connection manages. Choose which agent answers each.",
+      "sync": "Refresh from Meta",
+      "empty": "No Pages yet. Refresh from Meta after connecting.",
+      "off": "Off",
+      "live": "Live updates",
+      "agent": "Answered by",
+      "noAgent": "No agent (collect only)",
+      "enabled": "Collect comments and messages",
+      "save": "Save",
+      "subscribe": "Turn on live updates",
+      "pull": "Fetch recent comments"
+    },
+    "agents": {
+      "title": "AI agents",
+      "hint": "Each agent has its own knowledge, voice and limits. New agents start paused and suggest replies only.",
+      "empty": "No agents yet.",
+      "active": "Working",
+      "paused": "Paused",
+      "guidanceVersion": "guidance v{version}",
+      "create": "Create agent"
+    },
+    "modes": {
+      "SUGGEST": "Suggests — a person sends",
+      "AUTO": "Sends low-risk replies automatically"
+    },
+    "roles": {
+      "customer_service": "Customer service",
+      "sales": "Sales",
+      "community": "Community"
+    },
+    "languages": {
+      "auto": "The customer's language",
+      "ar": "Arabic",
+      "en": "English"
+    },
+    "agentForm": {
+      "name": "Agent name",
+      "role": "Role",
+      "language": "Reply language",
+      "tone": "Tone of voice",
+      "businessInfo": "About the business",
+      "businessInfoHint": "What the agent may say: products, hours, locations, delivery, prices you publish. It never invents anything else.",
+      "faq": "Frequently asked questions",
+      "faqHint": "One per line: question :: answer",
+      "policies": "Policies (returns, bookings, payment…)",
+      "escalation": "Always hand to a person when…",
+      "escalationHint": "E.g. complaints about safety, refunds over an amount, legal questions.",
+      "forbidden": "Never discuss",
+      "mode": "Mode",
+      "modeHint": "Automatic mode sends only replies in the categories below, above the confidence, within the daily limit — and never while the workspace's emergency stop is on.",
+      "autoCategories": "Answer automatically",
+      "noAutoCategories": "None",
+      "minConfidence": "Minimum confidence (50–100)",
+      "minConfidenceHint": "Below this, the reply waits for a person.",
+      "dailyAutoCap": "Automatic replies per day at most"
+    },
+    "agentPage": {
+      "back": "← AI social manager",
+      "description": "Knowledge, limits and what this agent has learned.",
+      "pause": "Pause",
+      "activate": "Start agent",
+      "activateConfirm": "Start this agent? It will draft replies to new comments and messages (each draft costs credits) and act with your authority.",
+      "settings": "Knowledge and limits",
+      "save": "Save agent"
+    },
+    "learning": {
+      "title": "How this agent improves",
+      "hint": "Every decision your team makes is a lesson. The agent never changes its own rules: it proposes, you decide.",
+      "steps": {
+        "collect": {
+          "title": "Collect",
+          "body": "Approved replies and your edits become worked examples; rejections with a reason become rules."
+        },
+        "learn": {
+          "title": "Review",
+          "body": "After enough feedback (or when you ask), the agent reviews the patterns and proposes better guidance."
+        },
+        "update": {
+          "title": "Update",
+          "body": "You apply the proposal; every later reply follows the new version."
+        }
+      },
+      "review": "Review my feedback now ({count, plural, one {# credit} other {# credits}})",
+      "proposal": "Proposed guidance",
+      "fullGuidance": "Read the full proposal",
+      "apply": "Apply",
+      "dismiss": "Dismiss",
+      "currentGuidance": "Current guidance",
+      "noGuidance": "No learned guidance yet.",
+      "rules": "Rules",
+      "noRules": "No rules yet.",
+      "remove": "Remove",
+      "addRule": "Add a rule",
+      "add": "Add",
+      "examples": "Worked examples",
+      "noExamples": "No examples yet: approve or edit replies to teach the agent.",
+      "sources": {
+        "edit": "Edited by the team",
+        "approval": "Approved",
+        "manual": "Added",
+        "rejection": "From a rejection",
+        "self_review": "Self-review"
+      }
+    },
+    "publishing": {
+      "title": "Publish to a Facebook Page",
+      "hint": "Approved content is published on the Page at its scheduled time (text and link). Images and Instagram publishing are not available yet.",
+      "needsApproval": "Approve this content first: only approved or scheduled content can be published.",
+      "noPages": "No Facebook Page yet: refresh your Pages on the AI social manager page.",
+      "page": "Page",
+      "schedule": "Publish at the scheduled time",
+      "publishNow": "Publish now",
+      "working": "Working…",
+      "cancel": "Cancel",
+      "check": "Check on the Page",
+      "status": {
+        "SCHEDULED": "Scheduled",
+        "PUBLISHING": "Publishing",
+        "PUBLISHED": "Published",
+        "UNCERTAIN": "Check needed",
+        "FAILED": "Failed",
+        "CANCELLED": "Cancelled"
+      },
+      "errors": {
+        "content_not_approved": "Cancelled: the content was no longer approved.",
+        "channel_disabled": "The Page is turned off.",
+        "not_published_confirmed": "Confirmed not published. You can queue it again.",
+        "token_expired": "The Meta connection expired. Reconnect it.",
+        "permission_missing": "Meta did not grant permission to publish on this Page.",
+        "social_page_unavailable": "This Page is no longer available to your Meta connection.",
+        "provider_error": "Meta did not confirm the post: check the Page.",
+        "no_answer": "Meta did not answer: check on the Page before queuing it again.",
+        "other": "Something went wrong."
+      }
     }
   }
 }

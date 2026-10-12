@@ -81,6 +81,8 @@ describe("POST /api/internal/automation-tick", () => {
       skippedNoDelegate: 0,
       advanced: 1,
       runs: { succeeded: 1 },
+      social: { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 },
+      creditHoldsReleased: 0,
     });
     expect(JSON.stringify(body)).not.toContain(ctx.workspaceId);
     expect(
