@@ -261,6 +261,13 @@ verified in constant time with `META_APP_SECRET` before anything is read (400 wh
 valid, 503 without the app secret). The app-scoped `user_id` is matched to the
 `external_user_id` stored at connection (the same app-scoped id), across workspaces:
 
+- Each change is conditional on the row still holding that user id and on its grant
+  (`last_checked_at`, set when a grant is stored) not being newer than `issued_at`: a
+  reconnect by another person in the same workspace during the request, or a late
+  redelivery after the same person connected again, is left alone. Connections the
+  workspace had already disconnected are not relabelled. A WhatsApp grant whose token
+  reports no user id is stored as `business-integration` and cannot be matched: it is
+  revoked only by Disconnect in Flexibx (documented limit).
 - deauthorize → every matching connection is `REVOKED`, its token erased, its accounts
   deselected, `last_error_code = platform_deauthorized`, audit `ads.platform_deauthorized`
   (no actor). Runs re-check the connection before each write, so nothing more is created

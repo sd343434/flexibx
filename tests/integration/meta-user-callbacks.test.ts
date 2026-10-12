@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlatformCards } from "@/app/[locale]/w/[workspaceSlug]/ads/ads-views";
+import { forgetMetaUser } from "@/server/ads/meta-deauthorization";
 import { signMetaRequest } from "@/server/ads/meta-signed-request";
 
 import ar from "../../messages/ar.json";
@@ -22,7 +23,7 @@ vi.mock("@/server/env", async (importOriginal) => {
   return { ...actual, getAdsEnv: () => ({ ...actual.getAdsEnv(), META_APP_SECRET: env.secret }) };
 });
 
-const { system } = createTestDb();
+const { system, db } = createTestDb();
 
 beforeEach(async () => {
   await resetDatabase(system);
@@ -152,6 +153,89 @@ describe("Meta user callbacks", () => {
     env.secret = undefined;
     expect((await call("deauthorize", signed("111"))).status).toBe(503);
     expect(await system.adConnection.count({ where: { status: "ACTIVE" } })).toBe(4);
+  });
+});
+
+describe("Meta user callbacks never touch a grant that is not the one removed", () => {
+  const issuedAt = 1_790_000_000;
+  const request = { userId: "111", issuedAt };
+
+  it("leaves a connection that another person reconnected while the request ran", async () => {
+    const tenant = await createTenant(system);
+    const id = await connect(tenant.workspaceId, "META", "111");
+    // Another person reconnects the same workspace between the lookup and the update
+    // (the reconnect reuses the workspace's row).
+    const racing = {
+      adConnection: {
+        findMany: async (args: Parameters<typeof system.adConnection.findMany>[0]) => {
+          const rows = await system.adConnection.findMany(args);
+          await system.adConnection.update({
+            where: { id },
+            data: { externalUserId: "333", externalUserName: "Someone else" },
+          });
+          return rows;
+        },
+      },
+    } as unknown as typeof system;
+    expect(await forgetMetaUser({ system: racing, db }, request, "data_deletion")).toEqual({
+      connections: 0,
+    });
+    expect(await system.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      status: "ACTIVE",
+      externalUserId: "333",
+      externalUserName: "Someone else",
+      tokenCiphertext: "v1.a.b.c",
+    });
+    expect(await system.auditLog.count({ where: { entityId: id } })).toBe(0);
+  });
+
+  it("ignores a late redelivery once the same person has connected again", async () => {
+    const tenant = await createTenant(system);
+    const id = await connect(tenant.workspaceId, "META", "111");
+    await system.adConnection.update({
+      where: { id },
+      data: { lastCheckedAt: new Date((issuedAt + 3600) * 1000) },
+    });
+    expect(await forgetMetaUser({ system, db }, request, "deauthorize")).toEqual({
+      connections: 0,
+    });
+    expect(await system.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      status: "ACTIVE",
+      tokenCiphertext: "v1.a.b.c",
+    });
+    // A grant from before the request is revoked.
+    await system.adConnection.update({
+      where: { id },
+      data: { lastCheckedAt: new Date((issuedAt - 3600) * 1000) },
+    });
+    expect(await forgetMetaUser({ system, db }, request, "deauthorize")).toEqual({
+      connections: 1,
+    });
+  });
+
+  it("keeps a workspace's own earlier disconnect as it was, and still erases the identity on deletion", async () => {
+    const tenant = await createTenant(system);
+    const id = await connect(tenant.workspaceId, "META", "111");
+    await system.adConnection.update({
+      where: { id },
+      data: { status: "REVOKED", tokenCiphertext: null, lastErrorCode: null },
+    });
+    expect(await forgetMetaUser({ system, db }, request, "deauthorize")).toEqual({
+      connections: 0,
+    });
+    expect(await system.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      lastErrorCode: null,
+      externalUserId: "111",
+    });
+    expect(await forgetMetaUser({ system, db }, request, "data_deletion")).toEqual({
+      connections: 1,
+    });
+    expect(await system.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      status: "REVOKED",
+      lastErrorCode: null,
+      externalUserId: "deleted",
+      externalUserName: null,
+    });
   });
 });
 

@@ -1813,7 +1813,7 @@
     "completed": "Your data deletion request is complete. Confirmation code: {code}.",
     "removed": {
       "title": "What Flexibx deletes",
-      "body": "When you remove Flexibx from your Facebook settings, or ask Facebook to delete your data, Flexibx immediately disconnects every Meta ads and WhatsApp connection you granted, in every workspace, and erases their access tokens. For a deletion request it also erases the Facebook user id and name it stored for you. Nothing further is read from or sent to Meta with your permission."
+      "body": "When you remove Flexibx from your Facebook settings, or ask Facebook to delete your data, Flexibx immediately disconnects every Meta ads and WhatsApp connection linked to your Facebook account, in every workspace, and erases their access tokens. For a deletion request it also erases the Facebook user id and name it stored for you. Nothing further is read from or sent to Meta with your permission. A connection you granted again after the request is a new consent and is kept."
     },
     "kept": {
       "title": "What the workspace keeps",

@@ -36,38 +36,73 @@ export interface MetaUserDeps {
   readonly db: GuardedPrismaClient;
 }
 
-/** Revokes (and for data deletion, de-identifies) every connection this Meta user granted. */
+/**
+ * Revokes (and for data deletion, de-identifies) every connection this Meta user granted
+ * before the request was issued. Each change is conditional on the row still belonging to
+ * that user and not having been granted again since, so a reconnect — by another person
+ * in the same workspace, or by the same person after removing the app — that lands
+ * between the lookup and the update (or a late redelivery of an old callback) is left
+ * alone. Connections the workspace had already disconnected keep their own status.
+ */
 export async function forgetMetaUser(
   deps: MetaUserDeps,
   request: MetaSignedRequest,
   kind: MetaUserRequestKind,
 ): Promise<{ readonly connections: number }> {
+  // A grant newer than the request (lastCheckedAt is set when a grant is stored, and
+  // otherwise only when the connection fails) is a fresh consent, not the one removed.
+  const grantedBefore =
+    request.issuedAt === null
+      ? {}
+      : {
+          OR: [
+            { lastCheckedAt: null },
+            { lastCheckedAt: { lte: new Date(request.issuedAt * 1000) } },
+          ],
+        };
   // Cross-workspace lookup by the platform's user id only; each change below is scoped
   // to the connection's own workspace on the guarded client.
   const connections = await deps.system.adConnection.findMany({
     where: { platform: { in: [...META_APP_PLATFORMS] }, externalUserId: request.userId },
     select: { id: true, workspaceId: true, platform: true },
   });
+  let changed = 0;
   for (const connection of connections) {
     const { workspaceId } = connection;
-    await deps.db.$transaction(async (tx) => {
-      await tx.adConnection.updateMany({
-        where: { workspaceId, id: connection.id },
+    const owned = { workspaceId, id: connection.id, externalUserId: request.userId };
+    const done = await deps.db.$transaction(async (tx) => {
+      const revoked = await tx.adConnection.updateMany({
+        where: { ...owned, ...grantedBefore, status: { not: "REVOKED" } },
         data: {
           status: "REVOKED",
           tokenCiphertext: null,
           tokenExpiresAt: null,
           lastErrorCode: kind === "deauthorize" ? "platform_deauthorized" : "platform_data_deleted",
           version: { increment: 1 },
-          ...(kind === "data_deletion"
-            ? { externalUserId: "deleted", externalUserName: null }
-            : {}),
         },
       });
-      await tx.adAccount.updateMany({
-        where: { workspaceId, connectionId: connection.id },
-        data: { selected: false },
-      });
+      // Data deletion also erases the stored identity, whatever the status (a connection
+      // disconnected earlier still holds the Facebook id and name).
+      const erased =
+        kind === "data_deletion"
+          ? await tx.adConnection.updateMany({
+              where: { ...owned, ...grantedBefore, status: "REVOKED" },
+              data: {
+                externalUserId: "deleted",
+                externalUserName: null,
+                tokenCiphertext: null,
+                tokenExpiresAt: null,
+                version: { increment: 1 },
+              },
+            })
+          : { count: 0 };
+      if (revoked.count === 0 && erased.count === 0) return false;
+      if (revoked.count > 0) {
+        await tx.adAccount.updateMany({
+          where: { workspaceId, connectionId: connection.id },
+          data: { selected: false },
+        });
+      }
       await recordAudit(
         tx,
         { workspaceId, userId: null },
@@ -76,12 +111,14 @@ export async function forgetMetaUser(
             kind === "deauthorize" ? "ads.platform_deauthorized" : "ads.platform_data_deleted",
           entityType: "ad_connection",
           entityId: connection.id,
-          metadata: { platform: connection.platform },
+          metadata: { platform: connection.platform, revoked: revoked.count > 0 },
         },
       );
+      return true;
     });
+    if (done) changed += 1;
   }
-  return { connections: connections.length };
+  return { connections: changed };
 }
 
 export type MetaCallbackReply =
