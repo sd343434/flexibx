@@ -422,7 +422,10 @@
     "social_reply_empty": "Write a reply (at most 2000 characters).",
     "social_cannot_verify": "Private messages cannot be checked automatically: look at the conversation and say whether it was sent.",
     "social_nothing_to_learn": "No new feedback yet: approve, edit or reject some replies first.",
-    "social_content_not_approved": "Only approved or scheduled content can be published."
+    "social_content_not_approved": "Only approved or scheduled content can be published.",
+    "social_sending_disabled": "Sending replies and publishing is turned off on this server.",
+    "social_reply_superseded": "A newer reply exists for this message: send that one instead.",
+    "social_connection_inactive": "The Meta connection is not active: reconnect it on the integrations page."
   },
   "marketing": {
     "common": {
@@ -1970,7 +1973,8 @@
       "notConnected": "Connect your Meta account first to manage your Pages here.",
       "openIntegrations": "Open Integrations",
       "aiOff": "AI is turned off on this server: new comments are collected, but no replies are drafted.",
-      "webhookOff": "Live updates from Meta are not set up on this server: use “Fetch recent comments” to bring new comments in."
+      "webhookOff": "Live updates from Meta are not set up on this server: use “Fetch recent comments” to bring new comments in.",
+      "sendingOff": "Sending is turned off on this server: replies and posts are drafted and reviewed here, but nothing is sent to Facebook or Instagram."
     },
     "stats": {
       "label": "Last 30 days",

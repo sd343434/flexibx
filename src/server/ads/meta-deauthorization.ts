@@ -15,6 +15,7 @@ import {
   parseMetaSignedRequest,
   type MetaSignedRequest,
 } from "./meta-signed-request";
+import { revokeSocialAccess } from "../social/channel-access";
 
 // Meta's two account-lifecycle callbacks (both required for App Review), for the Meta app
 // shared by Meta ads and WhatsApp:
@@ -97,11 +98,17 @@ export async function forgetMetaUser(
             })
           : { count: 0 };
       if (revoked.count === 0 && erased.count === 0) return false;
+      let channelsDisabled = 0;
       if (revoked.count > 0) {
         await tx.adAccount.updateMany({
           where: { workspaceId, connectionId: connection.id },
           data: { selected: false },
         });
+        // The same grant serves the AI Social Manager: its Pages stop receiving, drafting,
+        // replying and publishing, and give up their automatic-reply claims.
+        if (connection.platform === "META") {
+          channelsDisabled = await revokeSocialAccess(tx, workspaceId);
+        }
       }
       await recordAudit(
         tx,
@@ -111,7 +118,11 @@ export async function forgetMetaUser(
             kind === "deauthorize" ? "ads.platform_deauthorized" : "ads.platform_data_deleted",
           entityType: "ad_connection",
           entityId: connection.id,
-          metadata: { platform: connection.platform, revoked: revoked.count > 0 },
+          metadata: {
+            platform: connection.platform,
+            revoked: revoked.count > 0,
+            socialChannelsDisabled: channelsDisabled,
+          },
         },
       );
       return true;

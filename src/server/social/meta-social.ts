@@ -95,7 +95,7 @@ export interface MetaSocial {
     commentId: string,
     ownerId: string,
     message: string,
-  ): Promise<string | null>;
+  ): Promise<Lookup>;
   recentComments(
     page: ManagedPage,
     platform: "FACEBOOK" | "INSTAGRAM",
@@ -104,8 +104,18 @@ export interface MetaSocial {
   /** Publishes a text post (with an optional link) on the Page; returns the post id. */
   publishToPage(page: ManagedPage, message: string, link: string | null): Promise<string>;
   /** The id of the Page's own post with exactly this text since `since`, if any. */
-  findPagePost(page: ManagedPage, message: string, since: Date): Promise<string | null>;
+  findPagePost(page: ManagedPage, message: string, since: Date): Promise<Lookup>;
 }
+
+/**
+ * Looking for something we may have sent: found (its id), conclusively absent (every
+ * candidate was read), or unknown (more candidates than one lookup reads) — unknown is
+ * never treated as "not sent", so nothing is sent twice on a partial look.
+ */
+export type Lookup = { readonly id: string } | "not_found" | "unknown";
+
+/** Pages of 100 replies (or 25 posts) read by one lookup before it answers "unknown". */
+export const MAX_LOOKUP_REQUESTS = 10;
 
 /** At most this many /me/accounts requests per listing (100 Pages each). */
 export const MAX_PAGE_LIST_REQUESTS = 20;
@@ -172,6 +182,12 @@ export function createMetaSocial(config: {
   }
 
   const data = (json: Json): Json[] => (Array.isArray(json.data) ? json.data.filter(isRecord) : []);
+  /** Graph's cursor to the next page, or null on the last page. */
+  const nextCursor = (json: Json): string | null => {
+    const paging = isRecord(json.paging) ? json.paging : null;
+    const cursors = isRecord(paging?.cursors) ? paging.cursors : null;
+    return typeof paging?.next === "string" ? str(cursors?.after) : null;
+  };
 
   return {
     async listPages(userToken) {
@@ -249,19 +265,29 @@ export function createMetaSocial(config: {
 
     async findCommentReply(page, platform, commentId, ownerId, message) {
       const id = cleanId(commentId);
-      if (id === null) return null;
+      if (id === null) return "not_found";
       const edge = platform === "INSTAGRAM" ? "replies" : "comments";
       const fields = platform === "INSTAGRAM" ? "id,text,from" : "id,message,from";
-      const json = await request("GET", `/${id}/${edge}`, page.accessToken, {
-        fields,
-        limit: "100",
-      });
-      for (const item of data(json)) {
-        const from = isRecord(item.from) ? cleanId(item.from.id) : null;
-        const text = str(platform === "INSTAGRAM" ? item.text : item.message);
-        if (from === ownerId && text?.trim() === message.trim()) return cleanId(item.id);
+      let after: string | null = null;
+      for (let call = 0; call < MAX_LOOKUP_REQUESTS; call += 1) {
+        const json = await request("GET", `/${id}/${edge}`, page.accessToken, {
+          fields,
+          limit: "100",
+          ...(after === null ? {} : { after }),
+        });
+        for (const item of data(json)) {
+          const from = isRecord(item.from) ? cleanId(item.from.id) : null;
+          const text = str(platform === "INSTAGRAM" ? item.text : item.message);
+          const replyId = cleanId(item.id);
+          if (from === ownerId && text?.trim() === message.trim() && replyId !== null) {
+            return { id: replyId };
+          }
+        }
+        const next = nextCursor(json);
+        if (next === null || next === after) return "not_found";
+        after = next;
       }
-      return null;
+      return "unknown";
     },
 
     async recentComments(page, platform, accountId) {
@@ -318,18 +344,27 @@ export function createMetaSocial(config: {
     },
 
     async findPagePost(page, message, since) {
-      const json = await request("GET", `/${page.id}/published_posts`, page.accessToken, {
-        fields: "id,message,created_time",
-        limit: "25",
-      });
-      for (const item of data(json)) {
-        const created = new Date(str(item.created_time) ?? "");
-        const id = str(item.id);
-        if (id === null || Number.isNaN(created.getTime())) continue;
-        if (created.getTime() < since.getTime() - 5 * 60_000) continue;
-        if (str(item.message)?.trim() === message.trim()) return id.slice(0, 128);
+      // Newest first: reading stops (conclusively) at the first post older than `since`.
+      const from = since.getTime() - 5 * 60_000;
+      let after: string | null = null;
+      for (let call = 0; call < MAX_LOOKUP_REQUESTS; call += 1) {
+        const json = await request("GET", `/${page.id}/published_posts`, page.accessToken, {
+          fields: "id,message,created_time",
+          limit: "25",
+          ...(after === null ? {} : { after }),
+        });
+        for (const item of data(json)) {
+          const created = new Date(str(item.created_time) ?? "");
+          const id = str(item.id);
+          if (id === null || Number.isNaN(created.getTime())) continue;
+          if (created.getTime() < from) return "not_found";
+          if (str(item.message)?.trim() === message.trim()) return { id: id.slice(0, 128) };
+        }
+        const next = nextCursor(json);
+        if (next === null || next === after) return "not_found";
+        after = next;
       }
-      return null;
+      return "unknown";
     },
   };
 }

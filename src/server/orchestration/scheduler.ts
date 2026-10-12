@@ -36,7 +36,13 @@ export async function automationTick<S>(
   const rows = await system.$queryRaw<{ now: Date }[]>`SELECT statement_timestamp() AS "now"`;
   const now = rows[0]?.now ?? new Date();
 
-  const recovered = await recoverStaleTasks(system, now);
+  let recovered = 0;
+  try {
+    recovered = await recoverStaleTasks(system, now);
+  } catch (error) {
+    // Recovery failing must not stop scheduled planning or advancing runs.
+    deps.logger?.error({ err: error }, "Stale task recovery failed");
+  }
 
   let scheduled = 0;
   let skippedNoDelegate = 0;
@@ -60,27 +66,39 @@ export async function automationTick<S>(
   });
   for (const policy of due) {
     if (policy.nextPlanningAt === null) continue;
-    // Claim the slot: only one tick advances it (compare-and-set on the version).
-    const advanced = await system.automationPolicy.updateMany({
-      where: { workspaceId: policy.workspaceId, version: policy.version },
-      data: {
-        nextPlanningAt: nextSlot(policy.nextPlanningAt, policy.planningCadence, now),
-        version: { increment: 1 },
-      },
-    });
-    if (advanced.count === 0) continue;
-    if (policy.delegateUserId === null) {
-      skippedNoDelegate += 1;
-      continue;
+    const slot = policy.nextPlanningAt;
+    try {
+      // The run is created first (idempotent: one run per slot, whatever the number of
+      // ticks), and only then is the slot advanced — a failure leaves the slot due, so the
+      // next tick tries again instead of losing that run.
+      let created = false;
+      if (policy.delegateUserId !== null) {
+        ({ created } = await createRun(
+          deps,
+          { workspaceId: policy.workspaceId, requestedByUserId: policy.delegateUserId },
+          CONTENT_PLANNING_WORKFLOW,
+          "SCHEDULE",
+          `schedule:${CONTENT_PLANNING_WORKFLOW}:${slot.toISOString()}`,
+        ));
+      }
+      // Claim the slot: only one tick advances it (compare-and-set on the version).
+      const advanced = await system.automationPolicy.updateMany({
+        where: { workspaceId: policy.workspaceId, version: policy.version },
+        data: {
+          nextPlanningAt: nextSlot(slot, policy.planningCadence, now),
+          version: { increment: 1 },
+        },
+      });
+      if (advanced.count === 0) continue;
+      if (policy.delegateUserId === null) skippedNoDelegate += 1;
+      else if (created) scheduled += 1;
+    } catch (error) {
+      // One workspace failing never stops the others.
+      deps.logger?.error(
+        { err: error, workspaceId: policy.workspaceId },
+        "Scheduled planning run failed to start",
+      );
     }
-    const { created } = await createRun(
-      deps,
-      { workspaceId: policy.workspaceId, requestedByUserId: policy.delegateUserId },
-      CONTENT_PLANNING_WORKFLOW,
-      "SCHEDULE",
-      `schedule:${CONTENT_PLANNING_WORKFLOW}:${policy.nextPlanningAt.toISOString()}`,
-    );
-    if (created) scheduled += 1;
   }
 
   const active = await system.agentRun.findMany({

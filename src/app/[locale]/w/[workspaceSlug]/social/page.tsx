@@ -83,6 +83,9 @@ export default async function SocialRoute({
         </Notice>
       ) : null}
       {!data.aiConfigured ? <Notice testId="social-ai-off">{t("setup.aiOff")}</Notice> : null}
+      {!data.sendingEnabled ? (
+        <Notice testId="social-sending-off">{t("setup.sendingOff")}</Notice>
+      ) : null}
       {data.metaConfigured && !data.webhookConfigured ? (
         <Notice>{t("setup.webhookOff")}</Notice>
       ) : null}

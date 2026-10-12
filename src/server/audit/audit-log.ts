@@ -89,6 +89,7 @@ export const AUDIT_ACTIONS = [
   "social.agent_activated",
   "social.agent_paused",
   "social.channel_saved",
+  "social.access_revoked",
   "social.reply_sent",
   "social.reply_rejected",
   "social.reply_uncertain",

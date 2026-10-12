@@ -5,8 +5,9 @@ import { isAppError } from "../errors/app-error";
 import { isUuid, type TenantContext } from "../tenancy/context";
 import { assertCan } from "../tenancy/permissions";
 
+import { activeMetaGrant, hasActiveMetaGrant } from "./channel-access";
 import { SocialPlatformError, type ManagedPage } from "./meta-social";
-import { pageFor, socialError, type SocialDeps } from "./social-service";
+import { pageAccessLost, pageFor, socialError, type SocialDeps } from "./social-service";
 
 // Publishing approved content to a Facebook Page at its time. Only APPROVED or SCHEDULED
 // content can be queued (content.publish), so the content approval gate stays in front of
@@ -142,6 +143,8 @@ export async function publishPost(
 ): Promise<PublishOutcome> {
   const { db } = deps;
   const now = nowOf(deps);
+  // The global switch: nothing is published while sending is off on this server.
+  if (!deps.sendingEnabled) return "skipped";
   const post = await db.socialPost.findFirst({
     where: { workspaceId, id: postId, status: "SCHEDULED", scheduledAt: { lte: now } },
     select: {
@@ -151,11 +154,15 @@ export async function publishPost(
       link: true,
       contentItemId: true,
       requestedByUserId: true,
+      scheduledAt: true,
       channel: { select: { pageId: true, enabled: true } },
       contentItem: { select: { status: true } },
     },
   });
   if (post === null) return "skipped";
+  // No usable Meta grant: it waits (a reconnect resumes it) — the missed-window rule below
+  // stops it from going out days late.
+  if (!(await hasActiveMetaGrant(db, workspaceId, now))) return "skipped";
   const policy = await db.automationPolicy.findFirst({
     where: { workspaceId },
     select: { paused: true },
@@ -166,8 +173,10 @@ export async function publishPost(
     extra: { externalPostId?: string; errorCode?: string },
   ) => {
     await db.$transaction(async (tx) => {
+      // Only from the state this run saw or claimed: a late answer never overwrites a
+      // recovery (stuck → UNCERTAIN) or a requeue that happened meanwhile.
       await tx.socialPost.updateMany({
-        where: { workspaceId, id: post.id },
+        where: { workspaceId, id: post.id, status: { in: ["SCHEDULED", "PUBLISHING"] } },
         data: {
           status,
           externalPostId: extra.externalPostId ?? null,
@@ -207,6 +216,12 @@ export async function publishPost(
     await finish("FAILED", { errorCode: "channel_disabled" });
     return "failed";
   }
+  // Held too long (an emergency stop, a lost grant, an outage): a person decides again
+  // instead of the post going out long after its time.
+  if (now.getTime() - post.scheduledAt.getTime() > MAX_PUBLISH_DELAY_MS) {
+    await finish("FAILED", { errorCode: "missed_window" });
+    return "failed";
+  }
   // The approval is part of the claim: withdrawn between the check above and now → no claim.
   const claimed = await db.socialPost.updateMany({
     where: {
@@ -223,9 +238,11 @@ export async function publishPost(
   try {
     page = await pageFor(deps, workspaceId, post.channel.pageId);
   } catch (error) {
-    await finish("FAILED", {
-      errorCode: isAppError(error) ? (error.fields[0]?.code ?? error.code) : "page_unavailable",
-    });
+    const code = isAppError(error) ? (error.fields[0]?.code ?? error.code) : "page_unavailable";
+    await finish("FAILED", { errorCode: code });
+    if (code === "social_page_unavailable") {
+      await pageAccessLost(deps, workspaceId, post.channel.pageId);
+    }
     return "failed";
   }
   try {
@@ -265,7 +282,11 @@ export async function resolveUncertainPost(
   if (deps.meta === null) throw socialError("SERVICE_UNAVAILABLE", "social_not_configured");
   const page = await pageFor(deps, ctx.workspaceId, post.channel.pageId);
   const since = post.scheduledAt < post.updatedAt ? post.scheduledAt : post.updatedAt;
-  const found = await deps.meta.findPagePost(page, post.message, since);
+  const lookup = await deps.meta.findPagePost(page, post.message, since);
+  // More posts than one lookup reads: still unknown, so it stays UNCERTAIN (never "not
+  // published" on a partial look, which would allow publishing it twice).
+  if (lookup === "unknown") throw socialError("CONFLICT", "social_cannot_verify");
+  const found = lookup === "not_found" ? null : lookup.id;
   const now = nowOf(deps);
   await deps.db.$transaction(async (tx) => {
     await tx.socialPost.updateMany({
@@ -295,13 +316,27 @@ export async function resolveUncertainPost(
   return found === null ? "not_published" : "published";
 }
 
+/** A scheduled post not published within this long after its time is not published. */
+export const MAX_PUBLISH_DELAY_MS = 24 * 3_600_000;
+
 /** Posts claimed this long ago without an outcome are treated as uncertain. */
 export const STUCK_PUBLISH_MS = 10 * 60_000;
 
 /** Due posts across workspaces (scheduler; reviewed system path in social-runtime). */
 export async function duePosts(system: PrismaClient, now: Date, limit: number) {
+  // Only posts that can go out now: a paused workspace or a lost grant would be skipped
+  // without changing state, and must not hold the head of the queue. (A disabled channel
+  // stays listed: publishPost fails the post visibly instead of leaving it scheduled.)
   return system.socialPost.findMany({
-    where: { status: "SCHEDULED", scheduledAt: { lte: now }, workspace: { deletedAt: null } },
+    where: {
+      status: "SCHEDULED",
+      scheduledAt: { lte: now },
+      workspace: {
+        deletedAt: null,
+        automationPolicy: { isNot: { paused: true } },
+        ...activeMetaGrant(now),
+      },
+    },
     orderBy: { scheduledAt: "asc" },
     take: limit,
     select: { id: true, workspaceId: true },

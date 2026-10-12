@@ -122,7 +122,12 @@ export default async function CreditsAdminPage({
           <Card title={t("planChange.title")}>
             <p className="text-sm text-muted-foreground">{t("planChange.hint")}</p>
             <EntityForm
-              action={submitChangePlan.bind(null, locale, view.workspace.id)}
+              action={submitChangePlan.bind(
+                null,
+                locale,
+                view.workspace.id,
+                view.workspace.version,
+              )}
               fields={[
                 {
                   kind: "select",

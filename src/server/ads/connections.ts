@@ -28,6 +28,7 @@ import {
 import { AD_PLATFORMS, type AdPlatform, type UnifiedAdAccount } from "./model";
 import { adTokenKey, getAdAdapters, redirectUriFor } from "./registry";
 import { decryptToken, encryptToken, TokenVaultError } from "./token-vault";
+import { revokeSocialAccess } from "../social/channel-access";
 
 // Workspace connections to advertising platforms: the OAuth handshake, the encrypted
 // token's lifecycle, ad account discovery and selection, and read-only syncs. Every
@@ -603,11 +604,14 @@ export async function disconnect(
       where: { workspaceId: ctx.workspaceId, platform },
       data: { selected: false },
     });
+    // The Meta grant also serves the AI Social Manager: its Pages stop with it.
+    const socialChannelsDisabled =
+      platform === "META" ? await revokeSocialAccess(tx, ctx.workspaceId) : 0;
     await recordAudit(tx, ctx, {
       action: "ads.disconnected",
       entityType: "ad_connection",
       entityId: null,
-      metadata: { platform },
+      metadata: { platform, socialChannelsDisabled },
     });
   });
 }

@@ -112,7 +112,33 @@ export const TENANT_ROOT_RELATIONS = [
   "whatsappContacts",
   "whatsappMessages",
   "whatsappConsentEvents",
+  "creditAccount",
+  "creditHolds",
+  "creditLedgerEntries",
+  "creditRecharges",
+  "socialChannels",
+  "socialAgents",
+  "socialInteractions",
+  "socialReplies",
+  "socialLessons",
+  "socialAutoReplyClaims",
+  "socialPosts",
 ] as const;
+
+/**
+ * Relations from workspace-owned models to append-only models. A nested write through
+ * them (e.g. `creditHold.update({ data: { entries: { deleteMany: {} } } })`) would edit
+ * or delete append-only rows without passing their own model's rule, so it is refused.
+ * Kept complete by a test that reads the schema.
+ */
+export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> = {
+  CreditHold: ["entries"],
+  VideoGenerationJob: ["ledgerEntries"],
+  AgentRun: ["approvals"],
+  AgentTask: ["approvals", "approvedDecision"],
+  AdAccount: ["whatsappEvents"],
+  WhatsAppContact: ["consentEvents"],
+};
 
 /**
  * Authentication tables (Better Auth). Global/system data — never workspace-scoped and
@@ -232,6 +258,24 @@ function assertNoNestedTenantWrites(model: string, operation: string, payloads: 
   }
 }
 
+function assertNoAppendOnlyWrites(model: string, operation: string, payloads: unknown[]) {
+  const relations = APPEND_ONLY_RELATIONS[model];
+  if (relations === undefined) return;
+  for (const payload of payloads) {
+    const rows = Array.isArray(payload) ? payload : [payload];
+    for (const row of rows) {
+      const relation = isRecord(row) ? relations.find((name) => name in row) : undefined;
+      if (relation !== undefined) {
+        throw violation(
+          model,
+          operation,
+          `nested writes to ${relation} (append-only) are not allowed`,
+        );
+      }
+    }
+  }
+}
+
 function touchesRelations(args: Args, relations: readonly string[]): boolean {
   return ["include", "select", "data"].some((key) => {
     const value = args[key];
@@ -256,6 +300,9 @@ export function assertTenantSafe(model: string, operation: string, rawArgs: unkn
 
     if (rule.appendOnly && (UPDATE_OPERATIONS.has(operation) || DELETE_OPERATIONS.has(operation))) {
       throw violation(model, operation, "model is append-only");
+    }
+    if (CREATE_OPERATIONS.has(operation) || UPDATE_OPERATIONS.has(operation)) {
+      assertNoAppendOnlyWrites(model, operation, [args.data, args.create, args.update]);
     }
     if (CREATE_OPERATIONS.has(operation)) {
       assertCreateData(model, operation, args.data, mode);

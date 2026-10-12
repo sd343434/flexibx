@@ -37,11 +37,12 @@ export async function submitAddCredits(
 export async function submitChangePlan(
   locale: string,
   workspaceId: string,
+  expectedVersion: number,
   _previous: MarketingFormState,
   formData: FormData,
 ): Promise<MarketingFormState> {
   const values = { planCode: text(formData, "planCode") };
-  const result = await changePlanAdminAction({ workspaceId, ...values });
+  const result = await changePlanAdminAction({ workspaceId, expectedVersion, ...values });
   if (!result.ok) return { error: result.error, values };
   revalidatePath(page(locale));
   return { done: true, at: Date.now() };

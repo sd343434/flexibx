@@ -1,28 +1,23 @@
-// Command-line entry point for one AI Marketing Manager scheduler tick.
+// Command-line entry point for one scheduler tick: exactly the work of
+// POST /api/internal/automation-tick (runScheduledAutomationTick) — orchestration
+// (recover stale tasks, start due scheduled runs, advance runs), the AI Social Manager
+// sweep (publishing, drafts, unsent replies, stuck sends), abandoned credit holds and
+// stopped video jobs.
 //
-//   pnpm automation:tick     # recover stale tasks, start due scheduled runs, advance runs
+//   pnpm automation:tick
 //
-// For development and for hosts with the full source tree; production schedulers call
-// POST /api/internal/automation-tick (docs/ARCHITECTURE.md, Scheduling). It needs
-// the same server environment as the app; a local .env file is loaded when present.
-// The AI provider follows AI_PROVIDER (disabled by default; never a paid provider today).
+// For development and for hosts with the full source tree; production schedulers call the
+// endpoint. It needs the same server environment as the app; a local .env file is loaded
+// when present. Exits non-zero when a phase failed (the other phases still ran).
 
 import { getSystemDb } from "@/server/db/client";
 import { logger } from "@/server/logger";
-import { getOrchestrationDeps } from "@/server/orchestration/runtime";
-import { automationTick } from "@/server/orchestration/scheduler";
+import { runScheduledAutomationTick } from "@/server/orchestration/runtime";
 
 async function main(): Promise<void> {
-  const summary = await automationTick({ ...getOrchestrationDeps(), system: getSystemDb() });
-  logger.info(
-    {
-      recovered: summary.recovered,
-      scheduled: summary.scheduled,
-      skippedNoDelegate: summary.skippedNoDelegate,
-      runs: summary.executed.length,
-    },
-    "automation.tick",
-  );
+  const summary = await runScheduledAutomationTick();
+  logger.info({ ...summary }, "automation.tick");
+  if (summary.failedPhases.length > 0) process.exitCode = 1;
 }
 
 main()

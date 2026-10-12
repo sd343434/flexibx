@@ -417,6 +417,8 @@ export async function adminAddCredits(
 const planSchema = z.strictObject({
   workspaceId: z.uuid(),
   planCode: z.string().trim().min(1).max(40),
+  /** The account version shown with the form: a repeated or stale request changes nothing. */
+  expectedVersion: z.coerce.number().int().min(0),
 });
 
 export async function adminChangePlan(
@@ -428,7 +430,15 @@ export async function adminChangePlan(
 ): Promise<void> {
   const data = parseInput(planSchema, input, "plan");
   await db.$transaction(async (tx) => {
-    await changePlan(tx, data.workspaceId, data.planCode, adminUserId, now, settings);
+    const { previousPlan } = await changePlan(
+      tx,
+      data.workspaceId,
+      data.planCode,
+      adminUserId,
+      now,
+      settings,
+      data.expectedVersion,
+    );
     await recordAudit(
       tx,
       { workspaceId: null, userId: adminUserId },
@@ -436,7 +446,7 @@ export async function adminChangePlan(
         action: "billing.plan_changed",
         entityType: "credit_account",
         entityId: data.workspaceId,
-        metadata: { planCode: data.planCode },
+        metadata: { planCode: data.planCode, previousPlan },
       },
     );
   });

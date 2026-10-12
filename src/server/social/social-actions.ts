@@ -134,6 +134,7 @@ export async function getSocialPage(workspaceSlug: string, filter: InboxFilter) 
     webhookConfigured: env.META_WEBHOOK_VERIFY_TOKEN !== undefined,
     metaConnected: connection?.status === "ACTIVE",
     aiConfigured: getAiEnv().AI_PROVIDER !== "disabled",
+    sendingEnabled: env.SOCIAL_SENDING_ENABLED === "true",
     replyPrice: FEATURE_PRICES.social_reply,
     reviewPrice: FEATURE_PRICES.social_learning,
   };

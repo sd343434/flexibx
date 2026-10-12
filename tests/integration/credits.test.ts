@@ -387,7 +387,11 @@ describe("billing settings and administration", () => {
     await adminChangePlan(
       db,
       ctx.userId,
-      { workspaceId: ctx.workspaceId, planCode: "starter" },
+      {
+        workspaceId: ctx.workspaceId,
+        planCode: "starter",
+        expectedVersion: (await account(ctx.workspaceId)).version,
+      },
       settings(),
     );
     expect(await account(ctx.workspaceId)).toMatchObject({
@@ -400,7 +404,11 @@ describe("billing settings and administration", () => {
         adminChangePlan(
           db,
           ctx.userId,
-          { workspaceId: ctx.workspaceId, planCode: "gold" },
+          {
+            workspaceId: ctx.workspaceId,
+            planCode: "gold",
+            expectedVersion: (await account(ctx.workspaceId)).version,
+          },
           settings(),
         ),
       ),
@@ -633,5 +641,170 @@ describe("manual grants from the admin page", () => {
         ),
       ),
     ).toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+});
+
+describe("the ledger cannot be rewritten or erased", () => {
+  it("refuses UPDATE and DELETE in the database, through any client or raw SQL", async () => {
+    const ctx = await owner();
+    await ideas(ctx, runtime());
+    const before = await system.creditLedgerEntry.count({
+      where: { workspaceId: ctx.workspaceId },
+    });
+    expect(before).toBeGreaterThan(0);
+    // The unguarded system client goes straight to the database triggers.
+    await expect(
+      system.creditLedgerEntry.deleteMany({ where: { workspaceId: ctx.workspaceId } }),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      system.creditLedgerEntry.updateMany({
+        where: { workspaceId: ctx.workspaceId },
+        data: { amount: 999 },
+      }),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      system.$executeRaw`DELETE FROM credit_ledger_entries WHERE workspace_id = ${ctx.workspaceId}::uuid`,
+    ).rejects.toThrow(/append-only/);
+    // Nested writes through the guarded client are refused before reaching the database.
+    const hold = await system.creditHold.findFirstOrThrow({
+      where: { workspaceId: ctx.workspaceId },
+    });
+    await expect(
+      db.creditHold.update({
+        where: { id: hold.id, workspaceId: ctx.workspaceId },
+        data: { entries: { deleteMany: {} } },
+      }),
+    ).rejects.toMatchObject({ code: "TENANT_SCOPE_MISSING" });
+    await expect(
+      db.workspace.update({
+        where: { id: ctx.workspaceId },
+        data: { creditLedgerEntries: { deleteMany: {} } },
+      }),
+    ).rejects.toMatchObject({ code: "TENANT_SCOPE_MISSING" });
+    expect(await system.creditLedgerEntry.count({ where: { workspaceId: ctx.workspaceId } })).toBe(
+      before,
+    );
+  });
+
+  it("allows deleting only the workspace a purge transaction names", async () => {
+    const ctx = await owner();
+    const other = await owner();
+    await ideas(ctx, runtime());
+    await ideas(other, runtime());
+    await expect(
+      system.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('flexibx.purge_workspace', ${ctx.workspaceId}, true)`;
+        await tx.$executeRaw`DELETE FROM credit_ledger_entries WHERE workspace_id = ${other.workspaceId}::uuid`;
+      }),
+    ).rejects.toThrow(/append-only/);
+    await system.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('flexibx.purge_workspace', ${ctx.workspaceId}, true)`;
+      await tx.$executeRaw`DELETE FROM credit_ledger_entries WHERE workspace_id = ${ctx.workspaceId}::uuid`;
+    });
+    expect(await system.creditLedgerEntry.count({ where: { workspaceId: ctx.workspaceId } })).toBe(
+      0,
+    );
+    expect(
+      await system.creditLedgerEntry.count({ where: { workspaceId: other.workspaceId } }),
+    ).toBeGreaterThan(0);
+    // The setting was local to that transaction.
+    await expect(
+      system.$executeRaw`DELETE FROM credit_ledger_entries WHERE workspace_id = ${other.workspaceId}::uuid`,
+    ).rejects.toThrow(/append-only/);
+  });
+});
+
+describe("plan changes from the admin page", () => {
+  it("applies once when the same form is submitted several times at once", async () => {
+    const ctx = await owner();
+    await adminAddCredits(
+      db,
+      ctx.userId,
+      {
+        workspaceId: ctx.workspaceId,
+        kind: "PURCHASE",
+        amount: 5,
+        requestKey: crypto.randomUUID(),
+      },
+      settings(),
+    );
+    const before = await account(ctx.workspaceId);
+    const form = {
+      workspaceId: ctx.workspaceId,
+      planCode: "growth",
+      expectedVersion: before.version,
+    };
+    const outcomes = await Promise.allSettled([
+      adminChangePlan(db, ctx.userId, form, settings()),
+      adminChangePlan(db, ctx.userId, form, settings()),
+      adminChangePlan(db, ctx.userId, form, settings()),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
+        expect(outcome.reason).toMatchObject({ fields: [{ code: "stale_status" }] });
+      }
+    }
+    const after = await account(ctx.workspaceId);
+    expect(after).toMatchObject({
+      planCode: "growth",
+      subscriptionCredits: 10000,
+      version: before.version + 1,
+    });
+    // One allowance granted, one audit entry with the previous plan.
+    expect(
+      await system.creditLedgerEntry.count({
+        where: { workspaceId: ctx.workspaceId, kind: "SUBSCRIPTION_GRANT", note: "growth" },
+      }),
+    ).toBe(1);
+    const audits = await system.auditLog.findMany({
+      where: { action: "billing.plan_changed", entityId: ctx.workspaceId },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toMatchObject({ planCode: "growth", previousPlan: "trial" });
+
+    // A later retry of the same (now stale) form changes nothing either.
+    expect(await rejection(adminChangePlan(db, ctx.userId, form, settings()))).toMatchObject({
+      fields: [{ code: "stale_status" }],
+    });
+    expect((await account(ctx.workspaceId)).periodStart).toEqual(after.periodStart);
+  });
+});
+
+describe("releasing abandoned holds", () => {
+  it("one hold that cannot be released never blocks the others", async () => {
+    const ctx = await owner();
+    const hold = (key: string) =>
+      db.$transaction((tx) =>
+        holdCredits(
+          tx,
+          {
+            workspaceId: ctx.workspaceId,
+            feature: "ai_text",
+            idempotencyKey: key,
+            reference: null,
+            userId: null,
+            timeZone: "Asia/Riyadh",
+            now: new Date(),
+          },
+          settings(10),
+        ),
+      );
+    // The oldest hold names a generation id that is not a uuid: releasing it fails.
+    await hold("ai_generation:not-a-uuid");
+    await hold("k-good-1");
+    await hold("k-good-2");
+    const later = new Date(Date.now() + 20 * 60_000);
+    const errors: unknown[] = [];
+    const released = await releaseStaleHolds(system, db, later, settings(10), 50, {
+      error: (object) => errors.push(object),
+    });
+    expect(released).toBe(2);
+    expect(errors).toHaveLength(1);
+    expect(
+      await system.creditHold.count({
+        where: { workspaceId: ctx.workspaceId, status: "RELEASED" },
+      }),
+    ).toBe(2);
   });
 });

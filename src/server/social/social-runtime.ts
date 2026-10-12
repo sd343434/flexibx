@@ -9,6 +9,7 @@ import { logger } from "../logger";
 import { getAiRuntimeForAutomation } from "../orchestration/runtime";
 import { verifyChallenge, verifySignature } from "../whatsapp/webhook";
 
+import { activeMetaGrant } from "./channel-access";
 import { createMetaSocial, type MetaSocial } from "./meta-social";
 import {
   draftInteraction,
@@ -41,6 +42,17 @@ export function metaSocialFromEnv(): MetaSocial | null {
   return createMetaSocial({ appSecret: env.META_APP_SECRET, version: env.META_GRAPH_VERSION });
 }
 
+/**
+ * SOCIAL_SENDING_ENABLED: the server-wide switch for everything that reaches a customer or
+ * a Page — comment replies, Page messages, Page publishing — from every path (a person
+ * approving or retrying, AUTO agents, the scheduler). Off unless "true", like
+ * ADS_EXECUTION_ENABLED and WHATSAPP_SENDING_ENABLED. Reading, drafting and review work
+ * either way.
+ */
+export function socialSendingEnabled(): boolean {
+  return getAdsEnv().SOCIAL_SENDING_ENABLED === "true";
+}
+
 export function getSocialDeps(): SocialDeps {
   const db = getDb();
   return {
@@ -48,6 +60,7 @@ export function getSocialDeps(): SocialDeps {
     ads: { db, adapters: getAdAdapters(), tokenKey: adTokenKey() },
     meta: metaSocialFromEnv(),
     ai: getAiRuntimeForAutomation(),
+    sendingEnabled: socialSendingEnabled(),
   };
 }
 
@@ -90,7 +103,7 @@ export async function handleSocialNotification(
   }
   const events = parseSocialWebhook(payload, new Date());
   if (events === null) return { status: 200, body: "ignored", created: [] };
-  const created = await ingestEvents(getSystemDb(), getDb(), events);
+  const created = await ingestEvents(getSystemDb(), getDb(), events, new Date());
   // Counts only: no ids, names or text in the logs.
   logger.info(
     { route: "meta.webhook", events: events.length, created: created.length },
@@ -122,10 +135,17 @@ export interface SocialSweepSummary {
 }
 
 /**
- * The scheduler's social work: draft interactions left NEW (a lost after(), a credits
- * refusal that may have cleared), send decided replies that never went out, mark sends
- * stuck in SENDING as UNCERTAIN, and run an agent's self-review once enough feedback
- * accumulated (the proposal still waits for a person).
+ * The scheduler's social work, phase by phase (one failing phase or item is logged and
+ * the rest still runs):
+ *   - publish due Page posts (sending switch on; paused workspaces and lost grants are not
+ *     queued; a post held too long fails instead of going out late);
+ *   - mark publications and sends stuck without an answer as UNCERTAIN;
+ *   - draft interactions left NEW (a lost after(), a credits refusal that may have cleared)
+ *     — only on enabled channels of workspaces with a usable Meta grant;
+ *   - send decided replies that never went out (sending switch on, workspace not paused,
+ *     usable grant; a reply that waited too long goes back to a person);
+ *   - run an agent's self-review once enough feedback accumulated (the proposal still
+ *     waits for a person).
  */
 export async function socialSweep(
   deps: SocialDeps,
@@ -133,152 +153,207 @@ export async function socialSweep(
   now: Date = new Date(),
   limit = 25,
 ): Promise<SocialSweepSummary> {
-  // Scheduled Page posts that are due (each claimed once; the emergency stop holds them).
-  let published = 0;
-  for (const post of await duePosts(system, now, limit)) {
+  async function phase(name: string, work: () => Promise<number>): Promise<number> {
     try {
-      const atSweepTime = { ...deps, now: () => now };
-      if ((await publishPost(atSweepTime, post.workspaceId, post.id)) === "published") {
-        published += 1;
-      }
+      return await work();
     } catch (error) {
-      logger.error({ err: error, postId: post.id }, "Scheduled post failed");
+      logger.error({ err: error, phase: name }, "Social sweep phase failed");
+      return 0;
     }
   }
+  const atSweepTime: SocialDeps = { ...deps, now: () => now };
+  const usable = { deletedAt: null, ...activeMetaGrant(now) };
+  const notPaused = { automationPolicy: { isNot: { paused: true } } };
+
+  const published = await phase("publish", async () => {
+    if (!deps.sendingEnabled) return 0;
+    let count = 0;
+    for (const post of await duePosts(system, now, limit)) {
+      try {
+        if ((await publishPost(atSweepTime, post.workspaceId, post.id)) === "published") {
+          count += 1;
+        }
+      } catch (error) {
+        logger.error({ err: error, postId: post.id }, "Scheduled post failed");
+      }
+    }
+    return count;
+  });
 
   // A publication claimed but never finished (the process stopped mid-call): it may be on
   // the Page, so it becomes UNCERTAIN and is looked up there, never published again blindly.
-  const stuckPosts = await system.socialPost.findMany({
-    where: {
-      status: "PUBLISHING",
-      updatedAt: { lt: new Date(now.getTime() - STUCK_PUBLISH_MS) },
-    },
-    take: limit,
-    select: { id: true, workspaceId: true },
-  });
-  for (const row of stuckPosts) {
-    try {
-      await deps.db.socialPost.updateMany({
-        where: { workspaceId: row.workspaceId, id: row.id, status: "PUBLISHING" },
-        data: { status: "UNCERTAIN", errorCode: "no_answer", version: { increment: 1 } },
-      });
-    } catch (error) {
-      logger.error({ err: error, postId: row.id }, "Stuck post recovery failed");
-    }
-  }
-
-  const due = await system.socialInteraction.findMany({
-    where: {
-      status: { in: ["NEW", "FAILED"] },
-      draftAttempts: { lt: MAX_DRAFT_ATTEMPTS },
-      // NULL is not "not in" a list in SQL: no error yet must be listed explicitly.
-      OR: [
-        { lastError: null },
-        { lastError: { notIn: ["window_closed", "not_sent_confirmed", "agent_delegate_missing"] } },
-      ],
-      receivedAt: { gte: new Date(now.getTime() - 2 * 24 * 3_600_000) },
-      agent: { active: true },
-      replies: { none: {} },
-      workspace: { deletedAt: null },
-    },
-    orderBy: { receivedAt: "asc" },
-    take: limit,
-    select: { id: true, workspaceId: true },
-  });
-  let drafted = 0;
-  for (const row of due) {
-    try {
-      const outcome = await draftInteraction(deps, row.workspaceId, row.id);
-      if (outcome !== "skipped" && outcome !== "failed") drafted += 1;
-    } catch (error) {
-      logger.error({ err: error, interactionId: row.id }, "Social sweep draft failed");
-    }
-  }
-
-  const unsent = await system.socialReply.findMany({
-    where: {
-      decision: { in: ["APPROVED", "EDITED", "AUTO"] },
-      sendStatus: "NOT_SENT",
-      decidedAt: { lt: new Date(now.getTime() - UNSENT_GRACE_MS) },
-      workspace: { deletedAt: null },
-    },
-    take: limit,
-    select: { id: true, workspaceId: true },
-  });
-  let sent = 0;
-  for (const row of unsent) {
-    try {
-      if ((await sendReply(deps, row.workspaceId, row.id, null)) === "sent") sent += 1;
-    } catch (error) {
-      logger.error({ err: error, replyId: row.id }, "Social sweep send failed");
-    }
-  }
-
-  const stuck = await system.socialReply.findMany({
-    where: { sendStatus: "SENDING", updatedAt: { lt: new Date(now.getTime() - STUCK_SEND_MS) } },
-    take: limit,
-    select: { id: true, workspaceId: true, interactionId: true },
-  });
-  for (const row of stuck) {
-    try {
-      await deps.db.$transaction(async (tx) => {
-        await tx.socialReply.updateMany({
-          where: { workspaceId: row.workspaceId, id: row.id, sendStatus: "SENDING" },
-          data: { sendStatus: "UNCERTAIN", sendError: "no_answer" },
+  await phase("stuck_posts", async () => {
+    const stuck = await system.socialPost.findMany({
+      where: {
+        status: "PUBLISHING",
+        updatedAt: { lt: new Date(now.getTime() - STUCK_PUBLISH_MS) },
+      },
+      take: limit,
+      select: { id: true, workspaceId: true },
+    });
+    for (const row of stuck) {
+      try {
+        await deps.db.socialPost.updateMany({
+          where: { workspaceId: row.workspaceId, id: row.id, status: "PUBLISHING" },
+          data: { status: "UNCERTAIN", errorCode: "no_answer", version: { increment: 1 } },
         });
-        await tx.socialInteraction.updateMany({
-          where: { workspaceId: row.workspaceId, id: row.interactionId, status: "SENDING" },
-          data: { status: "UNCERTAIN", lastError: "no_answer" },
-        });
-      });
-    } catch (error) {
-      logger.error({ err: error, replyId: row.id }, "Stuck send recovery failed");
+      } catch (error) {
+        logger.error({ err: error, postId: row.id }, "Stuck post recovery failed");
+      }
     }
-  }
+    return stuck.length;
+  });
+
+  const drafted = await phase("draft", async () => {
+    const due = await system.socialInteraction.findMany({
+      where: {
+        status: { in: ["NEW", "FAILED"] },
+        draftAttempts: { lt: MAX_DRAFT_ATTEMPTS },
+        // NULL is not "not in" a list in SQL: no error yet must be listed explicitly.
+        OR: [
+          { lastError: null },
+          {
+            lastError: {
+              notIn: [
+                "window_closed",
+                "not_sent_confirmed",
+                "agent_delegate_missing",
+                "stale_reply",
+              ],
+            },
+          },
+        ],
+        receivedAt: { gte: new Date(now.getTime() - 2 * 24 * 3_600_000) },
+        agent: { active: true },
+        channel: { enabled: true },
+        replies: { none: {} },
+        workspace: usable,
+      },
+      orderBy: { receivedAt: "asc" },
+      take: limit,
+      select: { id: true, workspaceId: true },
+    });
+    let count = 0;
+    for (const row of due) {
+      try {
+        const outcome = await draftInteraction(atSweepTime, row.workspaceId, row.id);
+        if (outcome !== "skipped" && outcome !== "failed") count += 1;
+      } catch (error) {
+        logger.error({ err: error, interactionId: row.id }, "Social sweep draft failed");
+      }
+    }
+    return count;
+  });
+
+  const sent = await phase("send", async () => {
+    if (!deps.sendingEnabled) return 0;
+    const unsent = await system.socialReply.findMany({
+      where: {
+        decision: { in: ["APPROVED", "EDITED", "AUTO"] },
+        sendStatus: "NOT_SENT",
+        decidedAt: { lt: new Date(now.getTime() - UNSENT_GRACE_MS) },
+        interaction: { channel: { enabled: true } },
+        workspace: { ...usable, ...notPaused },
+      },
+      orderBy: { decidedAt: "asc" },
+      take: limit,
+      select: { id: true, workspaceId: true },
+    });
+    let count = 0;
+    for (const row of unsent) {
+      try {
+        if ((await sendReply(atSweepTime, row.workspaceId, row.id, null)) === "sent") count += 1;
+      } catch (error) {
+        logger.error({ err: error, replyId: row.id }, "Social sweep send failed");
+      }
+    }
+    return count;
+  });
+
+  const uncertain = await phase("stuck_sends", async () => {
+    const stuck = await system.socialReply.findMany({
+      where: { sendStatus: "SENDING", updatedAt: { lt: new Date(now.getTime() - STUCK_SEND_MS) } },
+      take: limit,
+      select: { id: true, workspaceId: true, interactionId: true },
+    });
+    for (const row of stuck) {
+      try {
+        await deps.db.$transaction(async (tx) => {
+          await tx.socialReply.updateMany({
+            where: { workspaceId: row.workspaceId, id: row.id, sendStatus: "SENDING" },
+            data: { sendStatus: "UNCERTAIN", sendError: "no_answer" },
+          });
+          await tx.socialInteraction.updateMany({
+            where: { workspaceId: row.workspaceId, id: row.interactionId, status: "SENDING" },
+            data: { status: "UNCERTAIN", lastError: "no_answer" },
+          });
+        });
+      } catch (error) {
+        logger.error({ err: error, replyId: row.id }, "Stuck send recovery failed");
+      }
+    }
+    return stuck.length;
+  });
 
   // Self-review: active agents with enough new feedback and no proposal waiting.
-  const agents = await system.socialAgent.findMany({
-    where: {
-      active: true,
-      workspace: { deletedAt: null },
-      lessons: { none: { kind: "GUIDANCE", status: "PROPOSED" } },
-    },
-    take: limit,
-    select: { id: true, workspaceId: true, delegateUserId: true },
-  });
-  let reviewed = 0;
-  for (const agent of agents) {
-    const last = await deps.db.socialLesson.findFirst({
-      where: { workspaceId: agent.workspaceId, agentId: agent.id, kind: "GUIDANCE" },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
-    const feedback = await deps.db.socialLesson.count({
+  const reviewed = await phase("self_review", async () => {
+    const agents = await system.socialAgent.findMany({
       where: {
-        workspaceId: agent.workspaceId,
-        agentId: agent.id,
-        status: "ACTIVE",
-        OR: [{ kind: "RULE" }, { kind: "EXAMPLE", source: "edit" }],
-        ...(last === null ? {} : { createdAt: { gt: last.createdAt } }),
+        active: true,
+        workspace: { deletedAt: null, ...notPaused },
+        lessons: { none: { kind: "GUIDANCE", status: "PROPOSED" } },
       },
+      orderBy: { updatedAt: "asc" },
+      take: limit,
+      select: { id: true, workspaceId: true, delegateUserId: true },
     });
-    if (feedback < SELF_REVIEW_THRESHOLD || agent.delegateUserId === null) continue;
-    const membership = await deps.db.workspaceMember.findFirst({
-      where: { workspaceId: agent.workspaceId, userId: agent.delegateUserId },
-      select: { role: true },
-    });
-    if (membership === null) continue;
-    try {
-      await runSelfReview(
-        deps,
-        { workspaceId: agent.workspaceId, userId: agent.delegateUserId, role: membership.role },
-        agent.id,
-      );
-      reviewed += 1;
-    } catch (error) {
-      // Not allowed any more, no credits, AI unavailable: tried again on a later tick.
-      logger.warn({ err: error, agentId: agent.id }, "Social self-review skipped");
+    let count = 0;
+    for (const agent of agents) {
+      try {
+        if (await reviewIfDue(atSweepTime, agent)) count += 1;
+      } catch (error) {
+        // Not allowed any more, no credits, AI unavailable: tried again on a later tick.
+        logger.warn({ err: error, agentId: agent.id }, "Social self-review skipped");
+      }
     }
-  }
-  return { published, drafted, sent, uncertain: stuck.length, reviewed };
+    return count;
+  });
+  return { published, drafted, sent, uncertain, reviewed };
+}
+
+async function reviewIfDue(
+  deps: SocialDeps,
+  agent: {
+    readonly id: string;
+    readonly workspaceId: string;
+    readonly delegateUserId: string | null;
+  },
+): Promise<boolean> {
+  if (agent.delegateUserId === null) return false;
+  const last = await deps.db.socialLesson.findFirst({
+    where: { workspaceId: agent.workspaceId, agentId: agent.id, kind: "GUIDANCE" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  const feedback = await deps.db.socialLesson.count({
+    where: {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      status: "ACTIVE",
+      OR: [{ kind: "RULE" }, { kind: "EXAMPLE", source: "edit" }],
+      ...(last === null ? {} : { createdAt: { gt: last.createdAt } }),
+    },
+  });
+  if (feedback < SELF_REVIEW_THRESHOLD) return false;
+  const membership = await deps.db.workspaceMember.findFirst({
+    where: { workspaceId: agent.workspaceId, userId: agent.delegateUserId },
+    select: { role: true },
+  });
+  if (membership === null) return false;
+  await runSelfReview(
+    deps,
+    { workspaceId: agent.workspaceId, userId: agent.delegateUserId, role: membership.role },
+    agent.id,
+  );
+  return true;
 }

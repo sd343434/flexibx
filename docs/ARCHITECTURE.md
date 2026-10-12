@@ -729,3 +729,44 @@ Code: `src/server/social/`. Migrations `20261012110000_social_manager` and
 refuses one without the other. A message is "sent" only when Resend returns an id;
 anything else fails explicitly with `SERVICE_UNAVAILABLE`. Without it, production still
 gets `UnconfiguredMailer` (every send fails).
+
+## 18. Launch hardening (phases A and B)
+
+- **Tenant guard**: `TENANT_ROOT_RELATIONS` covers every workspace-owned relation of
+  `Workspace` and `APPEND_ONLY_RELATIONS` every relation into an append-only model; a test
+  reads `prisma/schema.prisma` and fails when a new relation is not registered.
+- **Credit ledger**: append-only in the database for DELETE too (migration
+  `20261013090000_credit_ledger_no_delete`). A future workspace purge must
+  `SET LOCAL flexibx.purge_workspace = '<id>'` in its transaction to delete that
+  workspace's ledger rows (and only those).
+- **Production configuration**: `src/instrumentation.ts` validates every environment
+  group at start-up (`src/server/startup-env.ts`); in production an invalid value stops the
+  start with variable names only. `AI_PROVIDER=fake`, `MAIL_TRANSPORT=test-outbox` and
+  `STORAGE_DRIVER=test-memory` are refused in production unless
+  `FLEXIBX_TEST_PROVIDERS=allow` and `APP_URL` is local (end-to-end runs only). Missing
+  `AUTOMATION_CRON_SECRET` or `ENCRYPTION_KEY` is logged as a warning.
+- **Scheduler**: `runScheduledAutomationTick` is the single entry point of the endpoint
+  and of `pnpm automation:tick`: orchestration, the social sweep, abandoned credit holds
+  and stopped video jobs (only when `VIDEO_PROVIDER` is not disabled). Each phase and each
+  item is isolated (`failedPhases` in the summary); a scheduled planning run is created
+  before its slot is advanced, so a failure never loses a slot.
+- **Queues**: due posts and unsent replies exclude paused workspaces and workspaces
+  without a usable Meta grant, so they never hold the head of the queue. A reply decided
+  but not sent for 2 hours (AUTO) or 24 hours (approved) goes back to a person
+  (`stale_reply`); a post more than 24 hours past its time fails (`missed_window`).
+- **`SOCIAL_SENDING_ENABLED`** (off by default): replies, messages and publishing from
+  every path. Approving or retrying is refused (`social_sending_disabled`), AUTO agents
+  only draft, the sweep sends and publishes nothing; the social page shows a notice.
+- **Channel access**: events are recorded, drafted (charged) and answered only for
+  workspaces with an ACTIVE, unexpired Meta grant. Disconnecting Meta, Meta
+  deauthorization / data deletion, or a send that finds the Page gone disables the
+  channels and releases their automatic-reply claims (`social.access_revoked`).
+- **Claims**: released when a send definitively fails (refused, window closed, stale,
+  confirmed not sent); kept while UNCERTAIN. Private conversations are claimed as a whole
+  (`thread:<id>`), so one conversation is answered automatically by one workspace.
+- **Duplicates**: a reply replaced by a newer draft is never sent (`social_reply_superseded`).
+  Checking an UNCERTAIN reply or post reads up to 10 pages; when it cannot read them all it
+  answers "unknown" and the item stays UNCERTAIN (`social_cannot_verify`).
+- **Plan changes** (admin): carry the account version shown with the form; a repeated or
+  stale request is refused (`stale_status`) and changes nothing; the audit entry records
+  the previous plan.

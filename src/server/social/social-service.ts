@@ -22,6 +22,7 @@ import { isRole } from "../tenancy/roles";
 import type { ValidationCode } from "../validation/field-errors";
 import { parseInput } from "../validation/parse";
 
+import { activeMetaGrant, hasActiveMetaGrant, revokeSocialAccess } from "./channel-access";
 import { SocialPlatformError, type ManagedPage, type MetaSocial } from "./meta-social";
 import type { SocialEvent } from "./webhook";
 
@@ -44,6 +45,11 @@ export interface SocialDeps {
   /** null = the Meta app is not configured on this server. */
   readonly meta: MetaSocial | null;
   readonly ai: AiRuntime;
+  /**
+   * SOCIAL_SENDING_ENABLED: false = nothing reaches a customer or a Page (replies,
+   * messages, publishing); reading, drafting and reviewing still work.
+   */
+  readonly sendingEnabled: boolean;
   readonly now?: () => Date;
 }
 
@@ -58,6 +64,12 @@ export const EXAMPLES_IN_PROMPT = 8;
 export const RULES_IN_PROMPT = 15;
 /** Feedback items (edits and rejections) that trigger an automatic self-review. */
 export const SELF_REVIEW_THRESHOLD = 10;
+/**
+ * A reply decided but not sent (emergency stop, kill switch, expired grant) is sent by the
+ * system only while it is this fresh; older, it waits for a person to send it again.
+ */
+export const AUTO_SEND_MAX_AGE_MS = 2 * 3_600_000;
+export const APPROVED_SEND_MAX_AGE_MS = 24 * 3_600_000;
 /** How long one drafting attempt holds its claim (longer than an AI call with its retry). */
 export const DRAFT_LEASE_MS = 5 * 60_000;
 
@@ -202,6 +214,27 @@ export async function pageFor(
 }
 
 /**
+ * The workspace's grant no longer includes this Page: its channels are disabled (and give
+ * up their automatic-reply claims) until a person syncs the Pages again.
+ */
+export async function pageAccessLost(deps: SocialDeps, workspaceId: string, pageId: string) {
+  await deps.db.$transaction(async (tx) => {
+    const disabled = await revokeSocialAccess(tx, workspaceId, pageId);
+    if (disabled === 0) return;
+    await recordAudit(
+      tx,
+      { workspaceId, userId: null },
+      {
+        action: "social.access_revoked",
+        entityType: "social_channel",
+        entityId: null,
+        metadata: { reason: "page_unavailable", channels: disabled },
+      },
+    );
+  });
+}
+
+/**
  * Lists the Facebook Pages (and their Instagram professional accounts) the workspace's
  * Meta connection manages and records them as channels (social.manage). Pages no longer
  * listed are disabled, never deleted (their history stays).
@@ -252,6 +285,12 @@ export async function syncChannels(
       await tx.socialChannel.updateMany({
         where: { workspaceId: ctx.workspaceId, id: { in: gone.map((row) => row.id) } },
         data: { enabled: false },
+      });
+      await tx.socialAutoReplyClaim.deleteMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: gone.map((row) => ({ platform: row.platform, channelExternalId: row.externalId })),
+        },
       });
     }
     await recordAudit(tx, ctx, {
@@ -335,15 +374,18 @@ export async function ingestEvents(
   system: PrismaClient,
   db: GuardedPrismaClient,
   events: readonly SocialEvent[],
+  now: Date = new Date(),
 ): Promise<readonly { readonly workspaceId: string; readonly id: string }[]> {
   const created: { workspaceId: string; id: string }[] = [];
   for (const event of events) {
+    // Only workspaces whose own Meta grant is usable receive the event: one that lost
+    // access to the Page gets nothing (no customer data, no paid drafts).
     const channels = await system.socialChannel.findMany({
       where: {
         platform: event.platform,
         externalId: event.accountId,
         enabled: true,
-        workspace: { deletedAt: null },
+        workspace: { deletedAt: null, ...activeMetaGrant(now) },
       },
       select: { id: true, workspaceId: true, agentId: true },
     });
@@ -526,6 +568,7 @@ export async function draftInteraction(
     select: {
       id: true,
       externalId: true,
+      threadExternalId: true,
       kind: true,
       text: true,
       receivedAt: true,
@@ -569,6 +612,8 @@ export async function draftInteraction(
 
   const actor = await resolveDelegate(db, workspaceId, agent.delegateUserId, "social.reply");
   if (actor === null) return fail("agent_delegate_missing");
+  // No usable Meta grant: nothing is drafted or charged; it resumes after a reconnect.
+  if (!(await hasActiveMetaGrant(db, workspaceId, nowOf(deps)))) return "skipped";
 
   // Claim this attempt: a lease, so the webhook's drafting and the scheduler's sweep never
   // draft the same message at once (the status stays NEW while the AI call runs).
@@ -674,6 +719,7 @@ export async function draftInteraction(
   // AUTO mode: send only what is inside every limit the workspace set.
   const finalText = output.reply;
   const autoAllowed =
+    deps.sendingEnabled &&
     agent.mode === "AUTO" &&
     finalText !== null &&
     output.confidence >= agent.minConfidence &&
@@ -693,7 +739,7 @@ export async function draftInteraction(
       id: interaction.id,
       platform: interaction.channel.platform,
       channelExternalId: interaction.channel.externalId,
-      externalId: interaction.externalId,
+      externalId: autoClaimKey(interaction),
     },
   });
   if (!decided) return "awaiting_review";
@@ -704,6 +750,25 @@ export async function draftInteraction(
 
 /** Another workspace managing the same Page answers this message automatically. */
 class AutoClaimLost extends Error {}
+
+/**
+ * What an automatic reply claims: a comment, or a whole private conversation (so one
+ * conversation never gets answers from two workspaces' agents).
+ */
+export function autoClaimKey(interaction: {
+  readonly kind: "COMMENT" | "MESSAGE";
+  readonly externalId: string;
+  readonly threadExternalId: string;
+}): string {
+  return interaction.kind === "MESSAGE"
+    ? `thread:${interaction.threadExternalId}`.slice(0, 128)
+    : interaction.externalId;
+}
+
+/** Gives up this interaction's automatic-reply claim (its send definitively failed). */
+async function releaseAutoClaim(db: Db, workspaceId: string, interactionId: string) {
+  await db.socialAutoReplyClaim.deleteMany({ where: { workspaceId, interactionId } });
+}
 
 /**
  * Turns a pending draft into an automatic reply, atomically: under a lock on the agent,
@@ -741,14 +806,18 @@ export async function decideAutomatically(
         data: { decision: "AUTO", finalText: decision.finalText, decidedAt: now },
       });
       if (updated.count === 0) return false;
-      // Unique on the platform's ids, not per workspace. Losing it rolls the decision back.
+      // Unique on the platform's ids, not per workspace. A claim already held by this
+      // workspace (the same conversation) is kept; another workspace's claim wins, and
+      // losing it rolls the decision back.
       const claimed = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO social_auto_reply_claims
           (workspace_id, interaction_id, platform, channel_external_id, external_id)
         VALUES (${workspaceId}::uuid, ${interaction.id}::uuid,
           ${interaction.platform}::social_platform, ${interaction.channelExternalId},
           ${interaction.externalId})
-        ON CONFLICT (platform, channel_external_id, external_id) DO NOTHING
+        ON CONFLICT (platform, channel_external_id, external_id)
+        DO UPDATE SET created_at = social_auto_reply_claims.created_at
+          WHERE social_auto_reply_claims.workspace_id = EXCLUDED.workspace_id
         RETURNING id`;
       if (claimed.length === 0) throw new AutoClaimLost();
       return true;
@@ -823,6 +892,7 @@ export async function approveReply(
   editedText: string | null,
 ): Promise<"sent" | "uncertain" | "failed"> {
   assertCan(ctx, "social.reply");
+  if (!deps.sendingEnabled) throw socialError("SERVICE_UNAVAILABLE", "social_sending_disabled");
   const reply = await pendingReply(deps.db, ctx.workspaceId, replyId);
   const edited = editedText?.trim() ?? "";
   const finalText = edited !== "" ? edited : (reply.draftText ?? "");
@@ -996,6 +1066,8 @@ export async function sendReply(
       id: true,
       finalText: true,
       decision: true,
+      decidedAt: true,
+      createdAt: true,
       agent: { select: { delegateUserId: true } },
       interaction: {
         select: {
@@ -1004,7 +1076,7 @@ export async function sendReply(
           externalId: true,
           threadExternalId: true,
           receivedAt: true,
-          channel: { select: { platform: true, pageId: true, externalId: true } },
+          channel: { select: { platform: true, pageId: true, externalId: true, enabled: true } },
         },
       },
     },
@@ -1012,8 +1084,34 @@ export async function sendReply(
   if (typeof reply?.finalText !== "string") throw socialError("CONFLICT", "social_reply_locked");
   const { interaction } = reply;
   const now = nowOf(deps);
+  // A person sending is refused with the reason; the system holds the reply instead.
+  const refuse = (code: ValidationCode, status: ErrorCode = "CONFLICT") => {
+    if (actor === null) return "held" as const;
+    throw socialError(status, code);
+  };
+  // The global switch: nothing reaches a customer while sending is off on this server.
+  if (!deps.sendingEnabled) return refuse("social_sending_disabled", "SERVICE_UNAVAILABLE");
+  // A newer draft exists for the same message: this one must never be sent on top of it.
+  const newer = await db.socialReply.findFirst({
+    where: { workspaceId, interactionId: interaction.id, createdAt: { gt: reply.createdAt } },
+    select: { id: true },
+  });
+  if (newer !== null) {
+    if (actor !== null) throw socialError("CONFLICT", "social_reply_superseded");
+    await db.socialReply.updateMany({
+      where: { workspaceId, id: reply.id, sendStatus: "NOT_SENT" },
+      data: { sendStatus: "FAILED", sendError: "superseded" },
+    });
+    return "failed";
+  }
+  if (!interaction.channel.enabled) return refuse("social_page_unavailable");
+  if (!(await hasActiveMetaGrant(db, workspaceId, now))) {
+    return refuse("social_connection_inactive");
+  }
   // Sent by the system (the sweep, or right after an automatic decision): the emergency
-  // stop holds it, and an automatic reply still needs a delegate allowed to send them.
+  // stop holds it, an automatic reply still needs a delegate allowed to send them, and a
+  // reply that waited too long (a stop, an outage) goes back to a person — never sent
+  // automatically days after it was decided.
   if (actor === null) {
     if (await automationPaused(db, workspaceId)) return "held";
     if (
@@ -1021,6 +1119,22 @@ export async function sendReply(
       (await resolveDelegate(db, workspaceId, reply.agent.delegateUserId, "social.manage")) === null
     ) {
       return "held";
+    }
+    const maxAge = reply.decision === "AUTO" ? AUTO_SEND_MAX_AGE_MS : APPROVED_SEND_MAX_AGE_MS;
+    if (reply.decidedAt === null || now.getTime() - reply.decidedAt.getTime() > maxAge) {
+      await db.$transaction(async (tx) => {
+        const expired = await tx.socialReply.updateMany({
+          where: { workspaceId, id: reply.id, sendStatus: { in: ["NOT_SENT", "FAILED"] } },
+          data: { sendStatus: "FAILED", sendError: "stale" },
+        });
+        if (expired.count === 0) return;
+        await tx.socialInteraction.updateMany({
+          where: { workspaceId, id: interaction.id, status: { notIn: ["REPLIED", "SENDING"] } },
+          data: { status: "FAILED", lastError: "stale_reply" },
+        });
+        await releaseAutoClaim(tx, workspaceId, interaction.id);
+      });
+      return "failed";
     }
   }
   const finish = async (
@@ -1044,6 +1158,9 @@ export async function sendReply(
           lastError: extra.sendError?.slice(0, 60) ?? null,
         },
       });
+      // Definitively not sent: another workspace managing the Page may answer it
+      // automatically. An UNCERTAIN send keeps its claim (it may have reached the customer).
+      if (sendStatus === "FAILED") await releaseAutoClaim(tx, workspaceId, interaction.id);
       if (sendStatus !== "FAILED") {
         await recordAudit(tx, actor ?? { workspaceId, userId: null }, {
           action: sendStatus === "SENT" ? "social.reply_sent" : "social.reply_uncertain",
@@ -1072,6 +1189,7 @@ export async function sendReply(
       where: { workspaceId, id: interaction.id },
       data: { status: "FAILED", lastError: "window_closed" },
     });
+    await releaseAutoClaim(db, workspaceId, interaction.id);
     return "failed";
   }
   const claimed = await db.$transaction(async (tx) => {
@@ -1093,9 +1211,11 @@ export async function sendReply(
     page = await pageFor(deps, workspaceId, interaction.channel.pageId);
   } catch (error) {
     // Nothing was sent: the Page or the grant is not usable right now.
-    await finish("FAILED", {
-      sendError: isAppError(error) ? (error.fields[0]?.code ?? error.code) : "page_unavailable",
-    });
+    const code = isAppError(error) ? (error.fields[0]?.code ?? error.code) : "page_unavailable";
+    await finish("FAILED", { sendError: code });
+    if (code === "social_page_unavailable") {
+      await pageAccessLost(deps, workspaceId, interaction.channel.pageId);
+    }
     return "failed";
   }
   try {
@@ -1155,13 +1275,17 @@ export async function resolveUncertainReply(
   if (statement === "check") {
     if (reply.interaction.kind !== "COMMENT") throw socialError("CONFLICT", "social_cannot_verify");
     const page = await pageFor(deps, ctx.workspaceId, reply.interaction.channel.pageId);
-    externalReplyId = await requireMeta(deps).findCommentReply(
+    const found = await requireMeta(deps).findCommentReply(
       page,
       reply.interaction.channel.platform,
       reply.interaction.externalId,
       reply.interaction.channel.externalId,
       reply.finalText,
     );
+    // Too many replies to read them all: still unknown, so it stays UNCERTAIN (never
+    // "not sent" on a partial look, which would allow sending it twice).
+    if (found === "unknown") throw socialError("CONFLICT", "social_cannot_verify");
+    externalReplyId = found === "not_found" ? null : found.id;
     sent = externalReplyId !== null;
   } else {
     sent = statement === "sent";
@@ -1179,6 +1303,7 @@ export async function resolveUncertainReply(
         ? { status: "REPLIED", lastError: null }
         : { status: "FAILED", lastError: "not_sent_confirmed" },
     });
+    if (!sent) await releaseAutoClaim(tx, ctx.workspaceId, reply.interaction.id);
   });
   return sent ? "sent" : "not_sent";
 }

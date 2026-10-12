@@ -165,6 +165,7 @@ export type AiEnv = z.infer<typeof aiEnvSchema>;
 export function parseAiEnv(source: EnvSource): AiEnv {
   const result = aiEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("AI", result.error.issues);
+  refuseTestProvider("AI", source, "AI_PROVIDER", result.data.AI_PROVIDER, "fake");
   return result.data;
 }
 
@@ -368,6 +369,8 @@ export const adsEnvSchema = z
     // person's approval of the exact action.
     ADS_EXECUTION_ENABLED: optional(z.enum(["true", "false"])),
     WHATSAPP_SENDING_ENABLED: optional(z.enum(["true", "false"])),
+    // AI Social Manager: replies, Page messages and Page publishing (see social-runtime).
+    SOCIAL_SENDING_ENABLED: optional(z.enum(["true", "false"])),
     TIKTOK_AUTHORIZE_URL: optional(
       z.url({ protocol: /^https$/, hostname: /^(?:business-api|ads)\.tiktok\.com$/ }),
     ),
@@ -428,6 +431,43 @@ export class EnvValidationError extends Error {
 
 type EnvSource = Readonly<Record<string, string | undefined>>;
 
+/**
+ * Test-only providers (AI_PROVIDER=fake, MAIL_TRANSPORT=test-outbox,
+ * STORAGE_DRIVER=test-memory) are refused when NODE_ENV=production — fake AI text would be
+ * charged as real work, outbox emails never reach anyone, memory storage loses uploads.
+ * The one exception is the end-to-end suite, which runs the production build locally: it
+ * sets FLEXIBX_TEST_PROVIDERS=allow, honoured only while APP_URL points at this machine
+ * (localhost, 127.0.0.1 or ::1), so a real deployment can never turn it on.
+ */
+export function testProvidersAllowed(source: EnvSource): boolean {
+  if (source.NODE_ENV !== "production") return true;
+  if (source.FLEXIBX_TEST_PROVIDERS !== "allow") return false;
+  try {
+    const host = new URL(source.APP_URL ?? "").hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function refuseTestProvider(
+  scope: string,
+  source: EnvSource,
+  variable: string,
+  value: string | undefined,
+  testValue: string,
+): void {
+  if (value !== testValue || testProvidersAllowed(source)) return;
+  throw new EnvValidationError(scope, [
+    {
+      code: "custom",
+      path: [variable],
+      message: `${testValue} is a test-only setting and is not allowed in production`,
+      input: undefined,
+    },
+  ]);
+}
+
 export function parseServerEnv(source: EnvSource): ServerEnv {
   const result = serverEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("server", result.error.issues);
@@ -443,6 +483,7 @@ export function parseAuthEnv(source: EnvSource): AuthEnv {
 export function parseMailEnv(source: EnvSource): MailEnv {
   const result = mailEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("mail", result.error.issues);
+  refuseTestProvider("mail", source, "MAIL_TRANSPORT", result.data.MAIL_TRANSPORT, "test-outbox");
   return result.data;
 }
 
@@ -458,6 +499,13 @@ export const storageDriverSchema = z.object({
 export function parseStorageDriver(source: EnvSource): "s3" | "test-memory" {
   const result = storageDriverSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("storage", result.error.issues);
+  refuseTestProvider(
+    "storage",
+    source,
+    "STORAGE_DRIVER",
+    result.data.STORAGE_DRIVER,
+    "test-memory",
+  );
   return result.data.STORAGE_DRIVER ?? "s3";
 }
 

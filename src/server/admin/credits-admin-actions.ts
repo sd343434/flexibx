@@ -49,6 +49,7 @@ export async function getCreditsAdminView(slug: string | null) {
       subscriptionCredits: account.subscriptionCredits,
       purchasedCredits: account.purchasedCredits,
       heldCredits: account.heldCredits,
+      version: account.version,
       report: {
         credits: report.credits,
         providerCostMicros: report.providerCostMicros?.toString() ?? null,

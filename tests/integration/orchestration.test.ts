@@ -530,6 +530,42 @@ describe("automation policy and scheduler", () => {
   });
 });
 
+describe("scheduler resilience", () => {
+  it("keeps a slot due when its run cannot be created, and later creates it once", async () => {
+    const ctx = await admin();
+    await updateAutomationPolicy(db, ctx, {
+      enabled: true,
+      planningCadence: "DAILY",
+      allowDrafts: false,
+      maxDraftsPerRun: "3",
+    });
+    const slot = new Date(Date.now() - 60_000);
+    await system.automationPolicy.update({
+      where: { workspaceId: ctx.workspaceId },
+      data: { nextPlanningAt: slot },
+    });
+    const broken: OrchestrationDeps<PlanningServices> & { system: typeof system } = {
+      db,
+      system,
+      services: { ai: () => ({ provider: createFakeProvider(), timeoutMs: 5_000 }) },
+      // The workflow cannot be resolved: creating the run fails.
+      workflows: {},
+    };
+    // The tick itself does not fail, and the slot is not lost.
+    expect(await automationTick(broken)).toMatchObject({ scheduled: 0 });
+    expect(
+      (await system.automationPolicy.findUniqueOrThrow({ where: { workspaceId: ctx.workspaceId } }))
+        .nextPlanningAt,
+    ).toEqual(slot);
+    expect(await system.agentRun.count({ where: { workspaceId: ctx.workspaceId } })).toBe(0);
+
+    const fixed = { ...broken, workflows: { content_planning: contentPlanningWorkflow } };
+    expect(await automationTick(fixed)).toMatchObject({ scheduled: 1 });
+    expect(await automationTick(fixed)).toMatchObject({ scheduled: 0 });
+    expect(await system.agentRun.count({ where: { workspaceId: ctx.workspaceId } })).toBe(1);
+  });
+});
+
 // ── the AI Marketing Manager's content planning ──────────────────────────────
 
 describe("content planning workflow", () => {

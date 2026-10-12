@@ -575,11 +575,18 @@ export async function changePlan(
   actorUserId: string | null,
   now: Date,
   config: CreditsConfig,
-): Promise<void> {
+  /** The account version the request was made against (optimistic concurrency). */
+  expectedVersion?: number,
+): Promise<{ readonly previousPlan: string }> {
   if (plans(config.trialPeriodCredits)[planCode] === undefined) {
     throw creditsError("VALIDATION_FAILED", "credits_plan_unknown");
   }
   const account = await lockAccount(tx, workspaceId, now, config);
+  // Under the account lock: a double submit or a retried request sees the version the
+  // first one moved, and changes nothing (no second period reset, no second allowance).
+  if (expectedVersion !== undefined && account.version !== expectedVersion) {
+    throw creditsError("CONFLICT", "stale_status");
+  }
   const balances = {
     workspaceId,
     subscription: account.subscriptionCredits,
@@ -616,6 +623,7 @@ export async function changePlan(
       version: { increment: 1 },
     },
   });
+  return { previousPlan: account.planCode };
 }
 
 /** Usage of the current period by feature, and today's total. */
@@ -669,6 +677,7 @@ export async function releaseStaleHolds(
   now: Date,
   config: CreditsConfig,
   limit = 50,
+  log?: { error(object: Record<string, unknown>, message: string): void },
 ): Promise<number> {
   const stale = await system.creditHold.findMany({
     where: { status: "HELD", createdAt: { lt: new Date(now.getTime() - STALE_HOLD_MS) } },
@@ -676,19 +685,26 @@ export async function releaseStaleHolds(
     take: limit,
     select: { id: true, workspaceId: true, idempotencyKey: true },
   });
+  let released = 0;
   for (const hold of stale) {
-    await db.$transaction(async (tx) => {
-      const generationId = hold.idempotencyKey.startsWith(AI_GENERATION_KEY)
-        ? hold.idempotencyKey.slice(AI_GENERATION_KEY.length)
-        : null;
-      if (generationId !== null) {
-        await tx.aiGeneration.updateMany({
-          where: { workspaceId: hold.workspaceId, id: generationId, status: "PENDING" },
-          data: { status: "FAILED", errorCode: "not_settled" },
-        });
-      }
-      await releaseHold(tx, hold.workspaceId, hold.id, "not_settled", now, config);
-    });
+    // One hold that cannot be released (logged) never blocks the others.
+    try {
+      await db.$transaction(async (tx) => {
+        const generationId = hold.idempotencyKey.startsWith(AI_GENERATION_KEY)
+          ? hold.idempotencyKey.slice(AI_GENERATION_KEY.length)
+          : null;
+        if (generationId !== null) {
+          await tx.aiGeneration.updateMany({
+            where: { workspaceId: hold.workspaceId, id: generationId, status: "PENDING" },
+            data: { status: "FAILED", errorCode: "not_settled" },
+          });
+        }
+        await releaseHold(tx, hold.workspaceId, hold.id, "not_settled", now, config);
+      });
+      released += 1;
+    } catch (error) {
+      log?.error({ err: error, holdId: hold.id }, "Stale credit hold release failed");
+    }
   }
-  return stale.length;
+  return released;
 }

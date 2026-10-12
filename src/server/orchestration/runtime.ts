@@ -5,7 +5,7 @@ import { providerFromEnv } from "../ai/configured-provider";
 import { creditsSettingsFromEnv } from "../billing/config";
 import { releaseStaleHolds } from "../billing/credits";
 import { getDb, getSystemDb } from "../db/client";
-import { getAiEnv } from "../env";
+import { getAiEnv, getVideoEnv } from "../env";
 import { logger } from "../logger";
 
 import type { AdAdapters } from "../ads/adapter";
@@ -108,20 +108,55 @@ export interface ScheduledTickSummary {
   };
   /** Credit holds never settled (abandoned AI calls) released on this tick. */
   readonly creditHoldsReleased: number;
+  /** Video jobs whose runner stopped, resumed on this tick (0 when video is not configured). */
+  readonly videoJobsResumed: number;
+  /** Phases that failed on this tick (logged); the others still ran. */
+  readonly failedPhases: readonly string[];
 }
 
-/** One tick for POST /api/internal/automation-tick (same work as `pnpm automation:tick`). */
-export async function runScheduledAutomationTick(): Promise<ScheduledTickSummary> {
-  const summary = await automationTick({ ...getOrchestrationDeps(), system: getSystemDb() });
-  // The AI Social Manager's own sweep (drafts, unsent replies, stuck sends, self-review).
-  const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
-  const social = await socialSweep(getSocialDeps(), getSystemDb());
-  const creditHoldsReleased = await releaseStaleHolds(
-    getSystemDb(),
-    getDb(),
-    new Date(),
-    creditsSettingsFromEnv(),
+const EMPTY_SOCIAL = { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 } as const;
+
+/**
+ * One scheduler tick: the single entry point for POST /api/internal/automation-tick and
+ * `pnpm automation:tick`. Each phase runs on its own — one failing phase is logged and
+ * reported, and the others still run (each phase also isolates its own items).
+ */
+export async function runScheduledAutomationTick(
+  now: () => Date = () => new Date(),
+): Promise<ScheduledTickSummary> {
+  const failedPhases: string[] = [];
+  async function phase<T>(name: string, fallback: T, work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      failedPhases.push(name);
+      logger.error({ err: error, phase: name }, "Scheduled tick phase failed");
+      return fallback;
+    }
+  }
+
+  const summary = await phase(
+    "orchestration",
+    { recovered: 0, scheduled: 0, skippedNoDelegate: 0, executed: [] },
+    () => automationTick({ ...getOrchestrationDeps(), system: getSystemDb() }),
   );
+  // The AI Social Manager's own sweep (publishing, drafts, unsent replies, stuck sends,
+  // self-review).
+  const social = await phase("social", EMPTY_SOCIAL, async () => {
+    const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
+    return socialSweep(getSocialDeps(), getSystemDb(), now());
+  });
+  const creditHoldsReleased = await phase("credits", 0, () =>
+    releaseStaleHolds(getSystemDb(), getDb(), now(), creditsSettingsFromEnv(), 50, logger),
+  );
+  // Video jobs whose runner stopped: resumed with the configured provider only (never
+  // started when VIDEO_PROVIDER is disabled — nothing can be in flight then).
+  const videoJobsResumed = await phase("video", 0, async () => {
+    if (getVideoEnv().VIDEO_PROVIDER === "disabled") return 0;
+    const { getVideoGenerationDeps } = await import("../videos/generation/runtime");
+    const { recoverVideoJobs } = await import("../videos/generation/video-generation-service");
+    return (await recoverVideoJobs({ ...getVideoGenerationDeps(), system: getSystemDb() })).resumed;
+  });
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
     const key = outcome.status === "finished" ? outcome.state.toLowerCase() : outcome.status;
@@ -135,5 +170,7 @@ export async function runScheduledAutomationTick(): Promise<ScheduledTickSummary
     runs,
     social,
     creditHoldsReleased,
+    videoJobsResumed,
+    failedPhases,
   };
 }
