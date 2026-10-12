@@ -761,9 +761,17 @@ gets `UnconfiguredMailer` (every send fails).
   workspaces with an ACTIVE, unexpired Meta grant. Disconnecting Meta, Meta
   deauthorization / data deletion, or a send that finds the Page gone disables the
   channels and releases their automatic-reply claims (`social.access_revoked`).
-- **Claims**: released when a send definitively fails (refused, window closed, stale,
-  confirmed not sent); kept while UNCERTAIN. Private conversations are claimed as a whole
-  (`thread:<id>`), so one conversation is answered automatically by one workspace.
+- **Message ownership** (`claimMessage`, table `social_auto_reply_claims`): whoever
+  answers a message owns it across every workspace that manages the Page — an AUTO
+  decision, a person's approval, or the send itself takes (or refreshes) the claim, unique
+  on the platform's ids. Another workspace's attempt is refused (`social_reply_claimed`,
+  a code only: nothing about the other workspace is read or returned) before any decision
+  is recorded; an older approved reply the scheduler finds for a message owned elsewhere
+  fails (`claimed_elsewhere`). Private conversations are claimed as a whole
+  (`thread:<id>`); a conversation claim lapses 24 hours after its owner's last reply and is
+  taken over only if none of the owner's replies there is pending, being sent or
+  uncertain. A comment's claim is released when its send definitively fails (refused,
+  stale, confirmed not sent); a conversation keeps its owner when one message fails.
 - **Duplicates**: a reply replaced by a newer draft is never sent (`social_reply_superseded`).
   Checking an UNCERTAIN reply or post reads up to 10 pages; when it cannot read them all it
   answers "unknown" and the item stays UNCERTAIN (`social_cannot_verify`).

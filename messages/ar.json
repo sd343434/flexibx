@@ -425,7 +425,8 @@
     "social_content_not_approved": "لا يُنشر إلا المحتوى المعتمد أو المجدول.",
     "social_sending_disabled": "إرسال الردود والنشر معطّل على هذا الخادم.",
     "social_reply_superseded": "يوجد رد أحدث لهذه الرسالة: أرسل الرد الأحدث بدلاً منه.",
-    "social_connection_inactive": "ربط ميتا غير نشط: أعد الربط من صفحة التكاملات."
+    "social_connection_inactive": "ربط ميتا غير نشط: أعد الربط من صفحة التكاملات.",
+    "social_reply_claimed": "تتم الإجابة عن هذه الرسالة من حساب آخر يدير هذه الصفحة."
   },
   "marketing": {
     "common": {

@@ -116,13 +116,48 @@ export interface ScheduledTickSummary {
 
 const EMPTY_SOCIAL = { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 } as const;
 
+/** The work of one tick, phase by phase (injectable so a failing phase can be tested). */
+export interface TickPhases {
+  orchestration(): Promise<{
+    readonly recovered: number;
+    readonly scheduled: number;
+    readonly skippedNoDelegate: number;
+    readonly executed: readonly { readonly status: string; readonly state?: string }[];
+  }>;
+  social(now: Date): Promise<ScheduledTickSummary["social"]>;
+  credits(now: Date): Promise<number>;
+  video(): Promise<number>;
+}
+
+export const DEFAULT_TICK_PHASES: TickPhases = {
+  orchestration: () => automationTick({ ...getOrchestrationDeps(), system: getSystemDb() }),
+  // The AI Social Manager's own sweep (publishing, drafts, unsent replies, stuck sends,
+  // self-review).
+  social: async (now) => {
+    const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
+    return socialSweep(getSocialDeps(), getSystemDb(), now);
+  },
+  credits: (now) =>
+    releaseStaleHolds(getSystemDb(), getDb(), now, creditsSettingsFromEnv(), 50, logger),
+  // Video jobs whose runner stopped: resumed with the configured provider only (never
+  // started when VIDEO_PROVIDER is disabled — nothing can be in flight then).
+  video: async () => {
+    if (getVideoEnv().VIDEO_PROVIDER === "disabled") return 0;
+    const { getVideoGenerationDeps } = await import("../videos/generation/runtime");
+    const { recoverVideoJobs } = await import("../videos/generation/video-generation-service");
+    return (await recoverVideoJobs({ ...getVideoGenerationDeps(), system: getSystemDb() })).resumed;
+  },
+};
+
 /**
  * One scheduler tick: the single entry point for POST /api/internal/automation-tick and
- * `pnpm automation:tick`. Each phase runs on its own — one failing phase is logged and
- * reported, and the others still run (each phase also isolates its own items).
+ * `pnpm automation:tick`. Each phase runs on its own — a phase that fails as a whole is
+ * logged and reported in `failedPhases`, and the following phases still run (each phase
+ * also isolates its own items).
  */
 export async function runScheduledAutomationTick(
   now: () => Date = () => new Date(),
+  phases: TickPhases = DEFAULT_TICK_PHASES,
 ): Promise<ScheduledTickSummary> {
   const failedPhases: string[] = [];
   async function phase<T>(name: string, fallback: T, work: () => Promise<T>): Promise<T> {
@@ -138,28 +173,17 @@ export async function runScheduledAutomationTick(
   const summary = await phase(
     "orchestration",
     { recovered: 0, scheduled: 0, skippedNoDelegate: 0, executed: [] },
-    () => automationTick({ ...getOrchestrationDeps(), system: getSystemDb() }),
+    () => phases.orchestration(),
   );
-  // The AI Social Manager's own sweep (publishing, drafts, unsent replies, stuck sends,
-  // self-review).
-  const social = await phase("social", EMPTY_SOCIAL, async () => {
-    const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
-    return socialSweep(getSocialDeps(), getSystemDb(), now());
-  });
-  const creditHoldsReleased = await phase("credits", 0, () =>
-    releaseStaleHolds(getSystemDb(), getDb(), now(), creditsSettingsFromEnv(), 50, logger),
-  );
-  // Video jobs whose runner stopped: resumed with the configured provider only (never
-  // started when VIDEO_PROVIDER is disabled — nothing can be in flight then).
-  const videoJobsResumed = await phase("video", 0, async () => {
-    if (getVideoEnv().VIDEO_PROVIDER === "disabled") return 0;
-    const { getVideoGenerationDeps } = await import("../videos/generation/runtime");
-    const { recoverVideoJobs } = await import("../videos/generation/video-generation-service");
-    return (await recoverVideoJobs({ ...getVideoGenerationDeps(), system: getSystemDb() })).resumed;
-  });
+  const social = await phase("social", EMPTY_SOCIAL, () => phases.social(now()));
+  const creditHoldsReleased = await phase("credits", 0, () => phases.credits(now()));
+  const videoJobsResumed = await phase("video", 0, () => phases.video());
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
-    const key = outcome.status === "finished" ? outcome.state.toLowerCase() : outcome.status;
+    const key =
+      outcome.status === "finished" && outcome.state !== undefined
+        ? outcome.state.toLowerCase()
+        : outcome.status;
     runs[key] = (runs[key] ?? 0) + 1;
   }
   return {

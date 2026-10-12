@@ -164,6 +164,9 @@ function fakeGraph() {
     }
     if (method === "POST" && path === `/${PAGE}/messages`) {
       sequence += 1;
+      if (fault === "500") return json({ error: { code: 2, message: "Unexpected" } }, 500);
+      if (fault === "refuse") return json({ error: { code: 100, message: "Invalid" } }, 400);
+      if (fault === "drop") return Promise.reject(new TypeError("fetch failed"));
       return json({ recipient_id: "x", message_id: `m_${String(sequence)}` });
     }
     if (method === "POST" && path === `/${PAGE}/subscribed_apps`) return json({ success: true });
@@ -1459,5 +1462,250 @@ describe("the global sending switch, channel access and recovery", () => {
     expect(await approveReply(s.deps, s.owner, reply.id, null)).toBe("uncertain");
     expect(await resolveUncertainReply(s.deps, s.owner, reply.id, "check")).toBe("sent");
     expect(replies(s.graph)).toBe(1);
+  });
+});
+
+// ── Message ownership across workspaces, and the Meta grant's life cycle ────
+
+describe("message ownership across workspaces", () => {
+  const auto = () => agentInput({ mode: "AUTO", autoCategories: ["question"] });
+  const rowOf = (rows: readonly { workspaceId: string; id: string }[], ctx: TenantContext) => {
+    const row = rows.find((candidate) => candidate.workspaceId === ctx.workspaceId);
+    if (row === undefined) throw new Error("not recorded");
+    return row.id;
+  };
+  const sent = (graph: { posts: () => { path: string }[] }) =>
+    graph.posts().filter((call) => /\/(comments|replies|messages)$/.test(call.path)).length;
+  function message(sender: string, mid: string) {
+    const at = new Date();
+    return {
+      object: "page",
+      entry: [
+        {
+          id: PAGE,
+          time: Math.floor(at.getTime() / 1000),
+          messaging: [
+            {
+              sender: { id: sender },
+              recipient: { id: PAGE },
+              timestamp: at.getTime(),
+              message: { mid, text: "Is there a table for four tonight?" },
+            },
+          ],
+        },
+      ],
+    };
+  }
+  async function pair() {
+    const agency = await setup();
+    const client = await setup();
+    await saveAgent(db, agency.owner, agency.agentId, auto());
+    await saveAgent(db, client.owner, client.agentId, auto());
+    return { agency, client };
+  }
+  const lapse = () =>
+    system.$executeRaw`UPDATE social_auto_reply_claims SET created_at = now() - interval '25 hours'`;
+
+  it("lets another workspace take over a conversation once its claim lapsed", async () => {
+    const { agency, client } = await pair();
+    const first = await receive(message("8401", "m.1"));
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(first, agency.owner)),
+    ).toBe("auto_sent");
+    // A day of silence from the owner: the next message may be answered by the other team.
+    await lapse();
+    const next = await receive(message("8401", "m.2"));
+    expect(
+      await draftInteraction(client.deps, client.owner.workspaceId, rowOf(next, client.owner)),
+    ).toBe("auto_sent");
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(next, agency.owner)),
+    ).toBe("awaiting_review");
+    expect(sent(agency.graph) + sent(client.graph)).toBe(2);
+  });
+
+  it("keeps the conversation with its owner when one of its messages definitively fails", async () => {
+    const { agency, client } = await pair();
+    const first = await receive(message("8403", "m.1"));
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(first, agency.owner)),
+    ).toBe("auto_sent");
+    const second = await receive(message("8403", "m.2"));
+    agency.graph.faults.set(`POST /${PAGE}/messages`, "refuse");
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(second, agency.owner)),
+    ).toBe("failed");
+    expect(
+      await draftInteraction(client.deps, client.owner.workspaceId, rowOf(second, client.owner)),
+    ).toBe("awaiting_review");
+    expect(sent(client.graph)).toBe(0);
+  });
+
+  it("never takes over while the owner's reply may still reach the customer", async () => {
+    const { agency, client } = await pair();
+    const first = await receive(message("8402", "m.1"));
+    agency.graph.faults.set(`POST /${PAGE}/messages`, "500");
+    // The send's outcome is unknown (UNCERTAIN): it may have reached the customer.
+    const outcome = await draftInteraction(
+      agency.deps,
+      agency.owner.workspaceId,
+      rowOf(first, agency.owner),
+    );
+    expect(["auto_uncertain", "auto_sent"]).toContain(outcome);
+    await system.socialReply.updateMany({
+      where: { workspaceId: agency.owner.workspaceId },
+      data: { sendStatus: "UNCERTAIN" },
+    });
+    await lapse();
+    const next = await receive(message("8402", "m.2"));
+    expect(
+      await draftInteraction(client.deps, client.owner.workspaceId, rowOf(next, client.owner)),
+    ).toBe("awaiting_review");
+    // A conversation's failed message does not hand the conversation over either.
+    expect(
+      await system.socialAutoReplyClaim.count({ where: { workspaceId: agency.owner.workspaceId } }),
+    ).toBe(1);
+  });
+
+  it("refuses a person's reply to a message another workspace answers, without saying who", async () => {
+    const { agency, client } = await pair();
+    const rows = await receive(commentEvent("Do you deliver on Fridays?"));
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(rows, agency.owner)),
+    ).toBe("auto_sent");
+    const mine = rowOf(rows, client.owner);
+    expect(await draftInteraction(client.deps, client.owner.workspaceId, mine)).toBe(
+      "awaiting_review",
+    );
+    const error = await rejection(
+      approveReply(client.deps, client.owner, (await latestReply(mine)).id, null),
+    );
+    expect(error).toMatchObject({ fields: [{ code: "social_reply_claimed" }] });
+    // Only a code: no workspace id, name or reply text from the other workspace.
+    const exposed = JSON.stringify({ message: error.message, fields: error.fields });
+    expect(exposed).not.toContain(agency.owner.workspaceId);
+    expect(exposed).not.toContain("Agency");
+    expect(sent(client.graph)).toBe(0);
+    // Refused before anything was decided: no approved reply is left to go out later.
+    expect(await latestReply(mine)).toMatchObject({ decision: "PENDING", sendStatus: "NOT_SENT" });
+  });
+
+  it("the scheduler never sends an older approved reply for a message another team now owns", async () => {
+    const { agency, client } = await pair();
+    await saveAgent(db, agency.owner, agency.agentId, agentInput());
+    await saveAgent(db, client.owner, client.agentId, agentInput());
+    const rows = await receive(commentEvent("Is parking free?"));
+    const older = rowOf(rows, agency.owner);
+    await draftInteraction(agency.deps, agency.owner.workspaceId, older);
+    // Approved before message claims existed (no claim held), never sent.
+    await system.socialReply.updateMany({
+      where: { interactionId: older },
+      data: {
+        decision: "APPROVED",
+        finalText: "Yes.",
+        decidedAt: new Date(Date.now() - 5 * 60_000),
+      },
+    });
+    // Meanwhile a person in the other workspace answers the same comment.
+    const theirs = rowOf(rows, client.owner);
+    await draftInteraction(client.deps, client.owner.workspaceId, theirs);
+    expect(
+      await approveReply(client.deps, client.owner, (await latestReply(theirs)).id, null),
+    ).toBe("sent");
+    await socialSweep(agency.deps, system);
+    expect(await latestReply(older)).toMatchObject({
+      sendStatus: "FAILED",
+      sendError: "claimed_elsewhere",
+    });
+    expect(sent(agency.graph)).toBe(0);
+  });
+
+  it("a person who answers first owns the message: the other team's agent stays quiet", async () => {
+    const { agency, client } = await pair();
+    await saveAgent(db, client.owner, client.agentId, agentInput());
+    const rows = await receive(commentEvent("Can I book the terrace?"));
+    const mine = rowOf(rows, client.owner);
+    await draftInteraction(client.deps, client.owner.workspaceId, mine);
+    expect(await approveReply(client.deps, client.owner, (await latestReply(mine)).id, null)).toBe(
+      "sent",
+    );
+    expect(
+      await draftInteraction(agency.deps, agency.owner.workspaceId, rowOf(rows, agency.owner)),
+    ).toBe("awaiting_review");
+    expect(sent(agency.graph)).toBe(0);
+  });
+});
+
+describe("the Meta grant's life cycle", () => {
+  const expire = (ctx: TenantContext) =>
+    system.adConnection.updateMany({
+      where: { workspaceId: ctx.workspaceId },
+      data: { status: "EXPIRED" },
+    });
+  const renew = (ctx: TenantContext) =>
+    system.adConnection.updateMany({
+      where: { workspaceId: ctx.workspaceId },
+      data: {
+        status: "ACTIVE",
+        tokenCiphertext: encryptToken(KEY, TOKEN, {
+          workspaceId: ctx.workspaceId,
+          platform: "META",
+        }),
+        tokenExpiresAt: new Date(Date.now() + 30 * 86_400_000),
+      },
+    });
+
+  it("holds every send while the grant is expired, and resumes after it is renewed", async () => {
+    const s = await setup();
+    const id = await receiveOne(s, "Do you have a kids menu?");
+    await draftInteraction(s.deps, s.owner.workspaceId, id);
+    const reply = await latestReply(id);
+    const item = await system.contentItem.create({
+      data: {
+        workspaceId: s.owner.workspaceId,
+        title: "News",
+        body: "New hours.",
+        status: "APPROVED",
+      },
+    });
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+
+    await expire(s.owner);
+    expect(await rejection(approveReply(s.deps, s.owner, reply.id, null))).toMatchObject({
+      fields: [{ code: "social_connection_inactive" }],
+    });
+    expect(await publishPost(s.deps, s.owner.workspaceId, postId)).toBe("skipped");
+    expect(await socialSweep(s.deps, system)).toMatchObject({ sent: 0, published: 0 });
+    expect(await receive(commentEvent("Anyone there?"))).toEqual([]);
+    expect(s.graph.posts().filter((call) => call.path !== `/${PAGE}/subscribed_apps`)).toHaveLength(
+      0,
+    );
+    // The draft is untouched, and the channel was not disabled: an expiry is not a loss.
+    expect(await latestReply(id)).toMatchObject({ decision: "PENDING", sendStatus: "NOT_SENT" });
+    expect(
+      await system.socialChannel.findUniqueOrThrow({ where: { id: s.channel.id } }),
+    ).toMatchObject({
+      enabled: true,
+    });
+
+    await renew(s.owner);
+    expect(await approveReply(s.deps, s.owner, reply.id, null)).toBe("sent");
+    expect(await publishPost(s.deps, s.owner.workspaceId, postId)).toBe("published");
+    expect(await receive(commentEvent("Open now?"))).toHaveLength(1);
+  });
+
+  it("after a disconnect, a reconnect alone does not resume: the Pages are synced again first", async () => {
+    const s = await setup();
+    await disconnect(db, s.owner, "META");
+    await renew(s.owner);
+    // Connected again, but the channels stay off until a person syncs the Pages.
+    expect(await receive(commentEvent("Hello?"))).toEqual([]);
+    await syncChannels(s.deps, s.owner);
+    expect(
+      await system.socialChannel.findUniqueOrThrow({ where: { id: s.channel.id } }),
+    ).toMatchObject({
+      enabled: true,
+    });
+    expect(await receive(commentEvent("Hello again?"))).toHaveLength(1);
   });
 });

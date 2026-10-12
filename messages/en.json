@@ -425,7 +425,8 @@
     "social_content_not_approved": "Only approved or scheduled content can be published.",
     "social_sending_disabled": "Sending replies and publishing is turned off on this server.",
     "social_reply_superseded": "A newer reply exists for this message: send that one instead.",
-    "social_connection_inactive": "The Meta connection is not active: reconnect it on the integrations page."
+    "social_connection_inactive": "The Meta connection is not active: reconnect it on the integrations page.",
+    "social_reply_claimed": "This message is already answered from another account that manages this Page."
   },
   "marketing": {
     "common": {

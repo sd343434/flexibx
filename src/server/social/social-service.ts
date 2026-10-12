@@ -752,6 +752,68 @@ export async function draftInteraction(
 class AutoClaimLost extends Error {}
 
 /**
+ * A conversation claim lapses this long after the owner's last reply (Meta's messaging
+ * window): the owner can no longer answer it either, so another workspace may take over.
+ */
+export const CONVERSATION_CLAIM_MS = MESSAGE_WINDOW_MS;
+
+/**
+ * Takes (or refreshes) the right to answer one platform message — a comment, or a whole
+ * private conversation — across every workspace that manages the Page. Unique on the
+ * platform's ids, not per workspace: the first workspace to reply owns it; the same
+ * workspace refreshes its claim. A conversation claim of another workspace is taken over
+ * only once it has lapsed AND nothing of the owner is still on its way (a reply not yet
+ * sent, being sent, or whose outcome is unknown) — so a takeover never produces a second
+ * answer. Nothing about the other workspace is read or returned: only whether this
+ * workspace may answer. Run inside the transaction that decides or claims the send.
+ */
+export async function claimMessage(
+  tx: Db,
+  workspaceId: string,
+  message: {
+    readonly id: string;
+    readonly platform: SocialPlatform;
+    readonly channelExternalId: string;
+    readonly externalId: string;
+  },
+  now: Date,
+): Promise<boolean> {
+  if (message.externalId.startsWith("thread:")) {
+    const lapsed = new Date(now.getTime() - CONVERSATION_CLAIM_MS);
+    await tx.$executeRaw`
+      DELETE FROM social_auto_reply_claims c
+      WHERE c.platform = ${message.platform}::social_platform
+        AND c.channel_external_id = ${message.channelExternalId}
+        AND c.external_id = ${message.externalId}
+        AND c.workspace_id <> ${workspaceId}::uuid
+        AND c.created_at < ${lapsed}
+        AND NOT EXISTS (
+          SELECT 1 FROM social_replies r
+          WHERE r.workspace_id = c.workspace_id
+            AND r.interaction_id IN (
+              SELECT i.id FROM social_interactions i
+              JOIN social_channels ch ON ch.id = i.channel_id
+              WHERE i.workspace_id = c.workspace_id
+                AND ch.platform = c.platform
+                AND ch.external_id = c.channel_external_id
+                AND ('thread:' || i.thread_external_id) = c.external_id)
+            AND (r.send_status IN ('SENDING', 'UNCERTAIN')
+              OR (r.send_status = 'NOT_SENT' AND r.decision IN ('APPROVED', 'EDITED', 'AUTO'))))`;
+  }
+  const claimed = await tx.$queryRaw<{ id: string }[]>`
+    INSERT INTO social_auto_reply_claims
+      (workspace_id, interaction_id, platform, channel_external_id, external_id, created_at)
+    VALUES (${workspaceId}::uuid, ${message.id}::uuid,
+      ${message.platform}::social_platform, ${message.channelExternalId},
+      ${message.externalId}, ${now})
+    ON CONFLICT (platform, channel_external_id, external_id)
+    DO UPDATE SET created_at = EXCLUDED.created_at, interaction_id = EXCLUDED.interaction_id
+      WHERE social_auto_reply_claims.workspace_id = EXCLUDED.workspace_id
+    RETURNING id`;
+  return claimed.length > 0;
+}
+
+/**
  * What an automatic reply claims: a comment, or a whole private conversation (so one
  * conversation never gets answers from two workspaces' agents).
  */
@@ -765,9 +827,15 @@ export function autoClaimKey(interaction: {
     : interaction.externalId;
 }
 
-/** Gives up this interaction's automatic-reply claim (its send definitively failed). */
+/**
+ * Gives up a comment's claim once its send definitively failed, so another workspace that
+ * manages the Page may answer it. A conversation claim is kept (the conversation already
+ * has its voice); it lapses CONVERSATION_CLAIM_MS after the last reply instead.
+ */
 async function releaseAutoClaim(db: Db, workspaceId: string, interactionId: string) {
-  await db.socialAutoReplyClaim.deleteMany({ where: { workspaceId, interactionId } });
+  await db.socialAutoReplyClaim.deleteMany({
+    where: { workspaceId, interactionId, NOT: { externalId: { startsWith: "thread:" } } },
+  });
 }
 
 /**
@@ -806,20 +874,8 @@ export async function decideAutomatically(
         data: { decision: "AUTO", finalText: decision.finalText, decidedAt: now },
       });
       if (updated.count === 0) return false;
-      // Unique on the platform's ids, not per workspace. A claim already held by this
-      // workspace (the same conversation) is kept; another workspace's claim wins, and
-      // losing it rolls the decision back.
-      const claimed = await tx.$queryRaw<{ id: string }[]>`
-        INSERT INTO social_auto_reply_claims
-          (workspace_id, interaction_id, platform, channel_external_id, external_id)
-        VALUES (${workspaceId}::uuid, ${interaction.id}::uuid,
-          ${interaction.platform}::social_platform, ${interaction.channelExternalId},
-          ${interaction.externalId})
-        ON CONFLICT (platform, channel_external_id, external_id)
-        DO UPDATE SET created_at = social_auto_reply_claims.created_at
-          WHERE social_auto_reply_claims.workspace_id = EXCLUDED.workspace_id
-        RETURNING id`;
-      if (claimed.length === 0) throw new AutoClaimLost();
+      // Losing the message to another workspace rolls the decision back.
+      if (!(await claimMessage(tx, workspaceId, interaction, now))) throw new AutoClaimLost();
       return true;
     })
     .catch((error: unknown) => {
@@ -900,6 +956,23 @@ export async function approveReply(
     throw socialError("VALIDATION_FAILED", "social_reply_empty");
   const changed = finalText !== reply.draftText?.trim();
   const now = nowOf(deps);
+  // Everything that would refuse the send is checked before the decision is recorded: a
+  // person who sees an error must not leave an approved reply behind that goes out later.
+  const target = await deps.db.socialInteraction.findFirst({
+    where: { workspaceId: ctx.workspaceId, id: reply.interaction.id },
+    select: {
+      id: true,
+      kind: true,
+      externalId: true,
+      threadExternalId: true,
+      channel: { select: { platform: true, externalId: true, enabled: true } },
+    },
+  });
+  if (target === null) throw notFound("social_reply");
+  if (!target.channel.enabled) throw socialError("CONFLICT", "social_page_unavailable");
+  if (!(await hasActiveMetaGrant(deps.db, ctx.workspaceId, now))) {
+    throw socialError("CONFLICT", "social_connection_inactive");
+  }
   await deps.db.$transaction(async (tx) => {
     const decided = await tx.socialReply.updateMany({
       where: { workspaceId: ctx.workspaceId, id: reply.id, decision: "PENDING" },
@@ -911,6 +984,20 @@ export async function approveReply(
       },
     });
     if (decided.count === 0) throw socialError("CONFLICT", "social_reply_locked");
+    // The person answering owns the message from now on; another workspace's claim wins
+    // and rolls this decision back.
+    const owned = await claimMessage(
+      tx,
+      ctx.workspaceId,
+      {
+        id: target.id,
+        platform: target.channel.platform,
+        channelExternalId: target.channel.externalId,
+        externalId: autoClaimKey(target),
+      },
+      now,
+    );
+    if (!owned) throw socialError("CONFLICT", "social_reply_claimed");
     await tx.socialLesson.create({
       data: {
         workspaceId: ctx.workspaceId,
@@ -1190,6 +1277,35 @@ export async function sendReply(
       data: { status: "FAILED", lastError: "window_closed" },
     });
     await releaseAutoClaim(db, workspaceId, interaction.id);
+    return "failed";
+  }
+  // Whoever sends owns the message: a person's reply claims it like an automatic one, and
+  // a message another workspace answers (or is answering) is not answered here as well.
+  const owned = await db.$transaction((tx) =>
+    claimMessage(
+      tx,
+      workspaceId,
+      {
+        id: interaction.id,
+        platform: interaction.channel.platform,
+        channelExternalId: interaction.channel.externalId,
+        externalId: autoClaimKey(interaction),
+      },
+      now,
+    ),
+  );
+  if (!owned) {
+    if (actor !== null) throw socialError("CONFLICT", "social_reply_claimed");
+    await db.$transaction(async (tx) => {
+      await tx.socialReply.updateMany({
+        where: { workspaceId, id: reply.id, sendStatus: { in: ["NOT_SENT", "FAILED"] } },
+        data: { sendStatus: "FAILED", sendError: "claimed_elsewhere" },
+      });
+      await tx.socialInteraction.updateMany({
+        where: { workspaceId, id: interaction.id, status: { notIn: ["REPLIED", "SENDING"] } },
+        data: { status: "FAILED", lastError: "claimed_elsewhere" },
+      });
+    });
     return "failed";
   }
   const claimed = await db.$transaction(async (tx) => {

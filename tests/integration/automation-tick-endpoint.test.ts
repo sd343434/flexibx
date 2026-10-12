@@ -105,3 +105,69 @@ describe("POST /api/internal/automation-tick", () => {
     expect(await system.agentRun.count({ where: { workspaceId: ctx.workspaceId } })).toBe(0);
   });
 });
+
+describe("one scheduler tick when a whole phase fails", () => {
+  async function staleHold() {
+    const ctx = await createTenant(system, { role: WorkspaceRole.OWNER });
+    const { holdCredits } = await import("@/server/billing/credits");
+    const settings = { trialPeriodCredits: 10 };
+    const hold = await db.$transaction((tx) =>
+      holdCredits(
+        tx,
+        {
+          workspaceId: ctx.workspaceId,
+          feature: "ai_text",
+          idempotencyKey: "abandoned",
+          reference: null,
+          userId: null,
+          timeZone: "Asia/Riyadh",
+          now: new Date(),
+        },
+        settings,
+      ),
+    );
+    return { ctx, holdId: hold.holdId };
+  }
+  const later = () => new Date(Date.now() + 20 * 60_000);
+
+  it("still runs the later phases after the orchestration and social phases throw", async () => {
+    const { holdId } = await staleHold();
+    const { DEFAULT_TICK_PHASES, runScheduledAutomationTick } =
+      await import("@/server/orchestration/runtime");
+    let videoRan = false;
+    const summary = await runScheduledAutomationTick(later, {
+      ...DEFAULT_TICK_PHASES,
+      orchestration: () => Promise.reject(new Error("database unavailable for this phase")),
+      social: () => Promise.reject(new Error("social sweep crashed")),
+      video: () => {
+        videoRan = true;
+        return Promise.resolve(0);
+      },
+    });
+    expect(summary.failedPhases).toEqual(["orchestration", "social"]);
+    // The credits phase ran for real after both failures, and so did the video phase.
+    expect(summary.creditHoldsReleased).toBe(1);
+    expect(await system.creditHold.findUniqueOrThrow({ where: { id: holdId } })).toMatchObject({
+      status: "RELEASED",
+    });
+    expect(videoRan).toBe(true);
+    expect(summary).toMatchObject({ advanced: 0, social: { sent: 0, published: 0 } });
+  });
+
+  it("still runs the video phase after the credits phase throws", async () => {
+    const { DEFAULT_TICK_PHASES, runScheduledAutomationTick } =
+      await import("@/server/orchestration/runtime");
+    let videoRan = false;
+    const summary = await runScheduledAutomationTick(later, {
+      ...DEFAULT_TICK_PHASES,
+      credits: () => Promise.reject(new Error("credits phase crashed")),
+      video: () => {
+        videoRan = true;
+        return Promise.resolve(2);
+      },
+    });
+    expect(summary.failedPhases).toEqual(["credits"]);
+    expect(summary).toMatchObject({ creditHoldsReleased: 0, videoJobsResumed: 2 });
+    expect(videoRan).toBe(true);
+  });
+});

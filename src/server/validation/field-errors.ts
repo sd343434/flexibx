@@ -70,6 +70,7 @@ export const VALIDATION_CODES = [
   "social_content_not_approved",
   "social_sending_disabled",
   "social_reply_superseded",
+  "social_reply_claimed",
   "social_connection_inactive",
   // Credits.
   "credits_insufficient",
