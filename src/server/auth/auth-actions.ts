@@ -6,7 +6,7 @@ import { z } from "zod";
 import { LOCALES } from "@/i18n/config";
 
 import { recordAudit } from "../audit/audit-log";
-import { getDb } from "../db/client";
+import { getDb, getSystemDb } from "../db/client";
 import { withAction } from "../http/action-handler";
 
 import {
@@ -25,6 +25,14 @@ import {
   signUpWithEmail,
 } from "./credentials";
 import { requireUser } from "./session";
+import {
+  confirmEnrollment,
+  disableTwoFactor,
+  regenerateBackupCodes,
+  startEnrollment,
+  verifySignInChallenge,
+  type TwoFactorDeps,
+} from "./two-factor";
 
 // Server actions behind the authentication pages. Session cookies are written (and
 // cleared) by Better Auth's nextCookies() plugin; nothing here touches tokens. Next.js
@@ -36,6 +44,26 @@ const locale = z.enum(LOCALES);
 async function deps(): Promise<AccountSecurityDeps> {
   return { auth: getAuth(), limit: getRateLimiter(), headers: new Headers(await headers()) };
 }
+
+async function twoFactorDeps(): Promise<TwoFactorDeps> {
+  return { ...(await deps()), db: getSystemDb() };
+}
+
+const userAudit = (
+  userId: string,
+  action: Parameters<typeof recordAudit>[2]["action"],
+  metadata?: Record<string, string>,
+) =>
+  recordAudit(
+    getDb(),
+    { workspaceId: null, userId },
+    {
+      action,
+      entityType: "user",
+      entityId: userId,
+      ...(metadata === undefined ? {} : { metadata }),
+    },
+  );
 
 /** Registers an account. ACCEPTED for a new and an already-registered email alike. */
 export const signUpAction = withAction({
@@ -114,6 +142,75 @@ export const changePasswordAction = withAction({
         { workspaceId: null, userId: user.id },
         { action: "user.password_changed", entityType: "user", entityId: user.id },
       );
+    }
+    return result;
+  },
+});
+
+/**
+ * Second sign-in step for an account with two-factor authentication (TOTP or a backup
+ * code). On success the session cookie is set (nextCookies) and the sign-in is audited.
+ */
+export const verifyTwoFactorAction = withAction({
+  name: "auth.twoFactor.verify",
+  input: z.object({ method: z.string(), code: z.string() }),
+  handler: async (input) => {
+    const result = await verifySignInChallenge(await twoFactorDeps(), input);
+    if (result.status === "SIGNED_IN") {
+      await userAudit(result.userId, "user.mfa_sign_in", {
+        method: input.method === "backup" ? "backup_code" : "totp",
+      });
+      return { status: result.status };
+    }
+    return result;
+  },
+});
+
+/** Enrollment step 1: the secret and backup codes, shown once to the signed-in user. */
+export const startTwoFactorEnrollmentAction = withAction({
+  name: "auth.twoFactor.start",
+  input: z.object({ password: z.string() }),
+  handler: async (input) => {
+    const user = await requireUser();
+    return startEnrollment(await twoFactorDeps(), user.id, input);
+  },
+});
+
+/** Enrollment step 2: the first valid code turns two-factor on. */
+export const confirmTwoFactorEnrollmentAction = withAction({
+  name: "auth.twoFactor.confirm",
+  input: z.object({ code: z.string() }),
+  handler: async (input) => {
+    const user = await requireUser();
+    const result = await confirmEnrollment(await twoFactorDeps(), user.id, input);
+    if (result.status === "ENABLED") {
+      await userAudit(user.id, "user.mfa_enabled", { method: "totp" });
+    }
+    return result;
+  },
+});
+
+/** Turns two-factor off (password required). */
+export const disableTwoFactorAction = withAction({
+  name: "auth.twoFactor.disable",
+  input: z.object({ password: z.string() }),
+  handler: async (input) => {
+    const user = await requireUser();
+    const result = await disableTwoFactor(await twoFactorDeps(), user.id, input);
+    if (result.status === "DISABLED") await userAudit(user.id, "user.mfa_disabled");
+    return result;
+  },
+});
+
+/** Replaces the backup codes (password required). */
+export const regenerateBackupCodesAction = withAction({
+  name: "auth.twoFactor.backupCodes",
+  input: z.object({ password: z.string() }),
+  handler: async (input) => {
+    const user = await requireUser();
+    const result = await regenerateBackupCodes(await twoFactorDeps(), user.id, input);
+    if (result.status === "REGENERATED") {
+      await userAudit(user.id, "user.mfa_backup_codes_regenerated");
     }
     return result;
   },

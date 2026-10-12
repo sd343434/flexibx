@@ -34,7 +34,7 @@ export const saveWasabiSettingsAction = withAction({
   name: "admin.storage.save_wasabi",
   input: z.unknown(),
   handler: async (input) => {
-    const admin = await requirePlatformAdmin();
+    const admin = await requirePlatformAdmin({ change: true });
     return saveWasabiSettings(getDb(), admin, input);
   },
 });
@@ -53,7 +53,7 @@ export const changeWriteProviderAction = withAction({
   name: "admin.storage.change_write_provider",
   input: z.unknown(),
   handler: async (input) => {
-    const admin = await requirePlatformAdmin();
+    const admin = await requirePlatformAdmin({ change: true });
     const parsed = parseInput(
       z.strictObject({ target: providerSchema, confirmation: z.string().max(64) }),
       input,

@@ -46,19 +46,24 @@ enum Locale {
 /// Platform user, also Better Auth's `user` model. `isPlatformAdmin` and `locale` are
 /// never accepted from auth input (see src/server/auth/auth-config.ts).
 model User {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email           String   @unique @db.Citext
-  emailVerified   Boolean  @default(false) @map("email_verified")
-  name            String
-  image           String?
-  locale          Locale   @default(ar)
-  isPlatformAdmin Boolean  @default(false) @map("is_platform_admin")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email            String   @unique @db.Citext
+  emailVerified    Boolean  @default(false) @map("email_verified")
+  name             String
+  image            String?
+  locale           Locale   @default(ar)
+  isPlatformAdmin  Boolean  @default(false) @map("is_platform_admin")
+  /// Better Auth two-factor plugin: true once a TOTP authenticator is verified. Set and
+  /// cleared only by the plugin (or the operator reset script), never by auth input.
+  twoFactorEnabled Boolean  @default(false) @map("two_factor_enabled")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   memberships               WorkspaceMember[]
   auditLogs                 AuditLog[]
   sessions                  Session[]
+  twoFactor                 TwoFactor?
+  twoFactorUsedCodes        TwoFactorUsedCode[]
   accounts                  Account[]
   invitationsCreated        WorkspaceInvitation[]
   contentCreated            ContentItem[]
@@ -229,14 +234,18 @@ model AuditLog {
 /// Application code must never read this table directly (enforced by the tenant guard
 /// and a static test).
 model Session {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  token     String   @unique
-  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
-  ipAddress String?  @map("ip_address")
-  userAgent String?  @map("user_agent")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  token         String    @unique
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  ipAddress     String?   @map("ip_address")
+  userAgent     String?   @map("user_agent")
+  /// When this session passed a second factor (TOTP or backup code). Set only when the
+  /// session is created by a successful two-factor verification; NULL otherwise. The
+  /// platform-admin gate requires it (src/server/admin/platform-admin.ts).
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -280,6 +289,41 @@ model Verification {
 
   @@index([identifier])
   @@map("verifications")
+}
+
+/// Better Auth two-factor plugin state, one row per user. `secret` (TOTP seed) and
+/// `backupCodes` are encrypted by Better Auth with AUTH_SECRET; neither is ever returned
+/// by an API. `verified` is false between enrollment start and the first valid code.
+/// Global/system table (not workspace-owned).
+model TwoFactor {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String    @unique @map("user_id") @db.Uuid
+  secret                  String
+  backupCodes             String    @map("backup_codes")
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0) @map("failed_verification_count")
+  lockedUntil             DateTime? @map("locked_until") @db.Timestamptz(3)
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("two_factors")
+}
+
+/// TOTP codes already used to sign in, so a code seen by someone else (shoulder, phishing
+/// relay) cannot be replayed within its 30-second window ±1 step. One row per user and
+/// code (SHA-256 of user id + code), kept a few minutes. Global/system table.
+model TwoFactorUsedCode {
+  userId    String   @map("user_id") @db.Uuid
+  codeHash  String   @map("code_hash") @db.Char(64)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, codeHash])
+  @@index([expiresAt])
+  @@map("two_factor_used_codes")
 }
 
 /// Better Auth's rate-limit counters (`rateLimit.storage: "database"`). Global/system
@@ -2043,4 +2087,34 @@ model SocialPost {
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([channelId])
   @@map("social_posts")
+}
+
+/// Operational monitoring (Phase C). Last run of each scheduled job, written by the job
+/// itself (best effort: a failed write never fails the job). Read by
+/// GET /api/internal/ops-status to detect a scheduler that stopped. Global/system table;
+/// holds names, timestamps and phase names only — never customer data.
+model SystemHeartbeat {
+  /// Job name, e.g. `automation-tick`, `video-retention`.
+  name            String    @id @db.VarChar(80)
+  lastStartedAt   DateTime? @map("last_started_at") @db.Timestamptz(3)
+  lastFinishedAt  DateTime? @map("last_finished_at") @db.Timestamptz(3)
+  lastSucceededAt DateTime? @map("last_succeeded_at") @db.Timestamptz(3)
+  /// `ok` | `failed` (of the last finished run).
+  lastStatus      String?   @map("last_status") @db.VarChar(20)
+  /// Names of the failed phases of the last run (empty when it succeeded).
+  failedPhases    String[]  @default([]) @map("failed_phases")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("system_heartbeats")
+}
+
+/// When each alert key was last delivered, so a recurring problem alerts once per interval
+/// across every process (web server, CLI runs). Global/system table; keys and counts only.
+model AlertThrottle {
+  key             String   @id @db.VarChar(120)
+  lastSentAt      DateTime @map("last_sent_at") @db.Timestamptz(3)
+  /// Occurrences swallowed since the last delivery (reported with the next one).
+  suppressedCount Int      @default(0) @map("suppressed_count")
+
+  @@map("alert_throttles")
 }

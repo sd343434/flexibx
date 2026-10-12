@@ -28,6 +28,43 @@ export interface AuthUser {
 }
 
 /**
+ * The current session's security facts, for checks that need more than the user (the
+ * platform-admin gate). Never carries the session token.
+ */
+export interface AuthSession {
+  readonly user: AuthUser;
+  /** When this session passed a second factor; null when it did not. */
+  readonly mfaVerifiedAt: Date | null;
+}
+
+/**
+ * Resolves the session from the request's signed session cookie through Better Auth's
+ * own `getSession` (database lookup, expiry and rolling refresh included), or null.
+ * Exported for tests; application code uses `getCurrentSession`.
+ */
+export async function resolveCurrentSession(
+  auth: Auth,
+  requestHeaders: Headers,
+): Promise<AuthSession | null> {
+  const result = await auth.api.getSession({ headers: requestHeaders });
+  if (result === null) return null;
+  const { user, session } = result;
+  if (!isUuid(user.id)) return null;
+  const marker: unknown = session.mfaVerifiedAt;
+  return Object.freeze({
+    user: Object.freeze({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      image: user.image ?? null,
+      locale: user.locale === "en" ? ("en" as const) : ("ar" as const),
+      emailVerified: user.emailVerified,
+    }),
+    mfaVerifiedAt: marker instanceof Date ? marker : null,
+  });
+}
+
+/**
  * Resolves the user from the request's signed session cookie through Better Auth's
  * own `getSession` (database lookup, expiry and 7-day rolling refresh included).
  * Returns null when there is no valid session. An unverified account is a signed-in
@@ -39,26 +76,20 @@ export async function resolveCurrentUser(
   auth: Auth,
   requestHeaders: Headers,
 ): Promise<AuthUser | null> {
-  const result = await auth.api.getSession({ headers: requestHeaders });
-  if (result === null) return null;
-  const { user } = result;
-  if (!isUuid(user.id)) return null;
-  return Object.freeze({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    image: user.image ?? null,
-    locale: user.locale === "en" ? "en" : "ar",
-    emailVerified: user.emailVerified,
-  });
+  return (await resolveCurrentSession(auth, requestHeaders))?.user ?? null;
 }
 
 /**
  * The current request's user, or null. Resolved once per server request (React `cache`
  * deduplicates within a single render; it is not a cross-request session cache).
  */
-export const getCurrentUser = cache(async (): Promise<AuthUser | null> =>
-  resolveCurrentUser(getAuth(), await headers()),
+export const getCurrentSession = cache(async (): Promise<AuthSession | null> =>
+  resolveCurrentSession(getAuth(), await headers()),
+);
+
+/** The current request's user, or null (same per-request resolution). */
+export const getCurrentUser = cache(
+  async (): Promise<AuthUser | null> => (await getCurrentSession())?.user ?? null,
 );
 
 /** The current request's user; throws UNAUTHENTICATED (401) when there is none. */

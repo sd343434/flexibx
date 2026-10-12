@@ -3,17 +3,22 @@ import { getTranslations } from "next-intl/server";
 import { SiteHeader } from "@/components/common/site-header";
 import { requireLocale } from "@/i18n/params";
 import { requirePageUser } from "@/server/auth/session";
+import { isTwoFactorEnabled } from "@/server/auth/two-factor-status";
 
 import { SignOutButton } from "../../(auth)/sign-out-button";
 
 import { ChangePasswordForm } from "./change-password-form";
+import { TwoFactorSection } from "./two-factor-section";
 
 interface AccountSecurityPageProps {
   readonly params: Promise<{ locale: string }>;
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-/** Account security: password change only (no session list/revoke UI in Phase 2, C7). */
+/**
+ * Account security: password change and two-step verification (no session list/revoke
+ * UI, C7). Platform administrators are sent here when the admin area needs it.
+ */
 export default async function AccountSecurityPage({
   params,
   searchParams,
@@ -21,6 +26,18 @@ export default async function AccountSecurityPage({
   const locale = requireLocale((await params).locale);
   const user = await requirePageUser(locale, `/${locale}/account/security`);
   const t = await getTranslations({ locale, namespace: "auth.changePassword" });
+  const query = await searchParams;
+  const enabled = await isTwoFactorEnabled(user.id);
+  const notice =
+    query.mfa === "enabled"
+      ? "enabled"
+      : query.mfa === "disabled"
+        ? "disabled"
+        : query.admin === "enroll" && !enabled
+          ? "adminEnroll"
+          : query.admin === "verify"
+            ? "adminVerify"
+            : undefined;
 
   return (
     <>
@@ -33,7 +50,8 @@ export default async function AccountSecurityPage({
           </p>
           <p className="text-muted-foreground">{t("description")}</p>
         </header>
-        <ChangePasswordForm changed={(await searchParams).changed === "1"} />
+        <ChangePasswordForm changed={query.changed === "1"} />
+        <TwoFactorSection enabled={enabled} notice={notice} />
       </main>
     </>
   );

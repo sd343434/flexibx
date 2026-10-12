@@ -20,6 +20,13 @@ export const AUDIT_ACTIONS = [
   "user.password_reset_requested",
   "user.password_reset",
   "user.password_changed",
+  // Two-factor authentication. Metadata: method ("totp" | "backup_code") only — never
+  // secrets, codes or URIs.
+  "user.mfa_enabled",
+  "user.mfa_disabled",
+  "user.mfa_backup_codes_regenerated",
+  "user.mfa_sign_in",
+  "user.mfa_reset_by_operator",
   // Marketing Core (Phase 3).
   "brand.created",
   "brand.updated",

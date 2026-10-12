@@ -21,7 +21,7 @@ export default async function AdminStoragePage({
   readonly params: Promise<{ locale: string }>;
 }) {
   const locale = requireLocale((await params).locale);
-  await requirePlatformAdminPage();
+  await requirePlatformAdminPage(locale);
   const view = await getStorageAdminPageView();
   const t = await getTranslations({ locale, namespace: "admin.storage" });
   const ready: Record<StorageProviderId, boolean> = {

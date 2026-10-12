@@ -97,6 +97,14 @@ describe("auth hardening configuration", () => {
       "/send-verification-email",
       "/change-password",
       "/verify-password",
+      "/two-factor/enable",
+      "/two-factor/disable",
+      "/two-factor/get-totp-uri",
+      "/two-factor/verify-totp",
+      "/two-factor/verify-backup-code",
+      "/two-factor/generate-backup-codes",
+      "/two-factor/send-otp",
+      "/two-factor/verify-otp",
     ]) {
       expect(DISABLED_HTTP_PATHS).toContain(path);
     }
@@ -110,6 +118,7 @@ describe("auth hardening configuration", () => {
     // The checkpoint plugin sits before nextCookies, which must stay last.
     expect(options.plugins.map((plugin) => plugin.id)).toEqual([
       "flexibx-rate-limit",
+      "two-factor",
       "next-cookies",
     ]);
   });

@@ -8,7 +8,12 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { submitSignIn, submitSignUp } from "@/app/[locale]/(auth)/actions";
+import {
+  submitConfirmEnrollment,
+  submitSignIn,
+  submitSignUp,
+  submitStartEnrollment,
+} from "@/app/[locale]/(auth)/actions";
 import AdminLayout from "@/app/[locale]/admin/layout";
 import AdminPage from "@/app/[locale]/admin/page";
 import {
@@ -33,6 +38,7 @@ import { AppError } from "@/server/errors/app-error";
 import ar from "../../messages/ar.json";
 import en from "../../messages/en.json";
 import { createTestDb, resetDatabase } from "./helpers";
+import { totp } from "./totp";
 
 const KEY_ID = "TESTKEYID0123456789AB";
 const SECRET = ["test", "secret", "0123456789abcdefghijklmnopqrstuv"].join("-");
@@ -154,6 +160,13 @@ async function signedInUser(options: { admin?: boolean; verified?: boolean } = {
       emailVerified: options.verified ?? true,
     },
   });
+  // Administrators enroll in two-factor authentication (mandatory for the admin area,
+  // tests/integration/admin-mfa.test.ts); the enrollment session passed the second factor.
+  if (options.admin === true) {
+    const started = await submitStartEnrollment(null, form({ password: PASSWORD }));
+    if (started === null || !("status" in started)) throw new Error("enrollment not started");
+    await controlFlow(submitConfirmEnrollment("en", null, form({ code: totp(started.manualKey) })));
+  }
   return { id: user.id, cookies: new Map(browser.jar) };
 }
 const actAs = (user: { cookies: Map<string, string> } | null) => {

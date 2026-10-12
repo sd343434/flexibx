@@ -7,6 +7,10 @@ import { releaseStaleHolds } from "../billing/credits";
 import { getDb, getSystemDb } from "../db/client";
 import { getAiEnv, getVideoEnv } from "../env";
 import { logger } from "../logger";
+import type { Alert } from "../monitoring/alert-sink";
+import { alert } from "../monitoring/alerts";
+import { recordJobFinished, recordJobStarted } from "../monitoring/heartbeat";
+import { collectOpsStatus } from "../monitoring/ops-status";
 
 import type { AdAdapters } from "../ads/adapter";
 import {
@@ -155,11 +159,66 @@ export const DEFAULT_TICK_PHASES: TickPhases = {
  * logged and reported in `failedPhases`, and the following phases still run (each phase
  * also isolates its own items).
  */
+/** Monitoring work around the tick: logged on failure, never fails the tick. */
+async function bestEffort(name: string, work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    logger.warn(
+      {
+        event: "monitoring.failed",
+        step: name,
+        error: error instanceof Error ? error.name : "unknown",
+      },
+      "Monitoring step failed",
+    );
+  }
+}
+
+/**
+ * After every tick: the heartbeat (GET /api/internal/ops-status reads it), an alert for
+ * failed phases, and alerts for stuck states the tick could not clear (credit holds,
+ * sends, publishes). Alerts are throttled per key (alert-sink.ts).
+ */
+async function reportTick(failedPhases: readonly string[], at: Date): Promise<void> {
+  await bestEffort("heartbeat_finish", () =>
+    recordJobFinished(getSystemDb(), "automation-tick", failedPhases, at),
+  );
+  const alerts: Alert[] = [];
+  if (failedPhases.length > 0) {
+    alerts.push({
+      key: "automation_tick_phase_failed",
+      severity: "critical",
+      title: "Scheduled tick phase failed",
+      details: { failedPhases: [...failedPhases] },
+    });
+  }
+  await bestEffort("ops_status", async () => {
+    const status = await collectOpsStatus(getSystemDb(), at);
+    for (const check of status.checks) {
+      // The tick's own heartbeat checks are for external monitors (this tick is running).
+      if (check.level === "ok" || check.name.startsWith("automation_tick_")) continue;
+      alerts.push({
+        key: `ops:${check.name}`,
+        severity: check.level,
+        title: `Operational check: ${check.name}`,
+        details: { value: check.value, threshold: check.threshold },
+      });
+    }
+  });
+  // In parallel: a slow or unreachable webhook delays the tick by one delivery timeout
+  // at most, whatever the number of alerts.
+  await Promise.all(alerts.map((entry) => alert(entry)));
+}
+
 export async function runScheduledAutomationTick(
   now: () => Date = () => new Date(),
   phases: TickPhases = DEFAULT_TICK_PHASES,
 ): Promise<ScheduledTickSummary> {
   const failedPhases: string[] = [];
+  await bestEffort("heartbeat_start", () =>
+    recordJobStarted(getSystemDb(), "automation-tick", now()),
+  );
   async function phase<T>(name: string, fallback: T, work: () => Promise<T>): Promise<T> {
     try {
       return await work();
@@ -186,6 +245,7 @@ export async function runScheduledAutomationTick(
         : outcome.status;
     runs[key] = (runs[key] ?? 0) + 1;
   }
+  await reportTick(failedPhases, now());
   return {
     recovered: summary.recovered,
     scheduled: summary.scheduled,

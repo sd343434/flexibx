@@ -45,6 +45,12 @@ export interface SignUpResult {
 
 export type SignInResult =
   | { readonly status: "SIGNED_IN"; readonly setCookie: readonly string[] }
+  /**
+   * Password correct, account has two-factor authentication: no session exists yet. A
+   * short-lived signed challenge cookie (in `setCookie`) lets the same browser finish
+   * with a TOTP or backup code (two-factor.ts).
+   */
+  | { readonly status: "TWO_FACTOR_REQUIRED"; readonly setCookie: readonly string[] }
   | { readonly status: "INVALID_CREDENTIALS" };
 
 const EXISTING_USER_CODES = new Set([
@@ -130,8 +136,12 @@ export async function signInWithEmail(
     headers: deps.headers,
     asResponse: true,
   });
-  if (response.ok) return { status: "SIGNED_IN", setCookie: response.headers.getSetCookie() };
-  return { status: "INVALID_CREDENTIALS" };
+  if (!response.ok) return { status: "INVALID_CREDENTIALS" };
+  const setCookie = response.headers.getSetCookie();
+  const body = (await response.json().catch(() => null)) as { twoFactorRedirect?: unknown } | null;
+  return body?.twoFactorRedirect === true
+    ? { status: "TWO_FACTOR_REQUIRED", setCookie }
+    : { status: "SIGNED_IN", setCookie };
 }
 
 /**

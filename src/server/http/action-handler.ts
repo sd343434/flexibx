@@ -7,6 +7,7 @@ import type { z } from "zod";
 
 import { toAppError, toErrorResponseBody, type ErrorResponseBody } from "../errors/http";
 import { createRequestLogger, type Logger } from "../logger";
+import { reportServerError } from "../monitoring/alerts";
 import { parseInput } from "../validation/parse";
 
 /** What a server action returns to the client: data, or a code-only error (no prose). */
@@ -48,6 +49,12 @@ export function withAction<S extends z.ZodType, R>(definition: ActionDefinition<
           { err: error, code: appError.code, metadata: appError.metadata },
           `Action failed: ${appError.message}`,
         );
+        reportServerError({
+          source: "action",
+          name: definition.name,
+          code: appError.code,
+          requestId,
+        });
       } else {
         log.warn(
           { code: appError.code, metadata: appError.metadata, fields: appError.fields },

@@ -8,6 +8,7 @@ import { getEnv } from "../env";
 import { AppError } from "../errors/app-error";
 import { errorResponse, toAppError } from "../errors/http";
 import { createRequestLogger, type Logger } from "../logger";
+import { reportServerError } from "../monitoring/alerts";
 import { parseInput } from "../validation/parse";
 
 /** Default request body cap. Uploads go directly to object storage, never through the API. */
@@ -169,6 +170,12 @@ export function withRoute<
           { err: error, code: appError.code, metadata: appError.metadata },
           `Request failed: ${appError.message}`,
         );
+        reportServerError({
+          source: "route",
+          name: definition.name,
+          code: appError.code,
+          requestId,
+        });
       } else {
         // Client errors are expected: log the code and context, not a stack trace.
         log.warn(

@@ -5,13 +5,18 @@ import { redirect } from "next/navigation";
 import { DEFAULT_LOCALE, isLocale, type Locale } from "@/i18n/config";
 import {
   changePasswordAction,
+  confirmTwoFactorEnrollmentAction,
+  disableTwoFactorAction,
+  regenerateBackupCodesAction,
   requestPasswordResetAction,
   resendVerificationAction,
   resetPasswordAction,
   signInAction,
   signOutAction,
   signUpAction,
+  startTwoFactorEnrollmentAction,
   verifyEmailAction,
+  verifyTwoFactorAction,
 } from "@/server/auth/auth-actions";
 import {
   AUTH_ERROR_MESSAGE_KEYS,
@@ -80,6 +85,15 @@ export async function submitSignIn(
   const values = { email: text(formData.get("email")) };
   const result = await signInAction({ ...values, password: text(formData.get("password")) });
   if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code), values };
+  if (result.data.status === "TWO_FACTOR_REQUIRED") {
+    // No session yet: the second step finishes the sign-in (challenge cookie is set).
+    const next = text(formData.get("next"));
+    const query =
+      next !== "" && safeNextPath(next, target) === next
+        ? `?${new URLSearchParams({ next }).toString()}`
+        : "";
+    redirect(`/${target}/sign-in/two-factor${query}`);
+  }
   if (result.data.status !== "SIGNED_IN") {
     return { messageKey: AUTH_ERROR_MESSAGE_KEYS.invalidCredentials, values };
   }
@@ -212,4 +226,114 @@ export async function submitChangePassword(
   if (result.data.status !== "CHANGED")
     return { messageKey: AUTH_ERROR_MESSAGE_KEYS.wrongPassword };
   redirect(`/${toLocale(locale)}/account/security?changed=1`);
+}
+
+/** Messages of the two-factor forms: their own keys, or a generic auth error key. */
+export type TwoFactorMessageKey =
+  | AuthErrorMessageKey
+  | `auth.twoFactor.errors.${
+      | "invalidCode"
+      | "expired"
+      | "locked"
+      | "wrongPassword"
+      | "alreadyEnabled"
+      | "notStarted"
+      | "notEnabled"
+      | "reauthenticate"}`;
+
+const TWO_FACTOR_STATUS_KEYS: Record<string, TwoFactorMessageKey> = {
+  INVALID_CODE: "auth.twoFactor.errors.invalidCode",
+  CHALLENGE_EXPIRED: "auth.twoFactor.errors.expired",
+  LOCKED: "auth.twoFactor.errors.locked",
+  INVALID_PASSWORD: "auth.twoFactor.errors.wrongPassword",
+  ALREADY_ENABLED: "auth.twoFactor.errors.alreadyEnabled",
+  NOT_STARTED: "auth.twoFactor.errors.notStarted",
+  NOT_ENABLED: "auth.twoFactor.errors.notEnabled",
+  REAUTHENTICATE: "auth.twoFactor.errors.reauthenticate",
+};
+
+const twoFactorMessage = (status: string): TwoFactorMessageKey =>
+  TWO_FACTOR_STATUS_KEYS[status] ?? AUTH_ERROR_MESSAGE_KEYS.unavailable;
+
+export type TwoFactorFormState = { readonly messageKey: TwoFactorMessageKey } | null;
+
+/** Second sign-in step: a TOTP or backup code. Success continues to `next`. */
+export async function submitTwoFactor(
+  locale: string,
+  _previous: TwoFactorFormState,
+  formData: FormData,
+): Promise<TwoFactorFormState> {
+  const target = toLocale(locale);
+  const result = await verifyTwoFactorAction({
+    method: text(formData.get("method")),
+    code: text(formData.get("code")),
+  });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  if (result.data.status !== "SIGNED_IN")
+    return { messageKey: twoFactorMessage(result.data.status) };
+  redirect(postSignInPath(formData.get("next"), target));
+}
+
+export type EnrollmentState =
+  | {
+      readonly status: "started";
+      readonly totpUri: string;
+      readonly manualKey: string;
+      readonly backupCodes: readonly string[];
+    }
+  | { readonly messageKey: TwoFactorMessageKey }
+  | null;
+
+/** Enrollment step 1: shows the setup key and backup codes once. */
+export async function submitStartEnrollment(
+  _previous: EnrollmentState,
+  formData: FormData,
+): Promise<EnrollmentState> {
+  const result = await startTwoFactorEnrollmentAction({ password: text(formData.get("password")) });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  if (result.data.status !== "STARTED") return { messageKey: twoFactorMessage(result.data.status) };
+  const { totpUri, manualKey, backupCodes } = result.data;
+  return { status: "started", totpUri, manualKey, backupCodes };
+}
+
+/** Enrollment step 2: the first code turns it on, then the page reloads. */
+export async function submitConfirmEnrollment(
+  locale: string,
+  _previous: TwoFactorFormState,
+  formData: FormData,
+): Promise<TwoFactorFormState> {
+  const result = await confirmTwoFactorEnrollmentAction({ code: text(formData.get("code")) });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  if (result.data.status !== "ENABLED") return { messageKey: twoFactorMessage(result.data.status) };
+  redirect(`/${toLocale(locale)}/account/security?mfa=enabled`);
+}
+
+/** Turns two-factor off (password), then the page reloads. */
+export async function submitDisableTwoFactor(
+  locale: string,
+  _previous: TwoFactorFormState,
+  formData: FormData,
+): Promise<TwoFactorFormState> {
+  const result = await disableTwoFactorAction({ password: text(formData.get("password")) });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  if (result.data.status !== "DISABLED")
+    return { messageKey: twoFactorMessage(result.data.status) };
+  redirect(`/${toLocale(locale)}/account/security?mfa=disabled`);
+}
+
+export type BackupCodesState =
+  | { readonly status: "regenerated"; readonly backupCodes: readonly string[] }
+  | { readonly messageKey: TwoFactorMessageKey }
+  | null;
+
+/** New backup codes (password); shown once. */
+export async function submitRegenerateBackupCodes(
+  _previous: BackupCodesState,
+  formData: FormData,
+): Promise<BackupCodesState> {
+  const result = await regenerateBackupCodesAction({ password: text(formData.get("password")) });
+  if (!result.ok) return { messageKey: authErrorMessageKey(result.error.code) };
+  if (result.data.status !== "REGENERATED")
+    return { messageKey: twoFactorMessage(result.data.status) };
+  return { status: "regenerated", backupCodes: result.data.backupCodes };
 }

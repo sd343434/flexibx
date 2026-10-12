@@ -2,8 +2,8 @@
 
 Status: **implemented and tested with test doubles only. Not verified against a real Wasabi
 account.** No bucket, region, endpoint or credential has been chosen or used. Do not treat
-Wasabi as production-ready until the checks in §8 are recorded. Platform admin access has
-**mandatory production blockers** (§9): MFA and fresh-session checks are NOT enforced yet.
+Wasabi as production-ready until the checks in §8 are recorded. Platform admin access
+requires MFA and a recent second factor for changes (§9, enforced since phase C).
 
 ## 1. Model
 
@@ -93,8 +93,9 @@ data migration (§2).
 `/{locale}/admin` → Storage (`src/app/[locale]/admin/`), for **platform administrators
 only** (Flexibx staff; not a workspace role, no self-service, no customer access).
 
-- **Who:** `users.is_platform_admin = true` **and** a verified email, re-read from the
-  database on every page and action (`src/server/admin/platform-admin.ts`). Revoking the
+- **Who:** `users.is_platform_admin = true` **and** a verified email **and** two-step
+  verification (§9), re-read from the database on every page and action
+  (`src/server/admin/platform-admin.ts`). Revoking the
   flag takes effect on the next request.
 - **How the flag is set:** only by an operator, directly in the database (§5). It cannot
   be set through any request (`input: false` in Better Auth, tested), by sign-up or seed,
@@ -125,10 +126,23 @@ only** (Flexibx staff; not a workspace role, no self-service, no customer access
 
 **Grant platform admin** (production; record who and when):
 
+1. The person signs up (verified email) and turns on two-step verification on
+   `/{locale}/account/security` **during a live call with the operator** (video, known
+   colleague): the operator watches the authenticator on the person's own device show the
+   code that completes the setup. This closes the window in which someone holding only the
+   password could register their own authenticator on a future administrator account. If
+   the page says two-step verification is already on and the person did not turn it on,
+   treat the account as compromised: `pnpm admin:mfa-reset`, new password, enroll again
+   during the call.
+2. Then, only if both are true in the database:
+
 ```sql
--- The person must already have an account with a verified email.
-UPDATE users SET is_platform_admin = true WHERE email = '<staff email>' AND email_verified;
+UPDATE users SET is_platform_admin = true
+WHERE email = '<staff email>' AND email_verified AND two_factor_enabled;
 ```
+
+If the account's two-step verification is ever reset (`pnpm admin:mfa-reset`), repeat
+step 1 the same way before the administrator uses the admin area again.
 
 Revoke with `SET is_platform_admin = false`. Keep the list of administrators minimal.
 
@@ -202,13 +216,18 @@ and billing rules may retain data or charges (retention policy §5).
 
 ## 9. Production gate: platform admin access (mandatory blockers)
 
-Not enforced today — do **not** grant `is_platform_admin` in production until both are
-implemented and tested:
+Both blockers are implemented and tested (Phase C). Granting `is_platform_admin` in
+production is still an operator decision; the administrator must then enroll before the
+admin area opens.
 
-| Blocker                                                                                                                                            | Status                  |
-| -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| **MFA for platform administrators**: admin pages and actions refuse a session without a completed second factor (e.g. Better Auth two-factor).     | **Open — NOT enforced** |
-| **Fresh session for changes**: saving settings and changing the write provider require a recent sign-in (re-authentication within a short window). | **Open — NOT enforced** |
+| Blocker                                                                                                                                                                                                                                                                                                                                   | Status                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **MFA for platform administrators**: admin pages and actions refuse a session without a completed second factor (Better Auth two-factor: TOTP + single-use backup codes). The account must have two-factor on AND the session must have been created by a second-factor verification within 12 hours. No environment switch turns it off. | **Done — enforced** (`src/server/admin/platform-admin.ts`, `tests/integration/admin-mfa.test.ts`) |
+| **Fresh session for changes**: saving settings, changing the write provider, granting credits and changing plans require a second-factor verification within the last hour (sign in again otherwise).                                                                                                                                     | **Done — enforced** (`requirePlatformAdmin({ change: true })`)                                    |
 
-Today an administrator is a verified account with the flag, authenticated by password and a
-normal session. That is acceptable for local development and tests only.
+Enrollment and recovery: `/{locale}/account/security` (password → setup key and 10
+backup codes shown once → first code). A lost authenticator is recovered with a backup
+code; a lost authenticator AND all backup codes only by an operator with database access
+(`pnpm admin:mfa-reset`, docs/runbooks/INCIDENT_RESPONSE.md), which also ends every
+session of the account. Every enrollment, sign-in with a second factor, backup-code
+regeneration, disable and operator reset is in the audit log (no secrets).

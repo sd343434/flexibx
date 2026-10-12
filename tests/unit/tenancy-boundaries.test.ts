@@ -68,8 +68,16 @@ describe("tenancy boundaries", () => {
       // workspace; connections are found by the platform user id, and each one is
       // revoked through the guarded client with its own workspace id.
       "src/server/ads/meta-deauthorization.ts",
+      // Two-factor actions: sessions and two_factors are global auth tables (the user's
+      // own rows only); two-factor-status reads the user's own two_factor_enabled.
+      "src/server/auth/auth-actions.ts",
       "src/server/auth/auth.ts",
+      "src/server/auth/two-factor-status.ts",
       "src/server/health/health-service.ts",
+      // Monitoring: alert throttle keys (alerts.ts) and cross-workspace COUNTS for the
+      // ops status (no row content, no workspace ids leave ops-status.ts).
+      "src/server/monitoring/alerts.ts",
+      "src/server/monitoring/ops-status-service.ts",
       // Scheduler tick (POST /api/internal/automation-tick): cross-workspace selection of
       // due policies, stale tasks and active runs only; every run executes per workspace
       // through the guarded client (scheduler.ts, engine.ts), as `pnpm automation:tick`.
@@ -98,7 +106,9 @@ describe("tenancy boundaries", () => {
     const scanned = [...files, "prisma/seed.ts"];
     const mentions = scanned.filter((path) => /isPlatformAdmin|is_platform_admin/.test(read(path)));
     expect(mentions.sort()).toEqual([
-      // Read-only lookup: `select: { isPlatformAdmin: true, emailVerified: true }`.
+      // Pure gate decision over the account state (reads a field of its input).
+      "src/server/admin/platform-admin-access.ts",
+      // Read-only lookup: `select: { isPlatformAdmin: true, emailVerified: true, … }`.
       "src/server/admin/platform-admin.ts",
       // Better Auth field declaration with `input: false` (requests cannot set it).
       "src/server/auth/auth-config.ts",

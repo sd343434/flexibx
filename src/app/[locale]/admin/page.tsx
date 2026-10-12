@@ -9,6 +9,6 @@ export default async function AdminPage({
   readonly params: Promise<{ locale: string }>;
 }) {
   const locale = requireLocale((await params).locale);
-  await requirePlatformAdminPage();
+  await requirePlatformAdminPage(locale);
   return redirect({ href: "/admin/storage", locale });
 }

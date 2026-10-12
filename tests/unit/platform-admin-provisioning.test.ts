@@ -48,25 +48,31 @@ describe("platform admin provisioning", () => {
     );
   });
 
-  it("documents the operator procedure: verified email required, revocation", () => {
+  it("documents the operator procedure: verified email and two-factor required, revocation", () => {
     const doc = read("docs/STORAGE_PROVIDERS.md");
+    // Granted only to an account that already has two-step verification on.
     expect(doc).toContain(
-      "UPDATE users SET is_platform_admin = true WHERE email = '<staff email>' AND email_verified;",
+      "UPDATE users SET is_platform_admin = true\nWHERE email = '<staff email>' AND email_verified AND two_factor_enabled;",
     );
     expect(doc).toContain("Revoke with `SET is_platform_admin = false`");
   });
 
-  it("keeps MFA and fresh-session checks as open, mandatory production blockers", () => {
+  it("documents MFA and fresh-session checks as enforced, and the code enforces them", () => {
     const doc = read("docs/STORAGE_PROVIDERS.md");
     const gate = doc.slice(doc.indexOf("## 9. Production gate"));
-    expect(gate).toContain("do **not** grant `is_platform_admin` in production");
-    expect(gate).toMatch(
-      /\*\*MFA for platform administrators\*\*[^\n]*\*\*Open — NOT enforced\*\*/,
-    );
-    expect(gate).toMatch(/\*\*Fresh session for changes\*\*[^\n]*\*\*Open — NOT enforced\*\*/);
-    // The code says the same (no claim that these are enforced).
-    expect(read("src/server/admin/platform-admin.ts")).toContain(
-      "MFA and fresh-session checks\n// are NOT enforced yet",
-    );
+    expect(gate).toMatch(/\*\*MFA for platform administrators\*\*[^\n]*\*\*Done — enforced\*\*/);
+    expect(gate).toMatch(/\*\*Fresh session for changes\*\*[^\n]*\*\*Done — enforced\*\*/);
+    const gateCode = read("src/server/admin/platform-admin.ts");
+    expect(gateCode).toContain("Multi-factor authentication is mandatory, in every environment");
+    // No bypass switch: the gate reads no environment variable.
+    expect(gateCode).not.toMatch(/process\.env|getEnv\(/);
+    expect(read("src/server/admin/platform-admin-access.ts")).not.toMatch(/process\.env/);
+    // Every admin change action asks for the fresh second factor.
+    for (const path of [
+      "src/server/admin/storage-admin-actions.ts",
+      "src/server/admin/credits-admin-actions.ts",
+    ]) {
+      expect(read(path).match(/requirePlatformAdmin\(\{ change: true \}\)/g), path).toHaveLength(2);
+    }
   });
 });

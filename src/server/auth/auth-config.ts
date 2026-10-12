@@ -2,6 +2,7 @@ import { betterAuth, type BetterAuthPlugin } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { createAuthEndpoint, isAPIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { twoFactor } from "better-auth/plugins/two-factor";
 
 import type { PrismaClient } from "@/generated/prisma/client";
 import { DEFAULT_LOCALE, isLocale, type Locale } from "@/i18n/config";
@@ -47,7 +48,43 @@ export const DISABLED_HTTP_PATHS = [
   "/send-verification-email",
   "/change-password",
   "/verify-password",
+  // Two-factor (TOTP + backup codes): every step runs through Flexibx server code
+  // (two-factor.ts), behind the limiter checkpoint and the audit log. The OTP-by-message
+  // endpoints are not configured at all (no `otpOptions`) and are blocked here too.
+  "/two-factor/enable",
+  "/two-factor/disable",
+  "/two-factor/get-totp-uri",
+  "/two-factor/verify-totp",
+  "/two-factor/verify-backup-code",
+  "/two-factor/generate-backup-codes",
+  "/two-factor/send-otp",
+  "/two-factor/verify-otp",
 ] as const;
+
+/** Issuer shown in authenticator apps. */
+export const TWO_FACTOR_ISSUER = "Flexibx";
+
+/** Backup codes issued at enrollment (and on regeneration); each works once. */
+export const BACKUP_CODE_COUNT = 10;
+
+/**
+ * Better Auth paths whose successful verification creates a session that passed a second
+ * factor: the sign-in challenge (TOTP or backup code) and the first valid code of an
+ * enrollment. Only sessions created by these paths get `mfaVerifiedAt`.
+ */
+export const SECOND_FACTOR_PATHS: ReadonlySet<string> = new Set([
+  "/two-factor/verify-totp",
+  "/two-factor/verify-backup-code",
+]);
+
+/**
+ * The `mfaVerifiedAt` value for a session Better Auth is about to create. Never copied
+ * from another session: Better Auth builds some sessions from the previous one (enable,
+ * disable, password change), and a carried-over marker would outlive the factor change.
+ */
+export function sessionMfaMarker(path: string | undefined, now: Date): Date | null {
+  return path !== undefined && SECOND_FACTOR_PATHS.has(path) ? now : null;
+}
 
 /**
  * Paths under Better Auth's base path that the public HTTP route must never serve
@@ -192,7 +229,23 @@ export function createAuth(input: AuthConfigInput) {
     // Server Component render, where cookies cannot be written, it skips the rolling
     // refresh so the database expiry never runs ahead of the browser cookie; page
     // requests are refreshed by the proxy instead (see session-refresh.ts).
-    plugins: [rateLimitCheckpoint(), nextCookies()],
+    plugins: [
+      rateLimitCheckpoint(),
+      // TOTP (RFC 6238, 6 digits, 30 s) with encrypted secret and backup codes. Required
+      // for platform administrators (src/server/admin/platform-admin.ts); optional for
+      // everyone else. A sign-in by a user with it enabled creates no session until the
+      // second factor is verified. No "trusted device" bypass is offered by the UI, and
+      // the server ignores it too (two-factor.ts never forwards `trustDevice`).
+      twoFactor({
+        issuer: TWO_FACTOR_ISSUER,
+        backupCodeOptions: { amount: BACKUP_CODE_COUNT, storeBackupCodes: "encrypted" },
+        // Lock the account's second factor for 15 minutes after 10 consecutive failures
+        // (on top of 5 attempts per sign-in challenge).
+        accountLockout: { enabled: true, maxFailedAttempts: 10, durationSeconds: 900 },
+        twoFactorCookieMaxAge: 600,
+      }),
+      nextCookies(),
+    ],
     telemetry: { enabled: false },
     // Better Auth's limiter (decision C8), on for every environment, counting in the
     // `rate_limits` table. Keys use the trusted client IP (`advanced.ipAddress` below).
@@ -285,6 +338,19 @@ export function createAuth(input: AuthConfigInput) {
       updateAge: SESSION_UPDATE_AGE_SECONDS,
       // Every request checks the database, so sign-out and revocation are immediate.
       cookieCache: { enabled: false },
+      additionalFields: {
+        mfaVerifiedAt: { type: "date", required: false, input: false },
+      },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          before: (session, context) =>
+            Promise.resolve({
+              data: { ...session, mfaVerifiedAt: sessionMfaMarker(context?.path, new Date()) },
+            }),
+        },
+      },
     },
     user: {
       additionalFields: {

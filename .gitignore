@@ -25,3 +25,9 @@ blob-report/
 .DS_Store
 *.log
 .vercel
+
+# database backups — never commit dumps (scripts/ops/db-backup.sh refuses the repo anyway)
+*.dump
+*.dump.sha256
+*.counts.tsv
+/backups*/

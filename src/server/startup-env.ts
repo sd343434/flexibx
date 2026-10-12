@@ -6,6 +6,7 @@ import {
   parseAutomationEnv,
   parseBillingEnv,
   parseMailEnv,
+  parseMonitoringEnv,
   parseServerEnv,
   parseStorageDriver,
   parseVideoEnv,
@@ -38,6 +39,7 @@ const GROUPS: readonly (readonly [string, (source: EnvSource) => unknown])[] = [
   ["ads", parseAdsEnv],
   ["billing", parseBillingEnv],
   ["automation", parseAutomationEnv],
+  ["monitoring", parseMonitoringEnv],
 ];
 
 export function checkStartupEnv(source: EnvSource): StartupEnvReport {
@@ -64,6 +66,14 @@ export function checkStartupEnv(source: EnvSource): StartupEnvReport {
       warnings.push(
         "AUTOMATION_CRON_SECRET is not set: scheduled publishing, stuck-state recovery and abandoned credit holds are not processed",
       );
+    }
+    if ((source.OPS_STATUS_SECRET ?? "").trim() === "") {
+      warnings.push(
+        "OPS_STATUS_SECRET is not set: no external monitor can detect a stopped scheduler",
+      );
+    }
+    if ((source.ALERT_WEBHOOK_URL ?? "").trim() === "") {
+      warnings.push("ALERT_WEBHOOK_URL is not set: alerts are written to the logs only");
     }
     if ((source.ENCRYPTION_KEY ?? "").trim() === "") {
       warnings.push("ENCRYPTION_KEY is not set: platform integrations are unavailable");

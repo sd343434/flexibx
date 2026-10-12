@@ -494,6 +494,15 @@ describe("Better Auth call sites", () => {
         "src/server/auth/account-security.ts requestPasswordReset",
         "src/server/auth/account-security.ts resetPassword",
         "src/server/auth/account-security.ts changePassword",
+        // Limited — two-factor.ts: every function passes the checkpoint first
+        // (two-factor-verify / two-factor-manage; tests/integration/admin-mfa.test.ts).
+        "src/server/auth/two-factor.ts getSession",
+        "src/server/auth/two-factor.ts verifyTOTP",
+        "src/server/auth/two-factor.ts verifyTOTP",
+        "src/server/auth/two-factor.ts verifyBackupCode",
+        "src/server/auth/two-factor.ts enableTwoFactor",
+        "src/server/auth/two-factor.ts disableTwoFactor",
+        "src/server/auth/two-factor.ts generateBackupCodes",
         // Not limited by design: ends the caller's own session.
         "src/server/auth/credentials.ts signOut",
         // Read-only session lookups.

@@ -6,6 +6,7 @@ import { EntityForm } from "@/components/marketing/entity-form";
 import { Card } from "@/components/marketing/page-parts";
 import { requireLocale } from "@/i18n/params";
 import { getCreditsAdminView } from "@/server/admin/credits-admin-actions";
+import { requirePlatformAdminPage } from "@/server/admin/platform-admin";
 
 import { submitAddCredits, submitChangePlan } from "./actions";
 
@@ -18,6 +19,7 @@ export default async function CreditsAdminPage({
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const locale = requireLocale((await params).locale);
+  await requirePlatformAdminPage(locale);
   const t = await getTranslations({ locale, namespace: "admin.credits" });
   const format = await getFormatter({ locale });
   const raw = (await searchParams).workspace;

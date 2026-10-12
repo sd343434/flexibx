@@ -271,6 +271,45 @@ export const automationEnvSchema = z.object({
 
 export type AutomationEnv = z.infer<typeof automationEnvSchema>;
 
+/**
+ * Operational monitoring (all optional; logs are always written).
+ * - ALERT_WEBHOOK_URL: HTTPS endpoint that receives alert JSON (Slack/Teams/any incoming
+ *   webhook: the payload has a `text` field). Unset = alerts go to the logs only.
+ * - ALERT_WEBHOOK_TOKEN: sent as `Authorization: Bearer …` when set (≥ 16 characters).
+ * - OPS_STATUS_SECRET: bearer secret for GET /api/internal/ops-status (≥ 32 characters).
+ *   Unset = the endpoint is disabled (404).
+ */
+/** https://, or plain http only to this machine (local testing of a receiver). */
+function isAlertWebhookUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.username !== "" || url.password !== "") return false;
+    return (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export const monitoringEnvSchema = z.object({
+  ALERT_WEBHOOK_URL: z.preprocess(
+    emptyToUndefined,
+    z.url().refine(isAlertWebhookUrl, { message: "must be an https:// URL" }).optional(),
+  ),
+  ALERT_WEBHOOK_TOKEN: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+  OPS_STATUS_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
+});
+
+export type MonitoringEnv = z.infer<typeof monitoringEnvSchema>;
+
+export function parseMonitoringEnv(source: EnvSource): MonitoringEnv {
+  const result = monitoringEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("monitoring", result.error.issues);
+  return result.data;
+}
+
 export function parseAutomationEnv(source: EnvSource): AutomationEnv {
   const result = automationEnvSchema.safeParse(source);
   if (!result.success) throw new EnvValidationError("automation", result.error.issues);

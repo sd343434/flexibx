@@ -455,24 +455,25 @@ inheritance, so isolation stays simple and auditable.
 ## 8. Observability
 
 Structured JSON logs carry `requestId`, route, method, status and `durationMs` for every
-API request. Errors are logged with redacted context. Sentry, PostHog, metrics, and AI
-usage and cost tracking are deferred (see below).
+API request. Errors are logged with redacted context. Operational monitoring (alerts,
+heartbeats, ops status) is described in § 19. Sentry, PostHog and metrics dashboards are
+deferred (see below).
 
 ## 9. Intentionally deferred
 
-| Item                                                                                                         | Phase                   |
-| ------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| OAuth (Google), 2FA and passkeys, session list/revoke UI, account deletion, email change, ownership transfer | later (not Phase 2)     |
-| Real production email provider (Phase 2 fails explicitly without one, C3)                                    | later (not Phase 2)     |
-| `AGENCY` / client workspaces                                                                                 | 14                      |
-| Products catalogue, brand logo upload (the Phase 3 media library can be reused)                              | 4                       |
-| Video/large uploads (presigned direct uploads), image processing (thumbnails, EXIF stripping)                | media pipeline (12+)    |
-| AI provider abstraction, Brand Brain, AI usage/cost tracking                                                 | 5–6                     |
-| Redis + BullMQ worker (`src/worker/`), scheduled publishing (Phase 3 `SCHEDULED` is planning only)           | 9, or earlier if needed |
-| Social integrations and token encryption (`ENCRYPTION_KEY`)                                                  | 8                       |
-| Analytics, insights, ads, agent, agency dashboards, billing (Stripe), admin panel                            | 10–16                   |
-| Sentry, PostHog, dashboards                                                                                  | 18–19                   |
-| Postgres RLS, CSP review, controlled purge job                                                               | 18                      |
+| Item                                                                                                             | Phase                   |
+| ---------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| OAuth (Google), passkeys, session list/revoke UI, account deletion, email change, ownership transfer (2FA: § 19) | later (not Phase 2)     |
+| Real production email provider (Phase 2 fails explicitly without one, C3)                                        | later (not Phase 2)     |
+| `AGENCY` / client workspaces                                                                                     | 14                      |
+| Products catalogue, brand logo upload (the Phase 3 media library can be reused)                                  | 4                       |
+| Video/large uploads (presigned direct uploads), image processing (thumbnails, EXIF stripping)                    | media pipeline (12+)    |
+| AI provider abstraction, Brand Brain, AI usage/cost tracking                                                     | 5–6                     |
+| Redis + BullMQ worker (`src/worker/`), scheduled publishing (Phase 3 `SCHEDULED` is planning only)               | 9, or earlier if needed |
+| Social integrations and token encryption (`ENCRYPTION_KEY`)                                                      | 8                       |
+| Analytics, insights, ads, agent, agency dashboards, billing (Stripe), admin panel                                | 10–16                   |
+| Sentry, PostHog, dashboards                                                                                      | 18–19                   |
+| Postgres RLS, CSP review, controlled purge job                                                                   | 18                      |
 
 ## 10. Marketing Core OS (Phase 3)
 
@@ -778,3 +779,36 @@ gets `UnconfiguredMailer` (every send fails).
 - **Plan changes** (admin): carry the account version shown with the form; a repeated or
   stale request is refused (`stale_status`) and changes nothing; the audit entry records
   the previous plan.
+
+## 19. Production readiness (phase C)
+
+- **Platform-admin MFA** (Better Auth two-factor plugin: TOTP + 10 single-use backup codes,
+  secret and codes encrypted with `AUTH_SECRET`). Every two-factor step runs through
+  `src/server/auth/two-factor.ts` (HTTP endpoints disabled, rate-limited:
+  `two-factor-verify` per client, `two-factor-manage` per user; Better Auth adds 5
+  attempts per challenge and a 15-minute lock after 10 failures); each TOTP code is accepted
+  once (`two_factor_used_codes`; Better Auth alone would accept it again within its
+  window, so a replayed code's new session is removed). A password sign-in of an
+  enrolled account creates no session until the code is verified. Sessions created by a
+  second-factor verification carry `sessions.mfa_verified_at` (set only by the
+  `session.create` hook for the verify paths, never copied from an older session). The
+  admin gate (`platform-admin.ts`, pure decision in `platform-admin-access.ts`) requires
+  the flag + verified email + `two_factor_enabled` + a marker younger than 12 h (1 h for
+  changes); no environment switch disables it. Disabling two-factor clears the marker on
+  every session; lost device and codes → `pnpm admin:mfa-reset` (operator, audited, ends
+  all sessions). Enrollment UI: `/{locale}/account/security`; second sign-in step:
+  `/{locale}/sign-in/two-factor`. Audit: `user.mfa_enabled|disabled|sign_in|
+backup_codes_regenerated|reset_by_operator` (method only, never secrets).
+- **Monitoring** (`src/server/monitoring/`): every alert is a structured log line
+  (`event: "alert"`) and, when `ALERT_WEBHOOK_URL` is set, a JSON POST (3 s timeout, sent
+  in parallel so the tick waits one timeout at most, never awaited by request paths, one
+  delivery per key per 30 min across processes via `alert_throttles`; never throws).
+  Sources: 5xx in `withRoute`/`withAction` and Next.js `onRequestError` (route path and
+  error class only), failed tick phases, stuck states found after each tick, email
+  delivery failures, retention failures. Heartbeats in `system_heartbeats`.
+  `GET /api/internal/ops-status` (bearer `OPS_STATUS_SECRET`, 200/503, counts only) is
+  for an external uptime monitor — the only way to notice a scheduler that stopped.
+- **Backups**: `scripts/ops/db-backup.sh`, `db-restore.sh` (empty target only, checksum
+  and name confirmation), `db-verify.sh` (row counts, ledger/hold invariants, triggers,
+  `migrate status`). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
+  `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`.

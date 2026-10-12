@@ -67,6 +67,16 @@ export interface RateLimitRule {
  * - automation-tick: 12 per 10 min, one shared subject for all callers holding the bearer
  *   secret (room for a once-a-minute schedule plus a retry). Consumed only after the
  *   secret is verified, as for video-retention.
+ *
+ * STATUS: PROPOSED — PENDING HUMAN DECISION (Phase C). Two-factor authentication:
+ * - two-factor-verify: 20 per 15 min per client for the sign-in second step. Better Auth
+ *   adds 5 attempts per challenge and locks the account's factor for 15 minutes after
+ *   10 consecutive failures, so a 6-digit code cannot be guessed online.
+ * - two-factor-manage: 10 per 15 min per signed-in user for enroll / confirm / disable /
+ *   regenerate backup codes (password and code guessing by a session holder).
+ * - ops-status: 60 per 10 min, one shared subject for all callers holding the bearer
+ *   secret of GET /api/internal/ops-status (an uptime monitor polling every minute plus
+ *   manual checks). Consumed only after the secret is verified.
  */
 export const RATE_LIMIT_RULES = {
   "sign-in": { scope: "ip", window: 60, max: 10 },
@@ -85,6 +95,9 @@ export const RATE_LIMIT_RULES = {
   "ai-generate-workspace": { scope: "subject", window: 3600, max: 100 },
   "video-retention": { scope: "subject", window: 600, max: 12 },
   "automation-tick": { scope: "subject", window: 600, max: 12 },
+  "two-factor-verify": { scope: "ip", window: 900, max: 20 },
+  "two-factor-manage": { scope: "subject", window: 900, max: 10 },
+  "ops-status": { scope: "subject", window: 600, max: 60 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMIT_RULES;

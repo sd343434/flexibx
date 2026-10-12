@@ -1,10 +1,14 @@
 import "server-only";
 
+import type { PrismaClient } from "@/generated/prisma/client";
+
 import { getBoundedRetentionDb, getSystemDb } from "../db/client";
 import { getEnv } from "../env";
 import { parseVideoRetentionEnv, type VideoRetentionEnv } from "../env-schema";
 import type { Logger } from "../logger";
 import { getMailer } from "../mail";
+import { alert } from "../monitoring/alerts";
+import { recordJobFinished } from "../monitoring/heartbeat";
 import { createStorageRouter } from "../storage/providers";
 
 import {
@@ -159,6 +163,30 @@ async function withRunLock<T>(
   );
 }
 
+/** Heartbeat and alert for a retention run; monitoring never fails the run. */
+async function recordRetentionHeartbeat(
+  system: PrismaClient,
+  failed: boolean,
+  now: Date,
+  log: Logger,
+): Promise<void> {
+  try {
+    await recordJobFinished(system, "video-retention", failed ? ["deletion"] : [], now);
+  } catch (error) {
+    log.warn(
+      { event: "monitoring.failed", error: error instanceof Error ? error.name : "unknown" },
+      "Retention heartbeat not recorded",
+    );
+  }
+  if (failed) {
+    await alert({
+      key: "video_retention_failed",
+      severity: "critical",
+      title: "Video retention run reported deletion failures",
+    });
+  }
+}
+
 /**
  * One scheduled run (single flight), logged as `video_retention.run` at a graded level.
  * The run stops starting new work after RUN_TIME_BUDGET_MS, well before the lock's
@@ -200,5 +228,6 @@ export async function runScheduledVideoRetention(
     now,
   });
   logger[severity]({ videoRetention: summary, severity }, "video_retention.run");
+  await recordRetentionHeartbeat(system, severity === "error", now, logger);
   return summary;
 }

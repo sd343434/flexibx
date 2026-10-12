@@ -21,7 +21,7 @@ interface AdminLayoutProps {
 
 export default async function AdminLayout({ children, params }: AdminLayoutProps) {
   const locale = requireLocale((await params).locale);
-  await requirePlatformAdminPage();
+  await requirePlatformAdminPage(locale);
   const t = await getTranslations({ locale, namespace: "admin" });
   return (
     <>

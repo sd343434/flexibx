@@ -64,7 +64,7 @@ export const addCreditsAdminAction = withAction({
   name: "admin.credits.add",
   input: z.unknown(),
   handler: async (input) => {
-    const admin = await requirePlatformAdmin();
+    const admin = await requirePlatformAdmin({ change: true });
     await adminAddCredits(getDb(), admin.userId, input, creditsSettingsFromEnv());
   },
 });
@@ -73,7 +73,7 @@ export const changePlanAdminAction = withAction({
   name: "admin.credits.change_plan",
   input: z.unknown(),
   handler: async (input) => {
-    const admin = await requirePlatformAdmin();
+    const admin = await requirePlatformAdmin({ change: true });
     await adminChangePlan(getDb(), admin.userId, input, creditsSettingsFromEnv());
   },
 });
