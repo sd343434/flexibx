@@ -383,6 +383,8 @@
     "ads_provider_error": "The platform or the AI could not complete this. Try again later.",
     "ads_operation_unavailable": "This is not available for this platform yet.",
     "ads_account_unavailable": "Select a connected ad account first.",
+    "ads_account_inactive": "This ad account is not active on the platform (for example a payment is due, or it is disabled or closed). Resolve it in the platform's Ads Manager, then sync the account again.",
+    "ads_plan_objective_unsupported": "The AI proposed a campaign goal Flexibx cannot create on this platform yet (supported: awareness and traffic). No plan was saved. Generate the plan again.",
     "ads_plan_locked": "This plan cannot be changed in its current state.",
     "ads_execution_disabled": "Creating and activating campaigns is turned off on this server until it has been validated with the platform.",
     "ads_spend_limit_missing": "Set a spending limit for this currency before creating or activating campaigns.",
@@ -1374,7 +1376,7 @@
     "platforms": {
       "META": {
         "name": "Meta (Facebook & Instagram)",
-        "scope": "Read ad accounts, campaigns, ad sets, ads and results (ads_read).",
+        "scope": "Reads ad accounts, campaigns, ad sets, ads and results (ads_read). Creating campaigns, always after your approval, also needs ads_management and Page permissions.",
         "unavailable": "Available on this server when configured.",
         "launchNote": "It needs the ads_management permission (Meta App Review) and a tested write path."
       },
@@ -1554,8 +1556,10 @@
         "execution_disabled": "Creating campaigns on the platform is turned off on this server. An administrator must enable it after validating real platform credentials.",
         "destination_missing": "Add a destination link (https) before requesting a launch.",
         "spend_limit_missing": "Set a workspace spending limit for this currency before requesting a launch.",
+        "account_inactive": "This ad account is not active on the platform (for example a payment is due, or it is disabled or closed). Resolve it in Ads Manager, then sync the account.",
         "currency_unsupported": "Creating campaigns from Flexibx is not available yet for this account's currency: its budget units on the platform could not be verified.",
-        "placement_unsupported": "Creating campaigns from Flexibx supports chosen Facebook placements only. Instagram and automatic placements (which include Instagram) need an Instagram account, not supported yet. Edit the placements below."
+        "placement_unsupported": "Creating campaigns from Flexibx supports chosen Facebook placements only. Instagram and automatic placements (which include Instagram) need an Instagram account, not supported yet. Edit the placements below.",
+        "write_permission_missing": "Flexibx was connected without permission to create ads. Reconnect the platform from Integrations and allow ad management, then come back. If Meta does not offer that permission, an administrator must add it to the Meta login configuration."
       },
       "requestLaunch": "Request launch approval",
       "requestLaunchConfirm": "Send exactly this launch for approval? Nothing is sent to the platform until it is approved.",
@@ -1673,7 +1677,9 @@
       "choose": "Page",
       "save": "Use this Page",
       "placementsHint": "Creating campaigns from Flexibx supports Facebook placements only (Instagram needs an Instagram account, not supported yet)."
-    }
+    },
+    "connectionRevokedOnPlatform": "Access was removed from the platform side (for example, Flexibx was removed in Facebook settings). Connect again to continue; nothing was created or sent since.",
+    "connectionExpiringSoon": "Access to this platform expires within 7 days. Reconnect now to keep syncing and running approved work without interruption."
   },
   "integrations": {
     "title": "Integrations",
@@ -1730,7 +1736,7 @@
         "RED": "Low",
         "UNKNOWN": "Unknown"
       },
-      "ctwa": "To bring people into WhatsApp conversations, plan a Meta campaign with the Messages objective: its ad set opens WhatsApp."
+      "ctwa": "Ads that open WhatsApp conversations (Messages objective) cannot be created from Flexibx yet: Flexibx creates awareness and traffic campaigns only. Create them in Meta Ads Manager for now."
     },
     "messaging": {
       "title": "WhatsApp messaging",
@@ -1800,6 +1806,26 @@
       "resolved": "Checked by an admin",
       "resolve": "I checked it — release the contact",
       "resolveConfirm": "Confirm you checked whether this message reached the customer (with the customer or in WhatsApp Manager). It will not be resent; further messages to this contact become possible again."
+    }
+  },
+  "metaDataDeletion": {
+    "title": "Facebook data deletion",
+    "completed": "Your data deletion request is complete. Confirmation code: {code}.",
+    "removed": {
+      "title": "What Flexibx deletes",
+      "body": "When you remove Flexibx from your Facebook settings, or ask Facebook to delete your data, Flexibx immediately disconnects every Meta ads and WhatsApp connection you granted, in every workspace, and erases their access tokens. For a deletion request it also erases the Facebook user id and name it stored for you. Nothing further is read from or sent to Meta with your permission."
+    },
+    "kept": {
+      "title": "What the workspace keeps",
+      "body": "Ad plans, approvals, audit records and synced campaign results belong to the business workspace that connected its ad accounts, not to your personal Facebook profile, and stay with that workspace."
+    },
+    "yourself": {
+      "title": "Do it yourself",
+      "body": "In Flexibx: open the workspace's Integrations page and choose Disconnect. On Facebook: Settings & privacy → Settings → Business integrations (or Apps and websites) → remove Flexibx. Either one revokes access immediately."
+    },
+    "contact": {
+      "title": "Anything else",
+      "body": "To have workspace data deleted, ask the workspace owner, or contact the operator of this Flexibx service."
     }
   }
 }

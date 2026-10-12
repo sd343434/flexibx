@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { EnvValidationError, parseServerEnv, parseStorageEnv } from "@/server/env-schema";
+import {
+  EnvValidationError,
+  parseAutomationEnv,
+  parseServerEnv,
+  parseStorageEnv,
+} from "@/server/env-schema";
 
 const valid = {
   NODE_ENV: "production",
@@ -87,5 +92,19 @@ describe("parseStorageEnv", () => {
 
   it("requires credentials and bucket", () => {
     expect(() => parseStorageEnv({ S3_REGION: "us-east-1" })).toThrow(/S3_BUCKET/);
+  });
+});
+
+describe("parseAutomationEnv", () => {
+  it("leaves the scheduler endpoint disabled when the secret is empty", () => {
+    expect(
+      parseAutomationEnv({ AUTOMATION_CRON_SECRET: "" }).AUTOMATION_CRON_SECRET,
+    ).toBeUndefined();
+  });
+
+  it("rejects a short secret", () => {
+    expect(() => parseAutomationEnv({ AUTOMATION_CRON_SECRET: "too-short" })).toThrow(
+      EnvValidationError,
+    );
   });
 });

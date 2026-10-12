@@ -60,6 +60,13 @@ export interface RateLimitRule {
  *   bearer secret. Consumed only after the secret is verified, so unauthenticated
  *   requests never use up the scheduler's quota. The run's advisory lock still keeps
  *   one run at a time; this limit only bounds how often the endpoint can be hit.
+ *
+ * STATUS: PROPOSED — PENDING HUMAN DECISION. Internal automation tick endpoint
+ * (POST /api/internal/automation-tick, recovery of interrupted tasks, scheduled planning,
+ * advancing runs):
+ * - automation-tick: 12 per 10 min, one shared subject for all callers holding the bearer
+ *   secret (room for a once-a-minute schedule plus a retry). Consumed only after the
+ *   secret is verified, as for video-retention.
  */
 export const RATE_LIMIT_RULES = {
   "sign-in": { scope: "ip", window: 60, max: 10 },
@@ -77,6 +84,7 @@ export const RATE_LIMIT_RULES = {
   "ai-generate": { scope: "subject", window: 600, max: 20 },
   "ai-generate-workspace": { scope: "subject", window: 3600, max: 100 },
   "video-retention": { scope: "subject", window: 600, max: 12 },
+  "automation-tick": { scope: "subject", window: 600, max: 12 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMIT_RULES;

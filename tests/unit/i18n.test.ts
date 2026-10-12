@@ -20,6 +20,7 @@ function leafKeys(value: unknown, prefix = ""): string[] {
 const SAMPLE_PARAMS = {
   language: "English",
   digest: "abc123",
+  code: "0123456789abcdef0123",
   minimum: 3,
   maximum: 10,
   origin: "string",

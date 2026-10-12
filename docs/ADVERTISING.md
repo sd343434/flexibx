@@ -81,12 +81,20 @@ Rules later work must keep:
 - **Only launchable plans.** When the platform has a ready write path
   (`launchableChoices`, planner.ts), the AI is told the only objectives and placements
   that writer supports (Meta: AWARENESS/TRAFFIC and explicit Facebook placements); a
-  proposal with another objective is refused (`ads_provider_error`, stage
-  `plan_objective`) instead of stored, placements outside the list are dropped (none
+  proposal with another objective is refused (`ads_plan_objective_unsupported`, stage
+  `plan_objective`; nothing stored, the person generates again) instead of stored, placements outside the list are dropped (none
   left → every supported placement), and the WhatsApp hint (objective MESSAGES) is only
   given when MESSAGES can launch. The plan form also takes the destination link (https),
   which a launch requires. Found in the first real run: the AI chose MESSAGES with
   automatic placements, which the Meta writer cannot create.
+- **Launch blockers shown before submission** (review screen, and re-checked at
+  submission and again when the approved task runs, before any write): besides
+  configuration, objective, currency, placements, execution switch, destination and spend
+  limit — `account_inactive` (the ad account's synced platform status is not ACTIVE, e.g.
+  `UNSETTLED` payment due, disabled or closed; refused as `ads_account_inactive`; fix it
+  in Ads Manager and sync) and `write_permission_missing` (the connection was granted
+  reading only; reconnect, and if Meta does not offer ads_management the Facebook Login
+  for Business configuration must include it).
 - **Permissions.** `ads.view` and `ads.plan` (managers and above), `ads.manage`
   (owners/admins: connect, select accounts, disconnect), submitting a launch also needs
   `automation.manage`; approving needs `automation.approve`.
@@ -238,9 +246,35 @@ Business Verification.
 Meta test ad account (the only way to confirm the assumptions), Instagram-only identities,
 objectives needing a pixel, lead form, app or WhatsApp destination.
 
-Not done here (documented gaps): revoking the app on Meta's side when disconnecting (the
-person removes Flexibx in their Facebook settings; Flexibx deletes its stored token);
-token refresh before expiry (reconnect when it expires); webhooks.
+**Deauthorize and data deletion callbacks** (both asked for by App Review; one Meta app
+serves Meta ads and WhatsApp, so both cover `META` and `WHATSAPP` connections). Register
+in the Meta app dashboard:
+
+| Dashboard field                                                               | URL                                             |
+| ----------------------------------------------------------------------------- | ----------------------------------------------- |
+| Facebook Login → Deauthorize callback URL                                     | `{APP_URL}/api/integrations/meta/deauthorize`   |
+| Facebook Login → Data deletion request URL                                    | `{APP_URL}/api/integrations/meta/data-deletion` |
+| Basic settings → Data deletion instructions URL (if the callback is not used) | `{APP_URL}/ar/meta-data-deletion`               |
+
+Meta POSTs a form field `signed_request` (`base64url(HMAC-SHA256).base64url(JSON)`); it is
+verified in constant time with `META_APP_SECRET` before anything is read (400 when not
+valid, 503 without the app secret). The app-scoped `user_id` is matched to the
+`external_user_id` stored at connection (the same app-scoped id), across workspaces:
+
+- deauthorize → every matching connection is `REVOKED`, its token erased, its accounts
+  deselected, `last_error_code = platform_deauthorized`, audit `ads.platform_deauthorized`
+  (no actor). Runs re-check the connection before each write, so nothing more is created
+  or sent. The Integrations card says the access was removed on the platform side.
+- data deletion → the same, plus the stored Facebook id (`deleted`) and name erased;
+  answers `{ url, confirmation_code }` where the code is an HMAC of the request (no
+  table) and the URL is the public status page `/{locale}/meta-data-deletion?code=…`.
+  Workspace business data (plans, approvals, audit, synced results) is kept: it belongs to
+  the business workspace, not to the person's Facebook profile — a retention decision to
+  confirm in the privacy policy.
+
+Not done here (documented gaps): revoking the app on Meta's side when disconnecting
+inside Flexibx (Flexibx deletes its stored token); token refresh before expiry (reconnect
+when it expires); a privacy policy page (content is the operator's legal decision).
 
 ## Snapchat Ads (read-only)
 
@@ -419,9 +453,10 @@ Three different things, kept apart:
 1. **Ads that click to WhatsApp** are Meta ads (Marketing API): an ad set with
    `destination_type: WHATSAPP`, `billing_event: IMPRESSIONS`, a `promoted_object.page_id`
    (Facebook Page, required) and optionally the WhatsApp number. Flexibx plans them on a
-   **Meta** ad account with objective `MESSAGES` (the planner is told when WhatsApp is
-   connected); the review shows the WhatsApp destination. Launching stays unavailable like
-   every Meta launch.
+   **Meta** ad account with objective `MESSAGES` only when that objective is launchable;
+   the current Meta writer supports AWARENESS/TRAFFIC only, so the planner neither
+   suggests nor accepts MESSAGES and the Integrations page says to create such ads in
+   Ads Manager for now.
 2. **WhatsApp messaging** (Cloud API): see "Sending messages" below — one approved message
    to one opted-in contact; off unless `WHATSAPP_SENDING_ENABLED=true`.
 3. **WhatsApp account management** (Business Management API): WABAs, phone numbers,

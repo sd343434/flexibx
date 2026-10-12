@@ -745,6 +745,39 @@ describe("re-checks at execution time", () => {
     expect(again.approvalHash).not.toBe(task.approvalHash);
   });
 
+  it("refuses a launch on an ad account that is no longer active (e.g. payment due)", async () => {
+    const setup = await ready();
+    await system.adAccount.update({
+      where: { id: setup.accountId },
+      data: { externalStatus: "UNSETTLED" },
+    });
+    // Shown on the review, refused at submission.
+    const review = await getAdPlanReview(db, setup.owner, setup.deps.adapters, setup.planId, {
+      executionEnabled: true,
+    });
+    expect(review.launch).toEqual({ available: false, reason: "account_inactive" });
+    await expect(submitAdPlan(setup.deps, setup.owner, setup.planId)).rejects.toMatchObject({
+      fields: [{ code: "ads_account_inactive" }],
+    });
+    expect(setup.graph.writes()).toHaveLength(0);
+  });
+
+  it("asks to reconnect when the connection lacks permission to create ads", async () => {
+    const setup = await ready();
+    await system.adConnection.updateMany({
+      where: { workspaceId: setup.owner.workspaceId },
+      data: { scopes: ["ads_read"] },
+    });
+    const review = await getAdPlanReview(db, setup.owner, setup.deps.adapters, setup.planId, {
+      executionEnabled: true,
+    });
+    expect(review.launch).toEqual({ available: false, reason: "write_permission_missing" });
+    await expect(submitAdPlan(setup.deps, setup.owner, setup.planId)).rejects.toMatchObject({
+      fields: [{ code: "ads_permission_missing" }],
+    });
+    expect(setup.graph.writes()).toHaveLength(0);
+  });
+
   it("sends nothing under the emergency stop, and resumes only when it is lifted", async () => {
     const setup = await ready();
     const { runId } = await submitAndApprove(setup);
@@ -801,6 +834,15 @@ describe("re-checks at execution time", () => {
           data: { status: "REVOKED", tokenCiphertext: null },
         }),
       "account_unavailable",
+    ],
+    [
+      "an ad account that became unpaid",
+      (setup) =>
+        system.adAccount.update({
+          where: { id: setup.accountId },
+          data: { externalStatus: "UNSETTLED" },
+        }),
+      "ads_account_inactive",
     ],
   ];
 
@@ -1232,7 +1274,7 @@ describe("AI plan constraints", () => {
       createAdPlan(db, setup.owner, runtime, input(setup.accountId), "en", {
         adapters: setup.deps.adapters,
       }),
-    ).rejects.toMatchObject({ fields: [{ code: "ads_provider_error" }] });
+    ).rejects.toMatchObject({ fields: [{ code: "ads_plan_objective_unsupported" }] });
     expect(await system.adPlan.count({ where: { workspaceId: setup.owner.workspaceId } })).toBe(
       plans,
     );

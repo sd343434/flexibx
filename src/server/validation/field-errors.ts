@@ -68,6 +68,8 @@ export const VALIDATION_CODES = [
   "ads_provider_error",
   "ads_operation_unavailable",
   "ads_account_unavailable",
+  "ads_account_inactive",
+  "ads_plan_objective_unsupported",
   "ads_plan_locked",
   "ads_execution_disabled",
   "ads_spend_limit_missing",

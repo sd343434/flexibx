@@ -2,8 +2,8 @@
 //
 //   pnpm automation:tick     # recover stale tasks, start due scheduled runs, advance runs
 //
-// For development and for hosts with the full source tree. No scheduler calls this yet:
-// running it periodically (and deciding where) is an open operations decision. It needs
+// For development and for hosts with the full source tree; production schedulers call
+// POST /api/internal/automation-tick (docs/ARCHITECTURE.md, Scheduling). It needs
 // the same server environment as the app; a local .env file is loaded when present.
 // The AI provider follows AI_PROVIDER (disabled by default; never a paid provider today).
 

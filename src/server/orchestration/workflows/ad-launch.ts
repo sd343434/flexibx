@@ -61,6 +61,7 @@ export async function planOf(
           currency: true,
           timeZone: true,
           selected: true,
+          externalStatus: true,
           connection: { select: { status: true, externalUserId: true, version: true } },
         },
       },
@@ -115,6 +116,7 @@ export async function preflightOrFail(
         currency: plan.currency,
         startDate: isoDay(plan.startDate),
         endDate: isoDay(plan.endDate),
+        accountStatus: plan.account.externalStatus,
       },
     });
     return { ...checked, spec };

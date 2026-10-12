@@ -267,7 +267,7 @@ export async function createAdPlan(
     const output = generation === null ? null : readStoredOutput("AD_PLAN", generation.output);
     if (output === null) throw adsError("CONFLICT", "ads_provider_error", { stage: "plan_output" });
     if (choices !== null && !choices.objectives.includes(output.objective)) {
-      throw adsError("CONFLICT", "ads_provider_error", { stage: "plan_objective" });
+      throw adsError("CONFLICT", "ads_plan_objective_unsupported", { stage: "plan_objective" });
     }
     const chosen = choices?.placements.filter((placement) => output.placements.includes(placement));
     const audience = output.audience;
@@ -374,6 +374,7 @@ async function loadPlan(db: Db, ctx: TenantContext, planId: string) {
           timeZone: true,
           selected: true,
           snapshot: true,
+          externalStatus: true,
           connection: { select: { status: true } },
         },
       },
@@ -556,7 +557,9 @@ export type LaunchBlocker =
   | "placement_unsupported"
   | "execution_disabled"
   | "destination_missing"
-  | "spend_limit_missing";
+  | "spend_limit_missing"
+  | "account_inactive"
+  | "write_permission_missing";
 
 /** Why a plan cannot be launched here, or null when it can (read-only; no platform call). */
 async function launchBlocker(
@@ -566,6 +569,7 @@ async function launchBlocker(
   spec: AdCampaignSpec | null,
   currency: string,
   executionEnabled: boolean,
+  accountStatus: string,
 ): Promise<LaunchBlocker | null> {
   if (!entry.available) return entry.reason;
   const { adapter } = entry;
@@ -590,8 +594,23 @@ async function launchBlocker(
     return "placement_unsupported";
   }
   if (!executionEnabled) return "execution_disabled";
+  if (accountStatus !== "ACTIVE") return "account_inactive";
   if (adapter.writer !== undefined && (spec?.creative.destinationUrl ?? null) === null) {
     return "destination_missing";
+  }
+  if (adapter.writer !== undefined) {
+    // Connected for reading only (or before write access was requested): reconnect first.
+    const connection = await db.adConnection.findFirst({
+      where: { workspaceId, platform: entry.platform },
+      select: { status: true, scopes: true },
+    });
+    const { writeScopes } = adapter.writer;
+    if (
+      connection?.status === "ACTIVE" &&
+      writeScopes.some((scope) => !connection.scopes.includes(scope))
+    ) {
+      return "write_permission_missing";
+    }
   }
   const limit = await db.adSpendLimit.count({ where: { workspaceId, currency } });
   return limit === 0 ? "spend_limit_missing" : null;
@@ -622,6 +641,7 @@ export async function getAdPlanReview(
     spec,
     plan.currency,
     options.executionEnabled ?? false,
+    plan.account.externalStatus,
   );
   return {
     id: plan.id,
@@ -725,6 +745,7 @@ export async function submitAdPlan<S>(
       currency: plan.currency,
       startDate: isoDay(plan.startDate),
       endDate: isoDay(plan.endDate),
+      accountStatus: plan.account.externalStatus,
     },
   });
   // The identity the ads publish as is fixed now and becomes part of the approved action:
@@ -832,6 +853,7 @@ export async function requestActivation<S>(
       currency: plan.currency,
       startDate: isoDay(plan.startDate),
       endDate: isoDay(plan.endDate),
+      accountStatus: plan.account.externalStatus,
     },
   });
   const { runId } = await createRun(

@@ -21,6 +21,8 @@ export interface PreflightPlan {
   readonly currency: string;
   readonly startDate: string;
   readonly endDate: string;
+  /** The ad account's status on the platform at its last sync (ACTIVE to launch). */
+  readonly accountStatus: string;
 }
 
 export async function executionPreflight(args: {
@@ -41,6 +43,8 @@ export async function executionPreflight(args: {
     });
   }
   if (!args.executionEnabled) throw adsError("CONFLICT", "ads_execution_disabled");
+  // A disabled, closed or unpaid account cannot deliver: refused before any write.
+  if (plan.accountStatus !== "ACTIVE") throw adsError("CONFLICT", "ads_account_inactive");
   const writer = entry.adapter.writer ?? null;
   if (writer !== null) {
     if (

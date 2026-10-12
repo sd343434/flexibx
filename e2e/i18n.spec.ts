@@ -98,3 +98,18 @@ test("unknown pages and locales render a localized 404", async ({ page }) => {
   const unknownLocale = await page.goto("/xx");
   expect(unknownLocale?.status()).toBe(404);
 });
+
+test.describe("Meta data deletion page", () => {
+  test("is public, localized, and echoes only a well-formed confirmation code", async ({
+    page,
+  }) => {
+    const problems = watchForProblems(page);
+    await page.goto("/ar/meta-data-deletion?code=0123456789abcdef0123");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page.getByTestId("meta-deletion-status")).toContainText("0123456789abcdef0123");
+    await page.goto("/en/meta-data-deletion?code=<script>");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Facebook data deletion");
+    await expect(page.getByTestId("meta-deletion-status")).toHaveCount(0);
+    expect(problems).toEqual([]);
+  });
+});

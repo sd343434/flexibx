@@ -575,9 +575,14 @@ Code: `src/server/orchestration/`. Migration `20261010120000_orchestration_core`
   transaction (workspace row lock shared with the stop), so it overrides approvals too;
   resuming continues where runs stopped. Policy changes, stop/resume, runs, failures,
   approvals and drafts are audited.
-- **Scheduling.** `pnpm automation:tick` (cron) recovers stale tasks, starts due planning
-  runs once per slot (compare-and-set on the policy version; missed slots are skipped, not
-  replayed) and advances active runs. Event-driven triggers are not implemented yet.
+- **Scheduling.** One tick recovers stale tasks, starts due planning runs once per slot
+  (compare-and-set on the policy version; missed slots are skipped, not replayed) and
+  advances active runs. A scheduler calls `POST /api/internal/automation-tick` every 1–5
+  minutes with `Authorization: Bearer $AUTOMATION_CRON_SECRET` (unset = 404; 12 calls per
+  10 minutes; counts-only response), e.g.
+  `*/2 * * * * curl -fsS --max-time 300 -X POST -H "Authorization: Bearer $AUTOMATION_CRON_SECRET" https://<app>/api/internal/automation-tick`;
+  `pnpm automation:tick` does the same from a full source tree. Approved launches and
+  sends start immediately after approval; the tick is what recovers them after a crash. Event-driven triggers are not implemented yet.
 - **First workflow: content planning** — observe (brand, goals, campaigns, pillars, the
   next 7 days in the workspace time zone) → AI ideas through the AI engine → drafts only if
   the policy allows (at most `max_drafts_per_run`, status DRAFT, never scheduled or

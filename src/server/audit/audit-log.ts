@@ -82,6 +82,9 @@ export const AUDIT_ACTIONS = [
   "ads.connected",
   "ads.connect_failed",
   "ads.disconnected",
+  // Meta callbacks (no actor): the person removed the app or asked for data deletion.
+  "ads.platform_deauthorized",
+  "ads.platform_data_deleted",
   "ads.accounts_refreshed",
   "ads.account_selected",
   "ads.synced",

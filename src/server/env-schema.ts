@@ -206,6 +206,25 @@ export function parseVideoRetentionEnv(source: EnvSource): VideoRetentionEnv {
 }
 
 /**
+ * AI Marketing Manager scheduler.
+ * - AUTOMATION_CRON_SECRET: bearer secret for POST /api/internal/automation-tick, the
+ *   endpoint a scheduler calls every few minutes (≥ 32 characters). Unset = the endpoint
+ *   is disabled (404): interrupted tasks are then not recovered and scheduled planning
+ *   does not start unless `pnpm automation:tick` is run another way.
+ */
+export const automationEnvSchema = z.object({
+  AUTOMATION_CRON_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
+});
+
+export type AutomationEnv = z.infer<typeof automationEnvSchema>;
+
+export function parseAutomationEnv(source: EnvSource): AutomationEnv {
+  const result = automationEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("automation", result.error.issues);
+  return result.data;
+}
+
+/**
  * Advertising platforms. Meta (Facebook and Instagram ads) is available only when the
  * Meta app's id and secret are set AND ENCRYPTION_KEY exists (tokens are stored
  * encrypted). Unset = the integration shows "not configured" and makes no call.

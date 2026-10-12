@@ -61,8 +61,16 @@ describe("tenancy boundaries", () => {
       // Advertising OAuth callback: looks the single-use state up by its hash (the
       // redirect carries no workspace); every write goes through the guarded client.
       "src/server/ads/connections.ts",
+      // Meta deauthorize / data deletion callbacks: a verified signed_request carries no
+      // workspace; connections are found by the platform user id, and each one is
+      // revoked through the guarded client with its own workspace id.
+      "src/server/ads/meta-deauthorization.ts",
       "src/server/auth/auth.ts",
       "src/server/health/health-service.ts",
+      // Scheduler tick (POST /api/internal/automation-tick): cross-workspace selection of
+      // due policies, stale tasks and active runs only; every run executes per workspace
+      // through the guarded client (scheduler.ts, engine.ts), as `pnpm automation:tick`.
+      "src/server/orchestration/runtime.ts",
       // Storage router: reads the platform storage settings singleton only.
       "src/server/storage/providers.ts",
       "src/server/tenancy/access.ts",

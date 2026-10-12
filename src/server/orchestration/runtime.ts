@@ -2,7 +2,7 @@ import "server-only";
 
 import type { AiRuntime } from "../ai/ai-service";
 import { providerFromEnv } from "../ai/configured-provider";
-import { getDb } from "../db/client";
+import { getDb, getSystemDb } from "../db/client";
 import { getAiEnv } from "../env";
 import { logger } from "../logger";
 
@@ -18,6 +18,7 @@ import { readMedia } from "../marketing/media-service";
 import { getStorageRouter } from "../storage/providers";
 
 import type { OrchestrationDeps } from "./engine";
+import { automationTick } from "./scheduler";
 import { adActivateWorkflow } from "./workflows/ad-activate";
 import { adLaunchWorkflow } from "./workflows/ad-launch";
 import {
@@ -84,5 +85,32 @@ export function getOrchestrationDeps(): OrchestrationDeps<AppServices> & {
     },
     workflows: WORKFLOWS,
     logger,
+  };
+}
+
+/** Counts only (no ids): what one scheduled tick did. */
+export interface ScheduledTickSummary {
+  readonly recovered: number;
+  readonly scheduled: number;
+  readonly skippedNoDelegate: number;
+  readonly advanced: number;
+  /** Advanced runs by outcome: a final state (lower case) or paused/waiting/yielded. */
+  readonly runs: Readonly<Record<string, number>>;
+}
+
+/** One tick for POST /api/internal/automation-tick (same work as `pnpm automation:tick`). */
+export async function runScheduledAutomationTick(): Promise<ScheduledTickSummary> {
+  const summary = await automationTick({ ...getOrchestrationDeps(), system: getSystemDb() });
+  const runs: Record<string, number> = {};
+  for (const outcome of summary.executed) {
+    const key = outcome.status === "finished" ? outcome.state.toLowerCase() : outcome.status;
+    runs[key] = (runs[key] ?? 0) + 1;
+  }
+  return {
+    recovered: summary.recovered,
+    scheduled: summary.scheduled,
+    skippedNoDelegate: summary.skippedNoDelegate,
+    advanced: summary.executed.length,
+    runs,
   };
 }

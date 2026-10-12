@@ -1,4 +1,4 @@
-import { useFormatter, useTranslations } from "next-intl";
+import { useFormatter, useNow, useTranslations } from "next-intl";
 
 import { ActionButton } from "@/components/marketing/entity-form";
 import { Badge, Detail, EmptyState } from "@/components/marketing/page-parts";
@@ -58,10 +58,21 @@ export interface PlatformCardRow {
 
 type PlatformRow = PlatformCardRow;
 
-function platformStatus(row: PlatformRow) {
+/** Reconnect warning window before a token's known expiry (Meta: ~60-day tokens). */
+const EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Expiry is otherwise noticed only at the next platform call: show it from the date. */
+function tokenExpiry(expiresAt: Date | null, now: number): "expired" | "soon" | null {
+  if (expiresAt === null) return null;
+  const left = expiresAt.getTime() - now;
+  return left <= 0 ? "expired" : left <= EXPIRY_WARNING_MS ? "soon" : null;
+}
+
+function platformStatus(row: PlatformRow, now: number) {
   if (!row.available) return row.reason === "not_configured" ? "notConfigured" : "notAvailable";
   if (row.connection === null || row.connection.status === "REVOKED") return "notConnected";
   if (row.connection.status === "EXPIRED") return "expired";
+  if (tokenExpiry(row.connection.tokenExpiresAt, now) === "expired") return "expired";
   if (row.connection.status === "ERROR") return "needsPermission";
   return "connected";
 }
@@ -80,10 +91,11 @@ export function PlatformCards({
   readonly canManage: boolean;
 }) {
   const t = useTranslations("ads");
+  const now = useNow().getTime();
   return (
     <ul className="grid gap-4 sm:grid-cols-2" data-testid="ads-platforms">
       {platforms.map((row) => {
-        const status = platformStatus(row);
+        const status = platformStatus(row, now);
         const connected = status === "connected";
         return (
           <li
@@ -164,6 +176,26 @@ export function PlatformCards({
                   </p>
                 )}
               </dl>
+            ) : null}
+            {status === "connected" &&
+            tokenExpiry(row.connection?.tokenExpiresAt ?? null, now) === "soon" ? (
+              <p
+                className="text-sm text-destructive"
+                role="status"
+                data-testid="ads-token-expiring"
+              >
+                {t("connectionExpiringSoon")}
+              </p>
+            ) : null}
+            {row.connection?.status === "REVOKED" && row.connection.lastErrorCode !== null ? (
+              // Revoked from the platform's side (not by a Disconnect here).
+              <p
+                className="text-sm text-destructive"
+                role="status"
+                data-testid="ads-connection-revoked"
+              >
+                {t("connectionRevokedOnPlatform")}
+              </p>
             ) : null}
             {canManage && row.available ? (
               <div className="mt-auto flex flex-wrap gap-2">
