@@ -8,9 +8,10 @@ import { redactString } from "../redact";
 // (scripts/admin/mfa-reset.ts; runbook docs/runbooks/INCIDENT_RESPONSE.md). Needs direct
 // database access — no web or API path reaches it. In one transaction it removes the
 // account's two-factor secret and backup codes, turns two-factor off and ENDS EVERY
-// SESSION of the account (so nothing signed in keeps any access), and writes an audit
-// entry. The user then signs in with the password and enrolls again; a platform
-// administrator cannot open the admin area until that enrollment is done.
+// SESSION of the account (so nothing signed in keeps any access), removes the platform
+// administrator flag (database trigger) and writes audit entries. The user then signs in
+// with the password and enrolls again; a former administrator needs a NEW grant
+// (docs/runbooks/ADMIN_PROVISIONING.md) — re-enrolling never restores admin access.
 // Pure (no `server-only`) so integration tests drive it directly.
 
 export const mfaResetInputSchema = z.object({
@@ -33,9 +34,14 @@ export async function resetUserMfa(
 ): Promise<MfaResetResult> {
   const { email, operator, reason } = mfaResetInputSchema.parse(input);
   return system.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({ where: { email }, select: { id: true } });
+    const user = await tx.user.findUnique({
+      where: { email },
+      select: { id: true, isPlatformAdmin: true },
+    });
     if (user === null) return { status: "NOT_FOUND" as const };
     await tx.twoFactor.deleteMany({ where: { userId: user.id } });
+    // Turning two-factor off also removes the administrator flag (database trigger,
+    // migration 20261014120000).
     await tx.user.update({ where: { id: user.id }, data: { twoFactorEnabled: false } });
     const sessions = await tx.session.deleteMany({ where: { userId: user.id } });
     await tx.auditLog.create({
@@ -53,6 +59,18 @@ export async function resetUserMfa(
         },
       },
     });
+    if (user.isPlatformAdmin) {
+      await tx.auditLog.create({
+        data: {
+          workspaceId: null,
+          actorUserId: null,
+          action: "platform_admin.revoked",
+          entityType: "user",
+          entityId: user.id,
+          metadata: { cause: "mfa_reset", operator: redactString(operator) },
+        },
+      });
+    }
     return { status: "RESET" as const, userId: user.id, sessionsEnded: sessions.count };
   });
 }

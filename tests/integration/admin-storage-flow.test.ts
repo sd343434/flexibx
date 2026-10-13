@@ -37,7 +37,7 @@ import { AppError } from "@/server/errors/app-error";
 
 import ar from "../../messages/ar.json";
 import en from "../../messages/en.json";
-import { createTestDb, resetDatabase } from "./helpers";
+import { createTestDb, grantPlatformAdminForTest, resetDatabase } from "./helpers";
 import { totp } from "./totp";
 
 const KEY_ID = "TESTKEYID0123456789AB";
@@ -152,20 +152,19 @@ async function signedInUser(options: { admin?: boolean; verified?: boolean } = {
   browser.jar.clear();
   await controlFlow(submitSignUp("en", null, form({ name: "Staff", email, password: PASSWORD })));
   await controlFlow(submitSignIn("en", null, form({ email, password: PASSWORD })));
-  // The operator step (runbook): the flag is only ever set directly in the database.
-  const user = await system.user.update({
-    where: { email },
-    data: {
-      isPlatformAdmin: options.admin ?? false,
-      emailVerified: options.verified ?? true,
-    },
-  });
+  const user = await system.user.update({ where: { email }, data: { emailVerified: true } });
   // Administrators enroll in two-factor authentication (mandatory for the admin area,
   // tests/integration/admin-mfa.test.ts); the enrollment session passed the second factor.
   if (options.admin === true) {
     const started = await submitStartEnrollment(null, form({ password: PASSWORD }));
     if (started === null || !("status" in started)) throw new Error("enrollment not started");
     await controlFlow(submitConfirmEnrollment("en", null, form({ code: totp(started.manualKey) })));
+    // The operator grant (docs/runbooks/ADMIN_PROVISIONING.md), after enrollment.
+    await grantPlatformAdminForTest(system, user.id);
+  }
+  // An email that is (or becomes) unverified: the flag alone is never enough.
+  if (options.verified === false) {
+    await system.user.update({ where: { id: user.id }, data: { emailVerified: false } });
   }
   return { id: user.id, cookies: new Map(browser.jar) };
 }

@@ -278,6 +278,8 @@ export type AutomationEnv = z.infer<typeof automationEnvSchema>;
  * - ALERT_WEBHOOK_TOKEN: sent as `Authorization: Bearer …` when set (≥ 16 characters).
  * - OPS_STATUS_SECRET: bearer secret for GET /api/internal/ops-status (≥ 32 characters).
  *   Unset = the endpoint is disabled (404).
+ * - LEDGER_INTEGRITY_INTERVAL_MINUTES: how often the scheduled tick re-checks the credit
+ *   ledger against the balances (monitoring/ledger-integrity.ts). 5–1440, default 60.
  */
 /** https://, or plain http only to this machine (local testing of a receiver). */
 function isAlertWebhookUrl(value: string): boolean {
@@ -300,6 +302,10 @@ export const monitoringEnvSchema = z.object({
   ),
   ALERT_WEBHOOK_TOKEN: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
   OPS_STATUS_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
+  LEDGER_INTEGRITY_INTERVAL_MINUTES: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(5).max(1440).default(60),
+  ),
 });
 
 export type MonitoringEnv = z.infer<typeof monitoringEnvSchema>;

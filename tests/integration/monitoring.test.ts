@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { WorkspaceRole } from "@/generated/prisma/enums";
 import { databaseAlertThrottle } from "@/server/monitoring/alert-sink";
 import { recordJobFinished } from "@/server/monitoring/heartbeat";
+import { runLedgerIntegrityCheck } from "@/server/monitoring/ledger-integrity";
 import {
   collectOpsStatus,
   STUCK_HOLD_MS,
@@ -145,6 +146,9 @@ describe("ops status", () => {
 
   it("is ok with a recent successful tick and nothing stuck", async () => {
     await recordJobFinished(system, "automation-tick", [], ago(60_000));
+    // Until the ledger integrity check has run once, the ledger state is a warning.
+    expect((await collectOpsStatus(system, NOW)).status).toBe("warning");
+    await runLedgerIntegrityCheck(system, ago(60_000), { intervalMs: 3_600_000 });
     const status = await collectOpsStatus(system, NOW);
     expect(status.status).toBe("ok");
     expect(check(status, "automation_tick_last_success_age_seconds")?.value).toBe(60);
@@ -186,6 +190,12 @@ describe("tick heartbeat and alerts", () => {
     expect(ok).toMatchObject({ lastStatus: "ok", failedPhases: [] });
     expect(ok.lastSucceededAt?.getTime()).toBe(NOW.getTime());
     expect(ok.lastStartedAt?.getTime()).toBe(NOW.getTime());
+    // The tick ran the ledger integrity check (due: it never ran) ...
+    const ledger = await system.opsCheckResult.findUniqueOrThrow({
+      where: { name: "credit-ledger-integrity" },
+    });
+    expect(ledger).toMatchObject({ status: "ok" });
+    expect(ledger.startedAt.getTime()).toBe(NOW.getTime());
 
     const later = new Date(NOW.getTime() + 60_000);
     const summary = await runScheduledAutomationTick(() => later, phases(["social", "credits"]));
@@ -196,6 +206,14 @@ describe("tick heartbeat and alerts", () => {
     expect(failed).toMatchObject({ lastStatus: "failed", failedPhases: ["social", "credits"] });
     // The last success is kept, so the status endpoint can still tell its age.
     expect(failed.lastSucceededAt?.getTime()).toBe(NOW.getTime());
+    // ... and not again one minute later (once per LEDGER_INTEGRITY_INTERVAL_MINUTES).
+    expect(
+      (
+        await system.opsCheckResult.findUniqueOrThrow({
+          where: { name: "credit-ledger-integrity" },
+        })
+      ).startedAt.getTime(),
+    ).toBe(NOW.getTime());
     expect(
       check(await collectOpsStatus(system, later), "automation_tick_last_run_failed"),
     ).toMatchObject({
@@ -324,6 +342,7 @@ describe("GET /api/internal/ops-status", () => {
     expect(((await critical.json()) as { status: string }).status).toBe("critical");
 
     await recordJobFinished(system, "automation-tick", [], new Date());
+    await runLedgerIntegrityCheck(system, new Date(), { intervalMs: 3_600_000 });
     const healthy = await get(`Bearer ${SECRET}`);
     expect(healthy.status).toBe(200);
     expect(((await healthy.json()) as { status: string }).status).toBe("ok");

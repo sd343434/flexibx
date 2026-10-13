@@ -21,7 +21,7 @@ export function createTestDb(): TestDb {
 
 /** Empties every table. Only ever runs against the guarded `_test` database. */
 export async function resetDatabase(system: PrismaClient): Promise<void> {
-  await system.$executeRaw`TRUNCATE TABLE sessions, accounts, verifications, rate_limits, audit_logs, workspace_invitations, workspace_members, workspaces, users, system_heartbeats, alert_throttles RESTART IDENTITY CASCADE`;
+  await system.$executeRaw`TRUNCATE TABLE sessions, accounts, verifications, rate_limits, audit_logs, workspace_invitations, workspace_members, workspaces, users, system_heartbeats, alert_throttles, ops_check_results RESTART IDENTITY CASCADE`;
 }
 
 let counter = 0;
@@ -52,4 +52,20 @@ export async function createTenant(
     ...createTenantContext({ userId: user.id, workspaceId: workspace.id, role }),
     slug: workspace.slug,
   };
+}
+
+/**
+ * Test shortcut for `pnpm admin:grant` without the TOTP possession check (tested on its
+ * own in admin-grant.test.ts): the same database path — the transaction-local grant marker
+ * the users trigger requires. The account must already have a verified email and
+ * two-factor on, or the database refuses.
+ */
+export async function grantPlatformAdminForTest(
+  system: PrismaClient,
+  userId: string,
+): Promise<void> {
+  await system.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT set_config('flexibx.platform_admin_grant', ${userId}, true)`;
+    await tx.user.update({ where: { id: userId }, data: { isPlatformAdmin: true } });
+  });
 }

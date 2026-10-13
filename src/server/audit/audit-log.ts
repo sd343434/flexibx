@@ -27,6 +27,11 @@ export const AUDIT_ACTIONS = [
   "user.mfa_backup_codes_regenerated",
   "user.mfa_sign_in",
   "user.mfa_reset_by_operator",
+  // Platform administrators (docs/runbooks/ADMIN_PROVISIONING.md). Metadata: operator,
+  // redacted reason, denial code — never codes or secrets.
+  "platform_admin.granted",
+  "platform_admin.grant_denied",
+  "platform_admin.revoked",
   // Marketing Core (Phase 3).
   "brand.created",
   "brand.updated",

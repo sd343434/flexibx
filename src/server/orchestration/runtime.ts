@@ -10,7 +10,9 @@ import { logger } from "../logger";
 import type { Alert } from "../monitoring/alert-sink";
 import { alert } from "../monitoring/alerts";
 import { recordJobFinished, recordJobStarted } from "../monitoring/heartbeat";
+import { runLedgerIntegrityCheck } from "../monitoring/ledger-integrity";
 import { collectOpsStatus } from "../monitoring/ops-status";
+import { ledgerIntegrityIntervalMs } from "../monitoring/ops-status-service";
 
 import type { AdAdapters } from "../ads/adapter";
 import {
@@ -176,11 +178,18 @@ async function bestEffort(name: string, work: () => Promise<unknown>): Promise<v
 }
 
 /**
- * After every tick: the heartbeat (GET /api/internal/ops-status reads it), an alert for
- * failed phases, and alerts for stuck states the tick could not clear (credit holds,
- * sends, publishes). Alerts are throttled per key (alert-sink.ts).
+ * After every tick: the credit-ledger integrity check when it is due (once per
+ * LEDGER_INTEGRITY_INTERVAL_MINUTES across all processes; read-only, bounded), the
+ * heartbeat (GET /api/internal/ops-status reads it), an alert for failed phases, and
+ * alerts for every non-ok operational check — stuck states the tick could not clear
+ * (credit holds, sends, publishes) and ledger inconsistencies. Alerts are throttled per
+ * key (alert-sink.ts).
  */
 async function reportTick(failedPhases: readonly string[], at: Date): Promise<void> {
+  const intervalMs = ledgerIntegrityIntervalMs();
+  await bestEffort("ledger_integrity", () =>
+    runLedgerIntegrityCheck(getSystemDb(), at, { intervalMs }),
+  );
   await bestEffort("heartbeat_finish", () =>
     recordJobFinished(getSystemDb(), "automation-tick", failedPhases, at),
   );
@@ -194,7 +203,9 @@ async function reportTick(failedPhases: readonly string[], at: Date): Promise<vo
     });
   }
   await bestEffort("ops_status", async () => {
-    const status = await collectOpsStatus(getSystemDb(), at);
+    const status = await collectOpsStatus(getSystemDb(), at, {
+      ledgerIntegrityIntervalMs: intervalMs,
+    });
     for (const check of status.checks) {
       // The tick's own heartbeat checks are for external monitors (this tick is running).
       if (check.level === "ok" || check.name.startsWith("automation_tick_")) continue;

@@ -97,9 +97,11 @@ only** (Flexibx staff; not a workspace role, no self-service, no customer access
   verification (§9), re-read from the database on every page and action
   (`src/server/admin/platform-admin.ts`). Revoking the
   flag takes effect on the next request.
-- **How the flag is set:** only by an operator, directly in the database (§5). It cannot
-  be set through any request (`input: false` in Better Auth, tested), by sign-up or seed,
-  and a static test fails if application code writes it.
+- **How the flag is set:** only by an operator with `pnpm admin:grant` (§5), which
+  requires a current code from the account's own authenticator; a database trigger refuses
+  any other change to `true` and clears the flag when two-step verification is turned off.
+  It cannot be set through any request (`input: false` in Better Auth, tested), by sign-up
+  or seed, and a static test fails if other application code writes it.
 - **Everyone else** — signed-out visitors included — gets the standard 404 for every
   page, and `NOT_FOUND` for every action, before any input is validated (no field details
   leak). The pages are `noindex`.
@@ -124,25 +126,11 @@ only** (Flexibx staff; not a workspace role, no self-service, no customer access
 
 ## 5. Operator procedures
 
-**Grant platform admin** (production; record who and when):
-
-1. The person signs up (verified email) and turns on two-step verification on
-   `/{locale}/account/security` **during a live call with the operator** (video, known
-   colleague): the operator watches the authenticator on the person's own device show the
-   code that completes the setup. This closes the window in which someone holding only the
-   password could register their own authenticator on a future administrator account. If
-   the page says two-step verification is already on and the person did not turn it on,
-   treat the account as compromised: `pnpm admin:mfa-reset`, new password, enroll again
-   during the call.
-2. Then, only if both are true in the database:
-
-```sql
-UPDATE users SET is_platform_admin = true
-WHERE email = '<staff email>' AND email_verified AND two_factor_enabled;
-```
-
-If the account's two-step verification is ever reset (`pnpm admin:mfa-reset`), repeat
-step 1 the same way before the administrator uses the admin area again.
+**Grant platform admin:** `docs/runbooks/ADMIN_PROVISIONING.md` — identity verified
+out of band, the person enrolls two-step verification during the call, then
+`pnpm admin:grant` with the current code read from their own authenticator (standard
+input, never the command line). A two-step reset (`pnpm admin:mfa-reset`) or disabling
+two-step verification removes the flag; re-enrolling does not restore it — grant again.
 
 Revoke with `SET is_platform_admin = false`. Keep the list of administrators minimal.
 

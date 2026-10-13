@@ -2108,6 +2108,28 @@ model SystemHeartbeat {
   @@map("system_heartbeats")
 }
 
+/// Last result of each periodic consistency check run by the scheduled tick (e.g.
+/// `credit-ledger-integrity`). Counts only, never row content. Also the run claim: a run
+/// starts only when the previous one started at least one interval ago.
+model OpsCheckResult {
+  name        String    @id @db.VarChar(80)
+  /// `running` | `ok` | `violations` | `error`.
+  status      String    @db.VarChar(20)
+  /// Violation counts of the last completed run (check name → count).
+  counts      Json      @default("{}")
+  startedAt   DateTime  @map("started_at") @db.Timestamptz(3)
+  /// End of the last COMPLETED run (`ok` or `violations`); null = never completed.
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// End of the last run, whatever its outcome.
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(3)
+  durationMs  Int?      @map("duration_ms")
+  /// `timeout` | `database_error` when the last run failed (no message, no SQL).
+  errorCode   String?   @map("error_code") @db.VarChar(40)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("ops_check_results")
+}
+
 /// When each alert key was last delivered, so a recurring problem alerts once per interval
 /// across every process (web server, CLI runs). Global/system table; keys and counts only.
 model AlertThrottle {

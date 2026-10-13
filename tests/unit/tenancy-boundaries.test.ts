@@ -100,18 +100,25 @@ describe("tenancy boundaries", () => {
     ]);
   });
 
-  it("never sets the platform admin flag from application code", () => {
-    // Platform administrators are granted by an operator directly in the database
-    // (docs/ARCHITECTURE.md). Every mention of the flag is a reviewed read; nothing writes it.
+  it("sets the platform admin flag only in the grant workflow", () => {
+    // Platform administrators are granted only by `pnpm admin:grant`
+    // (docs/runbooks/ADMIN_PROVISIONING.md), which the database enforces. Every other
+    // mention of the flag is a reviewed read.
     const scanned = [...files, "prisma/seed.ts"];
     const mentions = scanned.filter((path) => /isPlatformAdmin|is_platform_admin/.test(read(path)));
     expect(mentions.sort()).toEqual([
       // Pure gate decision over the account state (reads a field of its input).
       "src/server/admin/platform-admin-access.ts",
+      // THE grant (proof of possession, grant marker, audit): the only writer.
+      "src/server/admin/platform-admin-grant.ts",
       // Read-only lookup: `select: { isPlatformAdmin: true, emailVerified: true, … }`.
       "src/server/admin/platform-admin.ts",
+      // Read-only: whether the user was an administrator (to audit the revocation).
+      "src/server/auth/auth-actions.ts",
       // Better Auth field declaration with `input: false` (requests cannot set it).
       "src/server/auth/auth-config.ts",
+      // Read-only: whether the reset account was an administrator (audit).
+      "src/server/auth/mfa-reset.ts",
       // Doc comment only.
       "src/server/auth/session.ts",
     ]);
@@ -121,7 +128,22 @@ describe("tenancy boundaries", () => {
         read(path).replace(/^\s*(\/\/|\*|\/\*).*$/gm, ""),
       ),
     );
-    expect(writes).toEqual([]);
+    expect(writes).toEqual(["src/server/admin/platform-admin-grant.ts"]);
+    // …and it writes `true` only after the code check, under the grant marker.
+    const grant = read("src/server/admin/platform-admin-grant.ts");
+    for (const marker of [
+      "verifyTotpCode(secret, code, now)",
+      "flexibx.platform_admin_grant",
+      "isPlatformAdmin: true",
+    ]) {
+      expect(grant.indexOf(marker), marker).toBeGreaterThan(0);
+    }
+    expect(grant.indexOf("verifyTotpCode(secret, code, now)")).toBeLessThan(
+      grant.indexOf("flexibx.platform_admin_grant"),
+    );
+    expect(grant.indexOf("flexibx.platform_admin_grant")).toBeLessThan(
+      grant.indexOf("isPlatformAdmin: true"),
+    );
   });
 
   it("keeps the bounded (also unguarded) retention pool to the retention runtime", () => {

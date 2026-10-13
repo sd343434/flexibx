@@ -36,10 +36,23 @@ engineering lead reviews the drill record. A failed or missing backup is an inci
 ## 3. Taking a backup
 
 ```bash
-# Credentials: prefer ~/.pgpass or PGPASSWORD over a password inside the URL.
-BACKUP_DATABASE_URL='postgresql://backup_user@db-host:5432/flexibx' \
+BACKUP_DATABASE_URL='postgresql://backup_user@db-host:5432/flexibx?sslmode=verify-full' \
   scripts/ops/db-backup.sh /secure/backups/flexibx
 ```
+
+**Credentials never reach a command line.** The three scripts (`scripts/ops/lib/pgenv.sh`)
+read the URL from the environment, turn it into libpq variables (`PGHOST`, `PGPORT`,
+`PGUSER`, `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLCRL`,
+`PGCONNECT_TIMEOUT`, `PGAPPNAME`, `PGOPTIONS`, `PGTARGETSESSIONATTRS`) and write a
+password from the URL to a temporary `PGPASSFILE` (mode 600, private directory, removed
+on exit, failure or interrupt; it takes precedence over `PGPASSWORD`). A URL without a
+password uses `~/.pgpass` or `PGPASSWORD` as usual. pg_dump, psql and pg_restore get no
+URL, host or password argument (pg_restore gets the confirmed database name only), and the
+URL variable is not passed on to them. The scripts **refuse** (exit 2, without printing
+the URL) a URL they cannot map exactly: another scheme, several hosts, a repeated or
+unknown parameter (including `pgbouncer` — back up through a direct connection), or a
+`schema` other than `public`. Prisma pool parameters (`connection_limit`, `pool_timeout`,
+`socket_timeout`) are ignored. Needs `node` on the host (URL parsing).
 
 Output (one JSON line): dump path, size, SHA-256, table count. Files (mode 600, in a mode
 700 directory, refused inside the repository):
@@ -105,7 +118,11 @@ Checks (each prints a count; all must be 0 / "match"):
 - `ledger_guard_triggers_missing` — the ledger's append-only / same-workspace triggers exist;
 - `constraints_not_validated` — no constraint restored as NOT VALID;
 - `orphan_sessions`, `orphan_two_factors`;
-- `prisma migrate status` reports the schema up to date with the repository.
+- `prisma_migrations` — every repository migration applied with the checksum Prisma
+  recorded (SHA-256 of its `migration.sql`), none pending, modified or unknown (what
+  `prisma migrate status` reports, checked in SQL: Prisma's schema engine would receive
+  the URL, password included, on its command line). A connection or query failure is
+  `FAILED` (exit 1), never a pass.
 
 Then, manually: sign in as an operator account (password + second factor), open one
 workspace, check its credit balance and the last audit entries match expectations.
@@ -152,6 +169,27 @@ enrollment and a heartbeat row; 57 tables):
 | Restore with the `.sha256` file missing                           | Refused                                                          |
 | Restore + verify                                                  | All checks 0, 57 tables match, two-factor rows restored          |
 | Verify after adding an account with credits but no ledger entry   | FAILED (`credit_balance_vs_ledger 1`)                            |
+
+Phase C.1 re-run (2026-10-13, after moving credentials off the command line; throwaway
+`flexibx_c1_test` as source, `flexibx_c1_restore` as target, a throwaway login role with a
+random 26-character password containing `:`, `@`, `/` and `\`, all dropped afterwards; a
+sampler recorded the command line of every pg_dump / psql / pg_restore / ops-script
+process during the run):
+
+| Step                                                               | Result                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Backup (`sslmode`, `application_name`, `schema=public` in the URL) | OK, 57 tables                                                 |
+| Restore into the empty target                                      | `RESTORED`, 57 tables                                         |
+| Verify                                                             | `VERIFIED`: counts match, all checks 0, 27 migrations applied |
+| Restore again into the now non-empty target                        | Refused (`target database is not empty`), exit 2              |
+| Verify / backup against a closed port                              | `FAILED`, exit 1                                              |
+| Password or URL in any sampled command line / output               | none                                                          |
+| Temporary password directories left behind                         | none                                                          |
+
+Fake-command tests (`tests/unit/ops-db-scripts.test.ts`) cover the argument and output
+checks for all three scripts, the password file mode and escaping, option mapping,
+cleanup on failure, every refusal case, and a verify that cannot pass on a connection
+failure or a pending / modified / unknown migration.
 
 Not tested (needs the real infrastructure): PITR, provider snapshots, object-storage
 versioning/replication restore, restore time at production size, cross-region copies.

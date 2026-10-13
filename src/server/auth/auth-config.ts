@@ -11,6 +11,7 @@ import type { Mailer, MailMessage } from "../mail/mailer";
 import { redactString } from "../redact";
 
 import { betterAuthCustomRules, RATE_LIMIT_CHECKPOINT_PREFIX } from "./rate-limit-policy";
+import { claimTotpCode } from "./totp-replay";
 
 // Pure factory (no `server-only`), so integration tests can build the exact production
 // configuration. Application code uses `getAuth()` from ./auth.
@@ -84,6 +85,22 @@ export const SECOND_FACTOR_PATHS: ReadonlySet<string> = new Set([
  */
 export function sessionMfaMarker(path: string | undefined, now: Date): Date | null {
   return path !== undefined && SECOND_FACTOR_PATHS.has(path) ? now : null;
+}
+
+/**
+ * For a session about to be created by a TOTP sign-in challenge: `{ code }` (null when the
+ * code cannot be read — the caller refuses the session). Null when this session creation
+ * is not a TOTP sign-in (enrollment runs with a session and is claimed by two-factor.ts
+ * afterwards). A missing or unknown session context counts as a sign-in: fail closed.
+ */
+export function signInTotpCode(
+  context: { readonly path?: string; readonly body?: unknown; readonly context?: unknown } | null,
+): { readonly code: string | null } | null {
+  if (context?.path !== "/two-factor/verify-totp") return null;
+  const inner = context.context as { session?: unknown } | undefined;
+  if (inner?.session !== undefined && inner.session !== null) return null;
+  const code = (context.body as { code?: unknown } | undefined)?.code;
+  return { code: typeof code === "string" && code !== "" ? code : null };
 }
 
 /**
@@ -345,10 +362,21 @@ export function createAuth(input: AuthConfigInput) {
     databaseHooks: {
       session: {
         create: {
-          before: (session, context) =>
-            Promise.resolve({
-              data: { ...session, mfaVerifiedAt: sessionMfaMarker(context?.path, new Date()) },
-            }),
+          // Runs before the session row and the cookie exist. A sign-in by TOTP claims the
+          // code here (atomic, once per account): a replayed code returns false, so Better
+          // Auth creates no session and sets no cookie; a database error throws, with the
+          // same effect. Nothing has to be cleaned up afterwards.
+          before: async (session, context) => {
+            const now = new Date();
+            const challenge = signInTotpCode(context);
+            if (challenge !== null) {
+              if (challenge.code === null) return false;
+              if (!(await claimTotpCode(input.db, session.userId, challenge.code, now))) {
+                return false;
+              }
+            }
+            return { data: { ...session, mfaVerifiedAt: sessionMfaMarker(context?.path, now) } };
+          },
         },
       },
     },

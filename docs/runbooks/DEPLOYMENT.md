@@ -20,6 +20,11 @@ development only.
   deploy → contract): add columns/tables first, switch code, remove old ones in a later
   release. Then a bad app release is rolled back by redeploying the previous image, with
   no database change.
+- Prisma's schema engine (`migrate deploy`, `migrate status`) receives `DATABASE_URL`,
+  password included, **on its command line** (visible in the process list of that
+  machine). Run Prisma commands only in the one-off migrate container or on a host no
+  other user can inspect; the backup scripts avoid Prisma for this reason
+  (`docs/runbooks/BACKUP_RESTORE.md` § 3).
 - Never edit a migration file after it has been applied anywhere (its checksum is
   recorded); fix with a new migration.
 - Never apply migrations to production from a laptop or by hand-written SQL outside a
@@ -99,6 +104,13 @@ leaves at most some of the new, still unused objects — § 3):
   `sessions.mfa_verified_at` (nullable), table `two_factors`.
 - `20261014100000_ops_monitoring`: tables `system_heartbeats`, `alert_throttles`.
 - `20261014110000_totp_replay_guard`: table `two_factor_used_codes`.
+- `20261014120000_platform_admin_grant_guard`: trigger on `users` (the platform-admin flag
+  is set only by `pnpm admin:grant`, and cleared when two-step verification is turned
+  off). **Clears the flag on every existing administrator without two-step
+  verification** — re-grant them after they enroll (`docs/runbooks/ADMIN_PROVISIONING.md`).
+- `20261014130000_ops_check_results`: table `ops_check_results` (results of the periodic
+  credit-ledger integrity check). Optional variable `LEDGER_INTEGRITY_INTERVAL_MINUTES`
+  (default 60).
 
 Rehearsed on throwaway databases (2026-10-12): applied to an empty database and to a
 database at the previous release's schema holding users, sessions, memberships and audit

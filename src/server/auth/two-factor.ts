@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { APIError } from "better-auth/api";
 import { z } from "zod";
 
@@ -9,6 +7,9 @@ import { AppError } from "../errors/app-error";
 
 import type { Auth } from "./auth-config";
 import type { RateLimiter } from "./rate-limit";
+import { claimTotpCode } from "./totp-replay";
+
+export { claimTotpCode, USED_TOTP_CODE_TTL_MS } from "./totp-replay";
 
 // Two-factor authentication (TOTP + single-use backup codes) through Better Auth's
 // two-factor plugin. These functions are Flexibx's only entry points: the plugin's HTTP
@@ -19,7 +20,9 @@ import type { RateLimiter } from "./rate-limit";
 //   leaves a signed, 10-minute challenge cookie. `verifySignInChallenge` turns it into a
 //   session (5 attempts per challenge, 10 consecutive failures lock the factor for 15
 //   minutes — Better Auth). That session carries `mfaVerifiedAt` (auth-config.ts). Each
-//   TOTP code is accepted once (claimTotpCode), not again within its validity window.
+//   TOTP code is accepted once: the code is claimed (totp-replay.ts) inside the session
+//   creation itself (auth-config.ts, `session.create.before`), BEFORE the session row and
+//   cookie exist — a replay or a database error leaves no session behind.
 // - Enrollment: password → secret + backup codes shown once → first valid code enables
 //   two-factor and replaces the session with one that carries `mfaVerifiedAt`.
 // - Disable / regenerate backup codes: password required; disabling clears the marker
@@ -116,48 +119,13 @@ export async function verifySignInChallenge(
     const code = apiErrorCode(error);
     if (code === "INVALID_CODE" || code === "INVALID_BACKUP_CODE")
       return { status: "INVALID_CODE" };
+    // The session hook refused the session: this TOTP code was already used (replay).
+    if (code === "FAILED_TO_CREATE_SESSION") return { status: "INVALID_CODE" };
     if (code === "ACCOUNT_TEMPORARILY_LOCKED") return { status: "LOCKED" };
     if (isClientError(error)) return { status: "CHALLENGE_EXPIRED" };
     throw error;
   }
-  if (method === "totp") {
-    // Better Auth accepts a TOTP code again while it is valid; Flexibx accepts each code
-    // once. The session Better Auth just created is removed again if the code was used.
-    let fresh = false;
-    try {
-      fresh = await claimTotpCode(deps.db, result.user.id, normalized, new Date());
-    } finally {
-      if (!fresh && result.token !== undefined) {
-        await deps.db.session.deleteMany({ where: { token: result.token } });
-      }
-    }
-    if (!fresh) return { status: "INVALID_CODE" };
-  }
   return { status: "SIGNED_IN", userId: result.user.id };
-}
-
-/** How long a used TOTP code is remembered: longer than its acceptance window (±1 step). */
-export const USED_TOTP_CODE_TTL_MS = 3 * 60_000;
-
-/**
- * Records that `code` was used by `userId`; false when it already was (a replay). Atomic:
- * of two concurrent uses of one code exactly one gets true. Expired records of the user
- * are removed first.
- */
-export async function claimTotpCode(
-  db: PrismaClient,
-  userId: string,
-  code: string,
-  now: Date,
-): Promise<boolean> {
-  const codeHash = createHash("sha256").update(`${userId}:${code}`).digest("hex");
-  await db.twoFactorUsedCode.deleteMany({ where: { userId, expiresAt: { lt: now } } });
-  const inserted = await db.$queryRaw<{ userId: string }[]>`
-    INSERT INTO "two_factor_used_codes" ("user_id", "code_hash", "expires_at")
-    VALUES (${userId}::uuid, ${codeHash}, ${new Date(now.getTime() + USED_TOTP_CODE_TTL_MS)})
-    ON CONFLICT ("user_id", "code_hash") DO NOTHING
-    RETURNING "user_id" AS "userId"`;
-  return inserted.length === 1;
 }
 
 export type EnrollmentStart =

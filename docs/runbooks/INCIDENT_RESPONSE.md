@@ -46,6 +46,16 @@ Ops-status checks: `automation_tick_last_success_age_seconds` (critical ≥ 900 
 `social_replies_failed_24h`, `social_posts_failed_24h` — warning at 10;
 `ai_generations_failed_1h` — warning at 5.
 
+Credit-ledger integrity (`src/server/monitoring/ledger-integrity.ts`): the scheduled tick
+re-checks the ledger every `LEDGER_INTEGRITY_INTERVAL_MINUTES` (default 60; once across
+all processes; one read-only transaction with a 20 s statement timeout; counts only), and
+ops-status reports the stored result — `credit_ledger_balance_without_ledger` (non-zero
+balance, no ledger entry), `credit_ledger_balance_mismatch` (balance ≠ last ledger
+entry), `credit_ledger_held_mismatch` (held ≠ open holds) — critical at 1;
+`credit_ledger_integrity_check_failed` (last run hit a timeout or database error: state
+unknown) — critical; `credit_ledger_integrity_age_seconds` — warning when it never
+completed or is older than two intervals + 15 min.
+
 The tick only alerts while it runs: a stopped scheduler is only visible to an **external**
 monitor polling ops-status. Configure one before launch.
 
@@ -114,6 +124,23 @@ $AUTOMATION_CRON_SECRET`, not rate limited: 12 calls / 10 min). Run one tick by 
 - **Record**: holds released (count), workspaces affected, any manual adjustment (ledger
   entry id, admin who made it).
 
+### 4.3a Credit ledger inconsistency
+
+- **Detect**: `ops:credit_ledger_balance_without_ledger`, `…_balance_mismatch` or
+  `…_held_mismatch` (critical), or `credit_ledger_integrity_check_failed`.
+- **Contain**: treat balances as untrusted until explained. If the counts grow, consider
+  `AI_PROVIDER=disabled` (no new charges) while investigating. Do not deploy migrations.
+- **Investigate**: run `scripts/ops/sql/integrity.sql` (read-only) on a replica or the
+  database to list the affected workspaces; compare with recent credit audit entries
+  (grants, plan changes) and deploys. A `check_failed` with `error_code = 'timeout'` in
+  `ops_check_results` means the check could not finish (lock contention or load) — rerun
+  at a quiet time before concluding anything.
+- **Recover**: **never** edit balances or ledger rows by hand; corrections go through the
+  admin credits page (audited ledger entry). A systematic cause (code defect) is fixed
+  forward, then corrected per workspace.
+- **Verify**: the next run (or after `LEDGER_INTEGRITY_INTERVAL_MINUTES`) reports 0 for
+  all three counts.
+
 ### 4.4 Failed or uncertain sends (replies, posts, WhatsApp)
 
 - **Detect**: `ops:social_replies_uncertain`, `ops:social_posts_uncertain`,
@@ -139,7 +166,9 @@ $AUTOMATION_CRON_SECRET`, not rate limited: 12 calls / 10 min). Run one tick by 
   `user.password_*`, `storage.*`, credit grants and plan changes) nobody claims, unusual logins, a
   report from outside, secrets found in a public place.
 - **Contain** (in this order, as fast as possible):
-  1. Remove `is_platform_admin` from any administrator not verified as safe.
+  1. Remove `is_platform_admin` from any administrator not verified as safe
+     (`docs/runbooks/ADMIN_PROVISIONING.md` § 3). Check `platform_admin.granted` audit
+     entries against the access tickets.
   2. End sessions: `DELETE FROM sessions WHERE user_id = '<id>';` (or all sessions:
      `TRUNCATE sessions;` — everyone signs in again).
   3. If a session/cookie secret may be exposed, rotate `AUTH_SECRET` (§ 4.6 — it also
@@ -222,10 +251,12 @@ ads).
     --operator "<operator name>" --reason "<ticket>: identity verified by <how>"
   ```
 
-  Two-factor is removed, **every session of the account ends**, and the reset is in the
-  audit log (`user.mfa_reset_by_operator`, operator and reason). The administrator signs in
-  with the password and enrolls again — during a live call with the operator
-  (docs/STORAGE_PROVIDERS.md § 5) — before the admin area opens.
+  Two-factor is removed, **every session of the account ends**, the platform-admin flag
+  is removed by the database (`platform_admin.revoked`, `cause: mfa_reset`), and the reset
+  is in the audit log (`user.mfa_reset_by_operator`, operator and reason). The person signs
+  in with the password and enrolls again during a live call with the operator; admin
+  authority comes back **only** through a new grant
+  (`docs/runbooks/ADMIN_PROVISIONING.md` § 2) — re-enrolling alone does not restore it.
 
 ## 5. After every incident: verification checklist
 

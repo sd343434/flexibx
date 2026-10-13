@@ -526,7 +526,9 @@ Full description: [`STORAGE_PROVIDERS.md`](STORAGE_PROVIDERS.md). Rules later wo
   checks of the target and of every provider holding objects. Data migration between
   providers does not exist yet.
 - **Platform admin** (`/{locale}/admin`) is separate from workspace roles: verified user
-  with `users.is_platform_admin`, set only by an operator in the database, re-checked on
+  with `users.is_platform_admin`, set only by `pnpm admin:grant` (proof of the enrolled
+  authenticator; database trigger refuses any other grant and clears the flag when
+  two-factor is turned off — `docs/runbooks/ADMIN_PROVISIONING.md`), re-checked on
   every request; everyone else gets 404. `src/server/admin/` is the place for further
   internal admin sections.
 - Wasabi is the **intended** initial provider; it is tested with test doubles only.
@@ -808,7 +810,13 @@ backup_codes_regenerated|reset_by_operator` (method only, never secrets).
   delivery failures, retention failures. Heartbeats in `system_heartbeats`.
   `GET /api/internal/ops-status` (bearer `OPS_STATUS_SECRET`, 200/503, counts only) is
   for an external uptime monitor — the only way to notice a scheduler that stopped.
+  Credit-ledger integrity is part of it: the tick re-checks balances against the ledger
+  and the open holds every `LEDGER_INTEGRITY_INTERVAL_MINUTES` (read-only transaction,
+  statement timeout, one run across processes via `ops_check_results`); ops-status
+  reports the stored counts (critical), a failed run (critical) and a stale result
+  (warning) — never computed per request.
 - **Backups**: `scripts/ops/db-backup.sh`, `db-restore.sh` (empty target only, checksum
   and name confirmation), `db-verify.sh` (row counts, ledger/hold invariants, triggers,
   `migrate status`). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
-  `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`.
+  `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`, `ADMIN_PROVISIONING.md` (Phase C.1 record:
+  `PHASE_C_1_AUDIT.md`).

@@ -28,7 +28,12 @@ describe("platform admin provisioning", () => {
     const mentions = filesUnder(MIGRATIONS).filter((path) =>
       read(path).includes("is_platform_admin"),
     );
-    expect(mentions).toEqual([join(MIGRATIONS, "20261006201052_init", "migration.sql")]);
+    expect(mentions).toEqual([
+      join(MIGRATIONS, "20261006201052_init", "migration.sql"),
+      // The grant guard (trigger): refuses the flag outside the workflow, revokes it with
+      // two-factor, and only ever sets it to false.
+      join(MIGRATIONS, "20261014120000_platform_admin_grant_guard", "migration.sql"),
+    ]);
     const sql = read(mentions[0] ?? "");
     expect(sql).toMatch(/"is_platform_admin" BOOLEAN NOT NULL DEFAULT false/);
     for (const path of filesUnder(MIGRATIONS)) {
@@ -48,13 +53,24 @@ describe("platform admin provisioning", () => {
     );
   });
 
-  it("documents the operator procedure: verified email and two-factor required, revocation", () => {
+  it("documents the grant workflow (no hand-written grant), and revocation", () => {
     const doc = read("docs/STORAGE_PROVIDERS.md");
-    // Granted only to an account that already has two-step verification on.
-    expect(doc).toContain(
-      "UPDATE users SET is_platform_admin = true\nWHERE email = '<staff email>' AND email_verified AND two_factor_enabled;",
-    );
+    expect(doc).toContain("docs/runbooks/ADMIN_PROVISIONING.md");
     expect(doc).toContain("Revoke with `SET is_platform_admin = false`");
+    const runbook = read("docs/runbooks/ADMIN_PROVISIONING.md");
+    expect(runbook).toContain("pnpm admin:grant --email <staff email> --confirm <staff email>");
+    for (const text of [doc, runbook, read("docs/runbooks/INCIDENT_RESPONSE.md")]) {
+      expect(text).not.toMatch(/SET is_platform_admin = true/);
+    }
+  });
+
+  it("the database guards the flag (trigger in the guard migration)", () => {
+    const sql = read(
+      join(MIGRATIONS, "20261014120000_platform_admin_grant_guard", "migration.sql"),
+    );
+    expect(sql).toMatch(/CREATE TRIGGER "?users_platform_admin_grant_guard"?/);
+    expect(sql).toContain("current_setting('flexibx.platform_admin_grant', true)");
+    expect(sql).toMatch(/BEFORE INSERT OR UPDATE OF/);
   });
 
   it("documents MFA and fresh-session checks as enforced, and the code enforces them", () => {

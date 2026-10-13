@@ -11,6 +11,7 @@ import {
   createAuth,
   SECOND_FACTOR_PATHS,
   sessionMfaMarker,
+  signInTotpCode,
 } from "@/server/auth/auth-config";
 import { manualEntryKey, normalizeBackupCode, normalizeTotpCode } from "@/server/auth/two-factor";
 import { MemoryMailer } from "@/server/mail/mailer";
@@ -75,6 +76,29 @@ describe("session second-factor marker", () => {
     ]) {
       expect(sessionMfaMarker(path, NOW), String(path)).toBeNull();
     }
+  });
+});
+
+describe("TOTP sign-in claim (session.create.before)", () => {
+  const path = "/two-factor/verify-totp";
+  it("claims the code of a sign-in challenge (no session yet)", () => {
+    expect(signInTotpCode({ path, body: { code: "123456" }, context: { session: null } })).toEqual({
+      code: "123456",
+    });
+  });
+  it("fails closed when the context is unknown or the code unreadable", () => {
+    expect(signInTotpCode({ path, body: { code: "123456" } })).toEqual({ code: "123456" });
+    expect(signInTotpCode({ path, body: {}, context: { session: null } })).toEqual({ code: null });
+    expect(signInTotpCode({ path, body: { code: 123456 }, context: {} })).toEqual({ code: null });
+  });
+  it("leaves enrollment (a session exists) and every other path alone", () => {
+    expect(
+      signInTotpCode({ path, body: { code: "123456" }, context: { session: { id: "s" } } }),
+    ).toBeNull();
+    for (const other of ["/sign-in/email", "/two-factor/verify-backup-code", "/change-password"]) {
+      expect(signInTotpCode({ path: other, body: { code: "123456" } }), other).toBeNull();
+    }
+    expect(signInTotpCode(null)).toBeNull();
   });
 });
 

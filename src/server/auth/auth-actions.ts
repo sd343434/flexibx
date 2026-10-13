@@ -45,6 +45,15 @@ async function deps(): Promise<AccountSecurityDeps> {
   return { auth: getAuth(), limit: getRateLimiter(), headers: new Headers(await headers()) };
 }
 
+/** Read-only: whether the user currently holds the platform-admin flag. */
+async function isPlatformAdminFlagSet(userId: string): Promise<boolean> {
+  const row = await getSystemDb().user.findUnique({
+    where: { id: userId },
+    select: { isPlatformAdmin: true },
+  });
+  return row?.isPlatformAdmin === true;
+}
+
 async function twoFactorDeps(): Promise<TwoFactorDeps> {
   return { ...(await deps()), db: getSystemDb() };
 }
@@ -196,8 +205,14 @@ export const disableTwoFactorAction = withAction({
   input: z.object({ password: z.string() }),
   handler: async (input) => {
     const user = await requireUser();
+    const wasAdmin = await isPlatformAdminFlagSet(user.id);
     const result = await disableTwoFactor(await twoFactorDeps(), user.id, input);
-    if (result.status === "DISABLED") await userAudit(user.id, "user.mfa_disabled");
+    if (result.status === "DISABLED") {
+      await userAudit(user.id, "user.mfa_disabled");
+      // The database removed the administrator flag with two-factor (migration
+      // 20261014120000); getting it back needs a new grant (ADMIN_PROVISIONING.md).
+      if (wasAdmin) await userAudit(user.id, "platform_admin.revoked", { cause: "mfa_disabled" });
+    }
     return result;
   },
 });

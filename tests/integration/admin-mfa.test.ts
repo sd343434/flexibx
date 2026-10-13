@@ -24,7 +24,7 @@ import { claimTotpCode, USED_TOTP_CODE_TTL_MS } from "@/server/auth/two-factor";
 import { getSystemDb } from "@/server/db/client";
 import { AppError } from "@/server/errors/app-error";
 
-import { createTestDb, resetDatabase } from "./helpers";
+import { createTestDb, grantPlatformAdminForTest, resetDatabase } from "./helpers";
 import { totp, wrongCode } from "./totp";
 
 const browser = vi.hoisted(() => {
@@ -120,11 +120,10 @@ async function newAccount(options: { admin?: boolean } = {}) {
   const email = `mfa-${String(counter)}-${Date.now().toString(36)}@example.com`;
   browser.jar.clear();
   await outcome(submitSignUp("en", null, form({ name: "Staff", email, password: PASSWORD })));
-  const user = await system.user.update({
-    where: { email },
-    data: { isPlatformAdmin: options.admin ?? false, emailVerified: true },
-  });
-  return { id: user.id, email };
+  const user = await system.user.update({ where: { email }, data: { emailVerified: true } });
+  // Administrators are granted after they enroll (enroll() below): the database refuses
+  // the flag on an account without two-factor.
+  return { id: user.id, email, admin: options.admin ?? false };
 }
 
 /** Password step only. Returns where the sign-in form sent the browser. */
@@ -141,23 +140,33 @@ const restore = (jar: Map<string, string>) => {
   for (const [name, value] of jar) browser.jar.set(name, value);
 };
 
-/** Enrolls the signed-in browser's account; returns the setup key and backup codes. */
-async function enroll() {
+/**
+ * Enrolls the signed-in browser's account; returns the setup key and backup codes. For an
+ * administrator account, the grant follows (the operator step).
+ */
+async function enroll(account?: { id: string; admin: boolean }) {
   const started = await submitStartEnrollment(null, form({ password: PASSWORD }));
   if (started === null || !("status" in started)) throw new Error(JSON.stringify(started));
   const confirmed = await outcome(
     submitConfirmEnrollment("en", null, form({ code: totp(started.manualKey) })),
   );
   expect(redirectTarget(confirmed)).toBe("/en/account/security?mfa=enabled");
+  if (account?.admin === true) await grantPlatformAdminForTest(system, account.id);
   return started;
 }
 
 describe("platform admin MFA gate", () => {
-  it("sends an administrator without two-factor to enrollment, keeps everyone else at 404", async () => {
-    const admin = await newAccount({ admin: true });
-    expect(await passwordStep(admin.email)).toBe("/en/workspaces");
-    expect(await adminPage()).toBe("/en/account/security?admin=enroll");
-    expect(await adminAccess()).toBe("FORBIDDEN");
+  it("the flag cannot exist without two-factor; non-administrators get 404", async () => {
+    const candidate = await newAccount({ admin: true });
+    // Neither a plain update nor a grant marker makes an account without two-factor an
+    // administrator (database trigger).
+    await expect(
+      system.user.update({ where: { id: candidate.id }, data: { isPlatformAdmin: true } }),
+    ).rejects.toThrow();
+    await expect(grantPlatformAdminForTest(system, candidate.id)).rejects.toThrow();
+    expect(await passwordStep(candidate.email)).toBe("/en/workspaces");
+    expect(await adminPage()).toBe(NOT_FOUND);
+    expect(await adminAccess()).toBe("NOT_FOUND");
 
     // A customer with two-factor on is still not an administrator.
     const customer = await newAccount();
@@ -166,9 +175,11 @@ describe("platform admin MFA gate", () => {
     expect(await adminPage()).toBe(NOT_FOUND);
     expect(await adminAccess()).toBe("NOT_FOUND");
 
-    // An administrator flag on an unverified email is not enough either.
-    await system.user.update({ where: { id: admin.id }, data: { emailVerified: false } });
-    await passwordStep(admin.email);
+    // A granted administrator whose email becomes unverified loses access.
+    await passwordStep(candidate.email);
+    await enroll(candidate);
+    expect(await adminAccess()).toBe("GRANTED");
+    await system.user.update({ where: { id: candidate.id }, data: { emailVerified: false } });
     expect(await adminAccess()).toBe("NOT_FOUND");
 
     // Signed out.
@@ -198,8 +209,8 @@ describe("platform admin MFA gate", () => {
       expect(row.secret).not.toContain(secret);
       expect(row.backupCodes).not.toContain(secret);
     }
-    // Pending enrollment is not enough.
-    expect(await adminAccess()).toBe("FORBIDDEN");
+    // Pending enrollment: not an administrator (yet).
+    expect(await adminAccess()).toBe("NOT_FOUND");
 
     const wrong = await submitConfirmEnrollment(
       "en",
@@ -207,12 +218,14 @@ describe("platform admin MFA gate", () => {
       form({ code: wrongCode(started.manualKey) }),
     );
     expect(wrong).toEqual({ messageKey: "auth.twoFactor.errors.invalidCode" });
-    expect(await adminAccess()).toBe("FORBIDDEN");
+    expect(await adminAccess()).toBe("NOT_FOUND");
 
     const confirmed = await outcome(
       submitConfirmEnrollment("en", null, form({ code: totp(started.manualKey) })),
     );
     expect(redirectTarget(confirmed)).toBe("/en/account/security?mfa=enabled");
+    expect(await adminAccess()).toBe("NOT_FOUND"); // enrolled, not granted
+    await grantPlatformAdminForTest(system, admin.id); // the operator step
     expect(await adminAccess()).toBe("GRANTED");
     expect(await adminPage()).toBe("rendered");
 
@@ -233,7 +246,7 @@ describe("platform admin MFA gate", () => {
   it("password alone creates no session; TOTP or a single-use backup code completes sign-in", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    const { manualKey, backupCodes } = await enroll();
+    const { manualKey, backupCodes } = await enroll(admin);
     await system.session.deleteMany({ where: { userId: admin.id } });
 
     expect(await passwordStep(admin.email)).toBe("/en/sign-in/two-factor");
@@ -255,7 +268,7 @@ describe("platform admin MFA gate", () => {
     expect(await adminAccess()).toBe("GRANTED");
 
     // Replay: the same code, still inside its validity window, signs nobody in again —
-    // not even with the right password (the session Better Auth created is removed).
+    // not even with the right password (no session is created at all).
     const sessionsBefore = await system.session.count({ where: { userId: admin.id } });
     expect(await passwordStep(admin.email)).toBe("/en/sign-in/two-factor");
     expect(await submitTwoFactor("en", null, form({ method: "totp", code: signInCode }))).toEqual({
@@ -326,7 +339,7 @@ describe("platform admin MFA gate", () => {
   it("ends a challenge after 5 wrong codes", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    const { manualKey } = await enroll();
+    const { manualKey } = await enroll(admin);
 
     await passwordStep(admin.email);
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -344,7 +357,7 @@ describe("platform admin MFA gate", () => {
   it("requires a fresh verification after 12 hours, and after a password-only session", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    await enroll();
+    await enroll(admin);
     expect(await adminAccess()).toBe("GRANTED");
 
     await system.session.updateMany({
@@ -365,7 +378,7 @@ describe("platform admin MFA gate", () => {
   it("changes need a second factor from the last hour; reading needs one from the last 12", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    await enroll();
+    await enroll(admin);
     await system.session.updateMany({
       where: { userId: admin.id },
       data: { mfaVerifiedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
@@ -391,7 +404,7 @@ describe("platform admin MFA gate", () => {
   it("disabling clears every session's marker; backup codes can be replaced", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    const { backupCodes, manualKey } = await enroll();
+    const { backupCodes, manualKey } = await enroll(admin);
     const enrollingBrowser = snapshot();
     // A second device that passed the second factor.
     await passwordStep(admin.email);
@@ -421,18 +434,30 @@ describe("platform admin MFA gate", () => {
       await system.session.count({ where: { userId: admin.id, mfaVerifiedAt: { not: null } } }),
     ).toBe(0);
     expect(await system.twoFactor.count({ where: { userId: admin.id } })).toBe(0);
-    expect(await adminPage()).toBe("/en/account/security?admin=enroll");
+    // Turning two-factor off removed the administrator flag in the same statement.
+    expect((await system.user.findUniqueOrThrow({ where: { id: admin.id } })).isPlatformAdmin).toBe(
+      false,
+    );
+    expect(await adminPage()).toBe(NOT_FOUND);
     restore(secondDevice);
-    expect(await adminAccess()).toBe("FORBIDDEN");
+    expect(await adminAccess()).toBe("NOT_FOUND");
 
-    // Enrolling again needs a new first code; sessions from before do not regain access.
+    // Enrolling again does NOT restore admin access (someone holding only the password could
+    // have done it); a new grant does — and sessions from before still do not qualify.
     await passwordStep(admin.email);
     const before = snapshot();
     await passwordStep(admin.email);
     await enroll();
+    expect(await adminAccess()).toBe("NOT_FOUND");
+    await grantPlatformAdminForTest(system, admin.id);
     expect(await adminAccess()).toBe("GRANTED");
     restore(before);
     expect(await adminAccess()).toBe("FORBIDDEN");
+    expect(
+      await system.auditLog.count({
+        where: { entityId: admin.id, action: "platform_admin.revoked" },
+      }),
+    ).toBe(1);
 
     const actions = (
       await system.auditLog.findMany({
@@ -452,7 +477,7 @@ describe("platform admin MFA gate", () => {
   it("operator reset (lost device and codes) ends all sessions and requires a new enrollment", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    await enroll();
+    await enroll(admin);
     const enrolled = snapshot();
 
     await expect(
@@ -477,7 +502,15 @@ describe("platform admin MFA gate", () => {
     expect(await adminAccess()).toBe("NOT_FOUND"); // the old session is gone
 
     expect(await passwordStep(admin.email)).toBe("/en/workspaces");
-    expect(await adminPage()).toBe("/en/account/security?admin=enroll");
+    // The reset removed the administrator flag: enrolling again is not enough.
+    expect(await adminPage()).toBe(NOT_FOUND);
+    await enroll();
+    expect(await adminAccess()).toBe("NOT_FOUND");
+    expect(
+      await system.auditLog.findFirstOrThrow({
+        where: { entityId: admin.id, action: "platform_admin.revoked" },
+      }),
+    ).toMatchObject({ metadata: { cause: "mfa_reset", operator: "ops on call" } });
     const audit = await system.auditLog.findFirstOrThrow({
       where: { entityId: admin.id, action: "user.mfa_reset_by_operator" },
     });
@@ -492,7 +525,7 @@ describe("platform admin MFA gate", () => {
     await passwordStep(admin.email);
     const passwordOnly = snapshot();
     await passwordStep(admin.email);
-    await enroll();
+    await enroll(admin);
     restore(passwordOnly);
     expect(await adminAccess()).toBe("FORBIDDEN");
 
