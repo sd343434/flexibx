@@ -98,8 +98,11 @@ only** (Flexibx staff; not a workspace role, no self-service, no customer access
   (`src/server/admin/platform-admin.ts`). Revoking the
   flag takes effect on the next request.
 - **How the flag is set:** only by an operator with `pnpm admin:grant` (§5), which
-  requires a current code from the account's own authenticator; a database trigger refuses
-  any other change to `true` and clears the flag when two-step verification is turned off.
+  requires a current code from the account's own authenticator and then calls the
+  database function `public.platform_admin_grant`; with the role model of
+  `docs/runbooks/DATABASE_ROLES.md` only the operator grant role may execute it and the
+  application's database role has no privilege on the column. A trigger clears the flag
+  when two-step verification is turned off.
   It cannot be set through any request (`input: false` in Better Auth, tested), by sign-up
   or seed, and a static test fails if other application code writes it.
 - **Everyone else** — signed-out visitors included — gets the standard 404 for every
@@ -132,7 +135,8 @@ out of band, the person enrolls two-step verification during the call, then
 input, never the command line). A two-step reset (`pnpm admin:mfa-reset`) or disabling
 two-step verification removes the flag; re-enrolling does not restore it — grant again.
 
-Revoke with `SET is_platform_admin = false`. Keep the list of administrators minimal.
+Revoke with `public.platform_admin_revoke` (ADMIN_PROVISIONING.md § 3). Keep the list of
+administrators minimal.
 
 **Enable Wasabi for new files** (only after §8 is recorded):
 

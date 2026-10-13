@@ -1,7 +1,7 @@
 // Platform-admin grant workflow (src/server/admin/platform-admin-grant.ts, `pnpm admin:grant`)
 // on the real database: proof of possession of the account's authenticator, database
 // enforcement of the flag, replay protection, audit, and revocation on MFA loss.
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -258,4 +258,79 @@ describe("pnpm admin:grant (CLI)", () => {
     expect(granted.stdout + granted.stderr).not.toContain(code);
     expect(await isAdmin(person.id)).toBe(true);
   }, 60_000);
+
+  /** Runs the CLI in a pseudo-terminal (support/pty-run.py) and types `send` at the prompt. */
+  function tty(args: readonly string[], send: string) {
+    const child = spawn("python3", ["-I", join(root, "tests/integration/support/pty-run.py")], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        NODE_ENV: "test",
+        DATABASE_URL: resolveTestDatabaseUrl(),
+        APP_URL: "http://localhost:3000",
+        AUTH_SECRET: SECRET,
+        LOG_LEVEL: "silent",
+        TERM: "xterm",
+      },
+    });
+    child.stdin.end(
+      JSON.stringify({
+        argv: [
+          join(root, "node_modules/.bin/tsx"),
+          "--import",
+          "./scripts/video-retention/register.mjs",
+          "scripts/admin/grant.ts",
+          ...args,
+        ],
+        waitFor: "Current 6-digit code",
+        send,
+        timeoutSeconds: 60,
+      }),
+    );
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    return new Promise<{ output: string; exitCode: number; sent: boolean }>((resolve) => {
+      child.on("close", () => {
+        resolve(JSON.parse(stdout) as { output: string; exitCode: number; sent: boolean });
+      });
+    });
+  }
+  /** The terminal's echo setting after the CLI exited (`stty -a`, printed by pty-run.py). */
+  const echoAfter = (output: string) => {
+    const settings = /@@STTY (.*)@@/.exec(output)?.[1]?.split(/\s+/) ?? [];
+    return settings.includes("echo") ? "on" : settings.includes("-echo") ? "off" : "unknown";
+  };
+
+  it("on a terminal: the code is not echoed, and echo is back on afterwards", async () => {
+    const person = await account({ enroll: true });
+    const args = ["--email", person.email, "--confirm", person.email, "--operator", "ops"];
+    const reasoned = [...args, "--reason", REASON];
+
+    const wrong = wrongCode(person.key);
+    const denied = await tty(reasoned, `${wrong}\r`);
+    expect(denied.sent).toBe(true);
+    expect(denied.output).toContain('"status":"DENIED"');
+    expect(denied.output).not.toContain(wrong);
+    expect(echoAfter(denied.output)).toBe("on");
+    expect(denied.exitCode).toBe(2);
+    expect(await isAdmin(person.id)).toBe(false);
+
+    const cancelled = await tty(reasoned, "12\u0003");
+    expect(cancelled.output).toContain('"status":"CANCELLED"');
+    expect(echoAfter(cancelled.output)).toBe("on");
+    expect(cancelled.exitCode).toBe(130);
+    expect(await isAdmin(person.id)).toBe(false);
+
+    const code = totp(person.key);
+    const granted = await tty(reasoned, `${code}\r`);
+    expect(granted.output).toContain('"status":"GRANTED"');
+    expect(granted.output).not.toContain(code);
+    expect(echoAfter(granted.output)).toBe("on");
+    expect(granted.exitCode).toBe(0);
+    expect(await isAdmin(person.id)).toBe(true);
+    // The audit trail never holds the code either.
+    const audit = await system.auditLog.findMany({ where: { entityId: person.id } });
+    expect(JSON.stringify(audit)).not.toContain(code);
+    expect(JSON.stringify(audit)).not.toContain(wrong);
+  }, 120_000);
 });

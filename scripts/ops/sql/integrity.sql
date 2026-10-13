@@ -1,9 +1,16 @@
 -- Post-restore integrity checks. One "check<TAB>violations" line each; every value must be
 -- 0. Reads counts only — no customer content is printed.
 
--- Every migration finished and none was rolled back.
-SELECT 'migrations_unfinished', count(*) FROM _prisma_migrations
-  WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+-- Migrations not in a clean applied state: no attempt of the migration is applied
+-- (finished and not rolled back), or an attempt failed and was never resolved (Prisma
+-- refuses to deploy until it is). An attempt that was rolled back with
+-- `prisma migrate resolve --rolled-back` and then re-applied is history, not a failure.
+-- Whether every repository migration is present and unchanged is db-verify.sh's job.
+SELECT 'migrations_unfinished', count(*) FROM (
+  SELECT migration_name FROM _prisma_migrations GROUP BY migration_name
+  HAVING NOT bool_or(finished_at IS NOT NULL AND rolled_back_at IS NULL)
+      OR bool_or(finished_at IS NULL AND rolled_back_at IS NULL)
+) unfinished;
 
 -- Credit balances match the last ledger entry of each workspace (an account without any
 -- entry must be all zero: it is created with a SUBSCRIPTION_GRANT entry when it has credits).

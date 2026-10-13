@@ -108,6 +108,12 @@ leaves at most some of the new, still unused objects — § 3):
   is set only by `pnpm admin:grant`, and cleared when two-step verification is turned
   off). **Clears the flag on every existing administrator without two-step
   verification** — re-grant them after they enroll (`docs/runbooks/ADMIN_PROVISIONING.md`).
+- `20261014140000_platform_admin_grant_functions`: SECURITY DEFINER functions
+  `platform_admin_grant` / `platform_admin_revoke` (EXECUTE revoked from PUBLIC), and the
+  guard trigger refuses any new `users` row that carries the flag. After it, apply the
+  role model (`docs/runbooks/DATABASE_ROLES.md`) through an authorized change: until then
+  only an owner-credential connection can call the functions. New optional operator
+  variable `ADMIN_GRANT_DATABASE_URL` (never in the application's environment).
 - `20261014130000_ops_check_results`: table `ops_check_results` (results of the periodic
   credit-ledger integrity check). Optional variable `LEDGER_INTEGRITY_INTERVAL_MINUTES`
   (default 60).

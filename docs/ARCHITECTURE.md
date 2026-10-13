@@ -527,8 +527,10 @@ Full description: [`STORAGE_PROVIDERS.md`](STORAGE_PROVIDERS.md). Rules later wo
   providers does not exist yet.
 - **Platform admin** (`/{locale}/admin`) is separate from workspace roles: verified user
   with `users.is_platform_admin`, set only by `pnpm admin:grant` (proof of the enrolled
-  authenticator; database trigger refuses any other grant and clears the flag when
-  two-factor is turned off — `docs/runbooks/ADMIN_PROVISIONING.md`), re-checked on
+  authenticator, then the SECURITY DEFINER function `platform_admin_grant`, executable
+  only by the operator grant role under the role model of `docs/runbooks/DATABASE_ROLES.md`;
+  a trigger clears the flag when two-factor is turned off —
+  `docs/runbooks/ADMIN_PROVISIONING.md`), re-checked on
   every request; everyone else gets 404. `src/server/admin/` is the place for further
   internal admin sections.
 - Wasabi is the **intended** initial provider; it is tested with test doubles only.
@@ -818,5 +820,5 @@ backup_codes_regenerated|reset_by_operator` (method only, never secrets).
 - **Backups**: `scripts/ops/db-backup.sh`, `db-restore.sh` (empty target only, checksum
   and name confirmation), `db-verify.sh` (row counts, ledger/hold invariants, triggers,
   `migrate status`). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
-  `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`, `ADMIN_PROVISIONING.md` (Phase C.1 record:
+  `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`, `ADMIN_PROVISIONING.md`, `DATABASE_ROLES.md` (Phase C.1 record:
   `PHASE_C_1_AUDIT.md`).

@@ -22,9 +22,11 @@ throwaway one, dropped afterwards.
 - **1:** the operator no longer decides "this account's authenticator is the right
   person's" by watching a screen: the code must match the stored secret at grant time, so
   an authenticator enrolled by someone holding only the password is exposed (the real
-  person's device produces different codes). The database enforces the outcome even
-  against application bugs or hand-written SQL by a non-superuser; losing two-factor can
-  no longer leave a dormant admin flag that a re-enrollment silently revives.
+  person's device produces different codes). Losing two-factor can no longer leave a
+  dormant admin flag that a re-enrollment silently revives. _Corrected in Phase C.2/C.3:_
+  the trigger alone did **not** stop hand-written SQL by the application's database role
+  (it owns the tables and can set the marker or disable the trigger); the real boundary
+  is the role model of `DATABASE_ROLES.md` (Phase C.3), not yet applied anywhere.
 - **2:** the process list (`ps`, `/proc/*/cmdline`) is readable by every local user; the
   environment and a 0600 file are not. Refusing unknown parameters avoids silently
   dropping a security setting (e.g. an SSL option).
@@ -108,10 +110,11 @@ remains the authoritative build without the CA layer. Images were removed afterw
 
 ## 7. Remaining risks
 
-- A PostgreSQL **superuser** (or the table owner) can bypass the grant trigger (set the
-  marker by hand, disable the trigger). Database credentials with write access are
-  admin-equivalent; the application role should not own the schema in production
-  (separate migration role) — not done here (needs the hosting decision).
+- _Corrected in Phase C.2:_ **any** role with UPDATE on `users` (not only a superuser) could
+  set the grant marker, and the table owner can disable the trigger. Phase C.3 adds the
+  role model (`DATABASE_ROLES.md`, `scripts/ops/sql/db-roles.sql`) and the SECURITY
+  DEFINER grant function; it must still be applied through an authorized deployment
+  change.
 - Existing administrators **with** two-factor keep the flag after the migration; their
   enrollment predates proof of possession. Recommended: review them and re-grant during
   an identity-verified call (`ADMIN_PROVISIONING.md` § 4).
@@ -122,3 +125,22 @@ remains the authoritative build without the CA layer. Images were removed afterw
   workspaces (indexed lateral lookups, statement timeout 20 s). Revisit at scale.
 - Security notifications (finding 5) are not implemented.
 - The ops scripts now need `node` on the host that runs them.
+
+## 8. Phase C.2 review and Phase C.3 follow-up (2026-10-13)
+
+The post-push review (C.2) found that the C.1 grant trigger was not a privilege boundary
+against the application's database role (it owns the tables: it could set the grant
+marker — even in one statement — or disable the trigger), that the grant CLI echoed the
+code on a terminal, and that `db-verify.sh` was described as equivalent to
+`prisma migrate status` (it is stricter) and failed permanently on rolled-back history.
+Phase C.3 (local only, not committed):
+
+| Finding                      | Change                                                                                                                                                                                                                                                                                                                                                                         | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Privilege boundary (Medium)  | Migration `20261014140000`: SECURITY DEFINER `platform_admin_grant` / `_revoke` (fixed `search_path`, schema-qualified, EXECUTE revoked from PUBLIC; re-checks under a row lock; audits with the calling login); guard refuses any new row carrying the flag. `scripts/ops/sql/db-roles.sql`: owner / app / grant roles (DATABASE_ROLES.md). Grant service calls the function. | `tests/integration/db-roles.test.ts` (7, disposable roles + database): runtime role refused directly, with the marker, in one statement, on insert; cannot disable/drop/replace the guard or functions, create objects, become the owner, rewrite audit; grant role refused direct updates; app flows work under the runtime role; grant only via the grant role with a valid code; CLI fails closed with the runtime credential; transitive membership refused. Mutations caught: 5/5. |
+| CLI echo (Low)               | `scripts/admin/code-input.ts`: raw-mode input on a terminal, restored on Enter / Ctrl-D / Ctrl-C / SIGINT / SIGTERM / SIGHUP / exit; documented safe non-interactive use.                                                                                                                                                                                                      | Pseudo-terminal test: code not in output, echo on afterwards (deny, cancel, grant). Unit test: mode restored in-process on every path (Node also resets the terminal at exit, so only the unit test detects a missing restore — verified by mutation).                                                                                                                                                                                                                                  |
+| Migration verification (Low) | `integrity.sql`: unfinished = no applied attempt or an unresolved failed attempt; `db-verify.sh`: line-ending-only differences tolerated, any other byte change `modified`, names listed; docs say "stricter than Prisma", not "equivalent".                                                                                                                                   | Real-database test (rolled-back-then-applied = 0; only-rolled-back = 1; unresolved failure = 1; old query fails it); fake-psql tests for CRLF accepted and pending / modified / unknown / CRLF-plus-edit rejected.                                                                                                                                                                                                                                                                      |
+
+Still open: the role model is **not applied** to any persistent database (needs the
+authorized cutover of DATABASE_ROLES.md § 2); the database cannot verify TOTP codes, so
+holders of the grant credential are trusted operators.

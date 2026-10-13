@@ -5,32 +5,38 @@
 //     --operator "name" --reason "TICKET-123: identity verified by video call"
 //
 // The script then asks for the CURRENT code from the person's own authenticator, read to
-// the operator during the identity-verified call. The code is read from standard input,
-// never from the command line (shell history, process list); it is single-use and is
-// never printed or logged. Needs DATABASE_URL and AUTH_SECRET (a local .env file is loaded
-// when present). Prints one JSON line. Exit code 0 = granted (or already an administrator),
-// 2 = refused or denied, 1 = error.
+// the operator during the identity-verified call. On a terminal the code is typed without
+// echo (code-input.ts); it is never accepted on the command line (shell history, process
+// list), never printed and never logged, and it is single-use.
+//
+// Database credential: ADMIN_GRANT_DATABASE_URL — the operator grant role of
+// docs/runbooks/DATABASE_ROLES.md, the only role allowed to execute
+// public.platform_admin_grant. Without it, DATABASE_URL is used (single-role development
+// databases; with the production role model the runtime role is refused by the database).
+// Also needs AUTH_SECRET (to read the enrolled secret). A local .env file is loaded when
+// present. Prints one JSON line. Exit code 0 = granted (or already an administrator),
+// 2 = refused or denied, 1 = error, 130 = cancelled.
 
-import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
 import { grantPlatformAdmin } from "@/server/admin/platform-admin-grant";
-import { getSystemDb } from "@/server/db/client";
+import { createPrismaClient } from "@/server/db/prisma";
+
+import { CodeInputCancelled, readCode, restoreTerminal } from "./code-input";
 
 function print(result: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-async function readCode(): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: false });
-  try {
-    process.stderr.write("Current 6-digit code from the person's authenticator: ");
-    for await (const line of rl) return line.trim();
-    return "";
-  } finally {
-    rl.close();
-  }
+// A signal while the code is being typed must not leave the terminal without echo.
+const SIGNAL_EXIT = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+for (const signal of Object.keys(SIGNAL_EXIT) as (keyof typeof SIGNAL_EXIT)[]) {
+  process.once(signal, () => {
+    restoreTerminal();
+    process.exit(SIGNAL_EXIT[signal]);
+  });
 }
+process.once("exit", restoreTerminal);
 
 async function main(): Promise<void> {
   let values;
@@ -63,22 +69,45 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const code = await readCode();
-  const result = await grantPlatformAdmin(
-    { system: getSystemDb(), authSecret },
-    { email, operator: values.operator ?? "", reason: values.reason ?? "", code },
-  );
-  print(result);
-  if (result.status === "DENIED") process.exitCode = 2;
+  const databaseUrl = (
+    process.env.ADMIN_GRANT_DATABASE_URL ??
+    process.env.DATABASE_URL ??
+    ""
+  ).trim();
+  if (databaseUrl === "") {
+    print({ status: "REFUSED", why: "ADMIN_GRANT_DATABASE_URL is not configured" });
+    process.exitCode = 2;
+    return;
+  }
+
+  let code: string;
+  try {
+    code = await readCode("Current 6-digit code from the person's authenticator: ");
+  } catch (error) {
+    if (!(error instanceof CodeInputCancelled)) throw error;
+    print({ status: "CANCELLED" });
+    process.exitCode = 130;
+    return;
+  }
+
+  const system = createPrismaClient(databaseUrl);
+  try {
+    const result = await grantPlatformAdmin(
+      { system, authSecret },
+      { email, operator: values.operator ?? "", reason: values.reason ?? "", code },
+    );
+    print(result);
+    if (result.status === "DENIED") process.exitCode = 2;
+  } finally {
+    await system.$disconnect().catch(() => undefined);
+  }
 }
 
-main()
-  .catch((error: unknown) => {
-    process.stderr.write(
-      `${JSON.stringify({ status: "FAILED", error: error instanceof Error ? error.name : "unknown" })}\n`,
-    );
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await Promise.allSettled([Promise.resolve().then(() => getSystemDb().$disconnect())]);
-  });
+main().catch((error: unknown) => {
+  restoreTerminal();
+  // The error class only: messages may contain SQL or connection details.
+  process.stderr.write(
+    `${JSON.stringify({ status: "FAILED", error: error instanceof Error ? error.name : "unknown" })}\n`,
+  );
+  process.exitCode = 1;
+});

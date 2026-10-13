@@ -100,16 +100,17 @@ describe("tenancy boundaries", () => {
     ]);
   });
 
-  it("sets the platform admin flag only in the grant workflow", () => {
-    // Platform administrators are granted only by `pnpm admin:grant`
-    // (docs/runbooks/ADMIN_PROVISIONING.md), which the database enforces. Every other
-    // mention of the flag is a reviewed read.
+  it("never writes the platform admin flag from application code", () => {
+    // Platform administrators are granted only by the database function
+    // public.platform_admin_grant (migration 20261014140000), which `pnpm admin:grant`
+    // calls after the code check; with the role model of docs/runbooks/DATABASE_ROLES.md
+    // the runtime role has no privilege on the column. Every mention here is a read.
     const scanned = [...files, "prisma/seed.ts"];
     const mentions = scanned.filter((path) => /isPlatformAdmin|is_platform_admin/.test(read(path)));
     expect(mentions.sort()).toEqual([
       // Pure gate decision over the account state (reads a field of its input).
       "src/server/admin/platform-admin-access.ts",
-      // THE grant (proof of possession, grant marker, audit): the only writer.
+      // The grant service: reads the flag, then calls the database function.
       "src/server/admin/platform-admin-grant.ts",
       // Read-only lookup: `select: { isPlatformAdmin: true, emailVerified: true, … }`.
       "src/server/admin/platform-admin.ts",
@@ -128,22 +129,24 @@ describe("tenancy boundaries", () => {
         read(path).replace(/^\s*(\/\/|\*|\/\*).*$/gm, ""),
       ),
     );
-    expect(writes).toEqual(["src/server/admin/platform-admin-grant.ts"]);
-    // …and it writes `true` only after the code check, under the grant marker.
+    expect(writes).toEqual([]);
+    // The grant service calls the database function only after the code check and claim,
+    // and never sets the old grant marker itself.
     const grant = read("src/server/admin/platform-admin-grant.ts");
     for (const marker of [
       "verifyTotpCode(secret, code, now)",
-      "flexibx.platform_admin_grant",
-      "isPlatformAdmin: true",
+      "claimTotpCode(tx, user.id, code, now)",
+      "public.platform_admin_grant(",
     ]) {
       expect(grant.indexOf(marker), marker).toBeGreaterThan(0);
     }
     expect(grant.indexOf("verifyTotpCode(secret, code, now)")).toBeLessThan(
-      grant.indexOf("flexibx.platform_admin_grant"),
+      grant.indexOf("claimTotpCode(tx, user.id, code, now)"),
     );
-    expect(grant.indexOf("flexibx.platform_admin_grant")).toBeLessThan(
-      grant.indexOf("isPlatformAdmin: true"),
+    expect(grant.indexOf("claimTotpCode(tx, user.id, code, now)")).toBeLessThan(
+      grant.indexOf("public.platform_admin_grant("),
     );
+    expect(grant).not.toContain("set_config('flexibx.platform_admin_grant'");
   });
 
   it("keeps the bounded (also unguarded) retention pool to the retention runtime", () => {

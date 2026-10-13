@@ -24,7 +24,7 @@ function filesUnder(dir: string): string[] {
 }
 
 describe("platform admin provisioning", () => {
-  it("no migration grants the flag: it is only created, defaulting to false", () => {
+  it("only the SECURITY DEFINER grant function sets the flag; otherwise it is created false", () => {
     const mentions = filesUnder(MIGRATIONS).filter((path) =>
       read(path).includes("is_platform_admin"),
     );
@@ -33,18 +33,44 @@ describe("platform admin provisioning", () => {
       // The grant guard (trigger): refuses the flag outside the workflow, revokes it with
       // two-factor, and only ever sets it to false.
       join(MIGRATIONS, "20261014120000_platform_admin_grant_guard", "migration.sql"),
+      // The grant/revoke functions and the tightened guard (no new row may carry the flag).
+      join(MIGRATIONS, "20261014140000_platform_admin_grant_functions", "migration.sql"),
     ]);
     const sql = read(mentions[0] ?? "");
     expect(sql).toMatch(/"is_platform_admin" BOOLEAN NOT NULL DEFAULT false/);
+    const functions = join(
+      MIGRATIONS,
+      "20261014140000_platform_admin_grant_functions",
+      "migration.sql",
+    );
     for (const path of filesUnder(MIGRATIONS)) {
+      if (path === functions) continue;
       expect(read(path), path).not.toMatch(/is_platform_admin"?\s*=\s*true/i);
     }
+    // In that migration the one `= true` is inside platform_admin_grant, which is a
+    // SECURITY DEFINER function with a fixed search_path, revoked from PUBLIC.
+    const text = read(functions);
+    expect(text.match(/is_platform_admin"?\s*=\s*true/gi)).toHaveLength(1);
+    const start = text.indexOf('CREATE FUNCTION "public"."platform_admin_grant"');
+    const body = text.slice(start, text.indexOf("END $$;", start));
+    expect(body).toMatch(/is_platform_admin = true/);
+    expect(body).toContain("SECURITY DEFINER");
+    expect(body).toContain("SET search_path = pg_catalog, pg_temp");
+    expect(text).toContain(
+      'REVOKE ALL ON FUNCTION "public"."platform_admin_grant"(uuid, text, text) FROM PUBLIC;',
+    );
   });
 
-  it("neither the seed nor any script touches the flag", () => {
+  it("neither the seed nor any script sets the flag", () => {
+    const roles = join("scripts", "ops", "sql", "db-roles.sql");
     for (const path of ["prisma/seed.ts", ...filesUnder("scripts")]) {
+      if (path === roles) continue;
       expect(read(path), path).not.toMatch(/isPlatformAdmin|is_platform_admin/);
     }
+    // The role script only ever withholds the column from the runtime role.
+    const script = read(roles).replace(/^\s*--.*$/gm, "");
+    expect(script).toContain("attname <> 'is_platform_admin'");
+    expect(script).not.toMatch(/is_platform_admin"?\s*=\s*true/i);
   });
 
   it("the auth layer declares the flag as not settable by input", () => {
@@ -56,7 +82,7 @@ describe("platform admin provisioning", () => {
   it("documents the grant workflow (no hand-written grant), and revocation", () => {
     const doc = read("docs/STORAGE_PROVIDERS.md");
     expect(doc).toContain("docs/runbooks/ADMIN_PROVISIONING.md");
-    expect(doc).toContain("Revoke with `SET is_platform_admin = false`");
+    expect(doc).toContain("public.platform_admin_revoke");
     const runbook = read("docs/runbooks/ADMIN_PROVISIONING.md");
     expect(runbook).toContain("pnpm admin:grant --email <staff email> --confirm <staff email>");
     for (const text of [doc, runbook, read("docs/runbooks/INCIDENT_RESPONSE.md")]) {

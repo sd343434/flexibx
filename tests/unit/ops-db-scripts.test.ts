@@ -57,6 +57,12 @@ case "$tool" in
         name="$(basename "$(dirname "$file")")"; sum="$(sha256sum "$file" | cut -d' ' -f1)"
         [[ "\${FAKE_MIGRATIONS:-}" == "pending" && "$name" == "$FAKE_LAST" ]] && continue
         [[ "\${FAKE_MIGRATIONS:-}" == "modified" && "$name" == "$FAKE_LAST" ]] && sum="0000"
+        # Applied from a CRLF checkout: Prisma recorded the checksum of the CRLF bytes.
+        [[ "\${FAKE_MIGRATIONS:-}" == "crlf" && "$name" == "$FAKE_LAST" ]] && \
+          sum="$(sed ':a;N;$!ba;s/\\n/\\r\\n/g' "$file" | sha256sum | cut -d' ' -f1)"
+        # An edit that also changes line endings is still an edit.
+        [[ "\${FAKE_MIGRATIONS:-}" == "crlf-modified" && "$name" == "$FAKE_LAST" ]] && \
+          sum="$( { cat "$file"; echo "-- edited"; } | sed ':a;N;$!ba;s/\\n/\\r\\n/g' | sha256sum | cut -d' ' -f1)"
         printf '%s\\t%s\\n' "$name" "$sum"
       done
       [[ "\${FAKE_MIGRATIONS:-}" == "unknown" ]] && printf '29990101000000_hotfix\\tabcd\\n'
@@ -281,7 +287,17 @@ describe("ops database scripts keep the URL off the command line", () => {
     expect(leftovers()).toEqual([]);
   });
 
-  it.each(["pending", "modified", "unknown"])(
+  it("verify: a line-ending-only difference (CRLF checkout) is tolerated", async () => {
+    const result = await run("db-verify.sh", [], {
+      VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
+      FAKE_MIGRATIONS: "crlf",
+      FAKE_LAST: LAST_MIGRATION ?? "",
+    });
+    expect(result.stdout).toMatch(/prisma_migrations\tup to date/);
+    expect(result.code).toBe(0);
+  });
+
+  it.each(["pending", "modified", "unknown", "crlf-modified"])(
     "verify: a %s migration fails the verification",
     async (state) => {
       const result = await run("db-verify.sh", [], {
@@ -294,6 +310,9 @@ describe("ops database scripts keep the URL off the command line", () => {
       expect(result.stdout).toContain('{"status":"FAILED"}');
       if (state === "pending") expect(result.stdout).toContain(`pending: ${LAST_MIGRATION}`);
       if (state === "unknown") expect(result.stdout).toContain("unknown: 29990101000000_hotfix");
+      if (state.endsWith("modified")) {
+        expect(result.stdout).toContain(`modified: ${LAST_MIGRATION ?? ""}`);
+      }
     },
   );
 

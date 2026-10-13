@@ -3,10 +3,15 @@
 #   1. row counts equal the backup's manifest (when given; exact for a backup taken while
 #      writes were stopped, approximate for one taken from a live database),
 #   2. integrity checks (sql/integrity.sql) all report 0,
-#   3. every repository migration is applied, unchanged (same checksum Prisma recorded),
-#      and the database has no unknown or unfinished migration — what `prisma migrate
-#      status` checks, done in SQL: Prisma's schema engine receives the URL (password
-#      included) on its command line.
+#   3. migrations, checked in SQL against _prisma_migrations (Prisma itself is not run: its
+#      schema engine receives the URL, password included, on its command line). This is
+#      STRICTER than `prisma migrate status`, which (Prisma 7.10, tested) reports "up to
+#      date" for an edited migration file and ignores migrations that exist only in the
+#      database. Here every repository migration must be applied with the checksum Prisma
+#      recorded (SHA-256 of its migration.sql) — line-ending-only differences (CRLF/LF
+#      checkouts) are tolerated, any other byte difference fails — and the database must
+#      have no migration the repository does not have. Failed or rolled-back attempts are
+#      integrity.sql's `migrations_unfinished`.
 #
 #   VERIFY_DATABASE_URL=postgresql://…/flexibx_restore scripts/ops/db-verify.sh [backup.counts.tsv]
 #
@@ -45,16 +50,34 @@ while IFS=$'\t' read -r check value; do
   [[ "$value" == "0" ]] || failed=1
 done <<<"$checks"
 
-expected="$(for file in "$repo"/prisma/migrations/*/migration.sql; do
-  printf '%s\t%s\n' "$(basename "$(dirname "$file")")" "$(sha256sum "$file" | cut -d' ' -f1)"
-done | sort)"
+# Applied attempts as Prisma recorded them (rolled-back and failed attempts excluded).
 applied="$(psql -X -q -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "SELECT migration_name, checksum
-  FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL" | sort)"
-if [[ -n "$expected" && "$expected" == "$applied" ]]; then
-  echo "prisma_migrations	up to date ($(wc -l <<<"$expected") applied)"
+  FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL")"
+declare -A recorded=()
+while IFS=$'\t' read -r name sum; do
+  [[ -n "$name" ]] && recorded["$name"]+="$sum "
+done <<<"$applied"
+sha() { sha256sum | cut -d' ' -f1; }
+pending=() modified=() total=0
+for file in "$repo"/prisma/migrations/*/migration.sql; do
+  name="$(basename "$(dirname "$file")")"
+  total=$((total + 1))
+  if [[ -z "${recorded[$name]:-}" ]]; then pending+=("$name"); continue; fi
+  # The file as committed, with LF line endings, and with CRLF line endings.
+  accepted=" $(sha <"$file") $(tr -d '\r' <"$file" | sha) $(tr -d '\r' <"$file" | sed ':a;N;$!ba;s/\n/\r\n/g' | sha) "
+  ok=0
+  for sum in ${recorded[$name]}; do [[ "$accepted" == *" $sum "* ]] && ok=1; done
+  [[ "$ok" == "1" ]] || modified+=("$name")
+  unset 'recorded[$name]'
+done
+unknown=("${!recorded[@]}")
+if [[ "$total" -gt 0 && ${#pending[@]} -eq 0 && ${#modified[@]} -eq 0 && ${#unknown[@]} -eq 0 ]]; then
+  echo "prisma_migrations	up to date ($total applied)"
 else
-  echo "prisma_migrations	NOT up to date (pending, modified or unknown migrations)"
-  diff <(cut -f1 <<<"$expected") <(cut -f1 <<<"$applied") | sed -n 's/^< /  pending: /p; s/^> /  unknown: /p' || true
+  echo "prisma_migrations	NOT up to date (${#pending[@]} pending, ${#modified[@]} modified, ${#unknown[@]} unknown)"
+  for name in "${pending[@]}"; do echo "  pending: $name"; done
+  for name in "${modified[@]}"; do echo "  modified: $name"; done
+  for name in "${unknown[@]}"; do echo "  unknown: $name"; done
   failed=1
 fi
 

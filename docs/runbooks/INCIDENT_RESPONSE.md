@@ -68,7 +68,7 @@ monitor polling ops-status. Configure one before launch.
 | `ADS_EXECUTION_ENABLED=false`                                 | No campaign is created or activated.                                                                                                               |
 | `AI_PROVIDER=disabled`                                        | No AI call (generation features refuse; nothing is charged).                                                                                       |
 | Unset `AUTOMATION_CRON_SECRET` / pause the external scheduler | The tick endpoint answers 404: no scheduled planning, publishing, recovery or hold release. Use only when the tick itself does harm.               |
-| Remove `users.is_platform_admin`                              | Immediate loss of admin access (read on every request).                                                                                            |
+| Revoke `users.is_platform_admin` (`platform_admin_revoke`)    | Immediate loss of admin access (read on every request).                                                                                            |
 
 ## 4. Scenarios
 
@@ -166,7 +166,8 @@ $AUTOMATION_CRON_SECRET`, not rate limited: 12 calls / 10 min). Run one tick by 
   `user.password_*`, `storage.*`, credit grants and plan changes) nobody claims, unusual logins, a
   report from outside, secrets found in a public place.
 - **Contain** (in this order, as fast as possible):
-  1. Remove `is_platform_admin` from any administrator not verified as safe
+  1. Revoke `is_platform_admin` from any administrator not verified as safe
+     (`public.platform_admin_revoke` with the grant credential, or the owner credential)
      (`docs/runbooks/ADMIN_PROVISIONING.md` § 3). Check `platform_admin.granted` audit
      entries against the access tickets.
   2. End sessions: `DELETE FROM sessions WHERE user_id = '<id>';` (or all sessions:

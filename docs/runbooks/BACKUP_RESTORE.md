@@ -40,6 +40,13 @@ BACKUP_DATABASE_URL='postgresql://backup_user@db-host:5432/flexibx?sslmode=verif
   scripts/ops/db-backup.sh /secure/backups/flexibx
 ```
 
+**Which credential:** the database **owner** (migration) role — with the role model of
+`docs/runbooks/DATABASE_ROLES.md` the runtime role cannot read `_prisma_migrations`, and `pg_dump`
+run as that role fails with `permission denied` (verified). After restoring into a new database, run
+`scripts/ops/sql/db-roles.sql` there before an application connects with the runtime role
+(a restore with `--no-owner --no-privileges` leaves every object owned by the restoring
+login and no grants).
+
 **Credentials never reach a command line.** The three scripts (`scripts/ops/lib/pgenv.sh`)
 read the URL from the environment, turn it into libpq variables (`PGHOST`, `PGPORT`,
 `PGUSER`, `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLCRL`,
@@ -112,17 +119,24 @@ VERIFY_DATABASE_URL='postgresql://…/flexibx_restore' \
 Checks (each prints a count; all must be 0 / "match"):
 
 - row counts equal the backup manifest;
-- `migrations_unfinished` — no failed or rolled-back migration;
+- `migrations_unfinished` — no migration without an applied attempt, and no failed attempt
+  left unresolved (an attempt rolled back with `prisma migrate resolve --rolled-back` and
+  then re-applied is history, not a failure);
 - `credit_balance_vs_ledger` — every credit account equals its last ledger entry;
 - `credit_held_vs_open_holds` — held credits equal the open holds;
 - `ledger_guard_triggers_missing` — the ledger's append-only / same-workspace triggers exist;
 - `constraints_not_validated` — no constraint restored as NOT VALID;
 - `orphan_sessions`, `orphan_two_factors`;
-- `prisma_migrations` — every repository migration applied with the checksum Prisma
-  recorded (SHA-256 of its `migration.sql`), none pending, modified or unknown (what
-  `prisma migrate status` reports, checked in SQL: Prisma's schema engine would receive
-  the URL, password included, on its command line). A connection or query failure is
-  `FAILED` (exit 1), never a pass.
+- `prisma_migrations` — checked in SQL against `_prisma_migrations` (Prisma is not run:
+  its schema engine would receive the URL, password included, on its command line). It
+  is **stricter than `prisma migrate status`**, not equivalent: Prisma 7.10 reports "up to
+  date" for an edited migration file and ignores migrations that exist only in the
+  database (tested). Here every repository migration must have an applied attempt whose
+  recorded checksum (SHA-256 of `migration.sql`) matches the file — a difference in line
+  endings only (CRLF vs LF checkout) is accepted; any other byte difference is reported
+  as `modified` — and a migration recorded in the database but absent from the repository
+  is `unknown`. Names are printed for each. A connection or query failure is `FAILED`
+  (exit 1), never a pass.
 
 Then, manually: sign in as an operator account (password + second factor), open one
 workspace, check its credit balance and the last audit entries match expectations.
