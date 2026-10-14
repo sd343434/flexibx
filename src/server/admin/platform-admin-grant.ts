@@ -111,7 +111,7 @@ export async function grantPlatformAdmin(deps: GrantDeps, input: GrantInput): Pr
       if (!verifyTotpCode(secret, code, now)) {
         return { status: "DENIED" as const, reason: "INVALID_CODE" as const, userId: user.id };
       }
-      if (!(await claimTotpCode(tx, user.id, code, now))) {
+      if (!(await claimTotpCode(tx, user.id, code))) {
         return { status: "DENIED" as const, reason: "INVALID_CODE" as const, userId: user.id };
       }
 

@@ -113,7 +113,10 @@ describe("webhook body size cap", () => {
     expect(small.ok && new TextDecoder().decode(small.bytes)).toBe('{"object":"page"}');
   });
 
-  it("the Meta webhook answers 413 to an oversized chunked body", async () => {
+  // Measured at about 3 s on an idle machine (it loads the route's whole module graph) and
+  // about 5 s on a contended one — too close to the default 5 s limit (Phase D.2
+  // diagnosis). The assertions are unchanged; only the time budget is widened.
+  it("the Meta webhook answers 413 to an oversized chunked body", { timeout: 20_000 }, async () => {
     const { POST } = await import("@/app/api/integrations/meta/webhook/route");
     const big = streamed(5 * 1024 * 1024, { "x-hub-signature-256": "sha256=00" });
     const response = await POST(big.request);

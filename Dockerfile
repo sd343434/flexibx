@@ -3,6 +3,7 @@
 # Flexibx production image (Next.js standalone, non-root).
 #   docker build -t flexibx .                      → app image
 #   docker build --target migrate -t flexibx-migrate .  → one-off `prisma migrate deploy`
+#   docker build --target ops -t flexibx-ops .          → psql/pg_dump 16 + operator CLIs
 # Runtime configuration (DATABASE_URL, APP_URL, S3_*…) is injected as environment
 # variables at run time; no secrets are baked into the image.
 
@@ -33,6 +34,27 @@ FROM build AS migrate
 ENV NODE_ENV=production
 USER node
 CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
+
+# ── Operations jobs: the migrate image plus the PostgreSQL 16 client ────────────
+#   docker build --target ops -t flexibx-ops .
+# For scripts/ops/sql/db-roles.sql (psql), db-backup.sh / db-restore.sh / db-verify.sh
+# (pg_dump, pg_restore, psql) and the operator CLIs (pnpm admin:grant, admin:mfa-reset),
+# run as one-off tasks next to a private database. Debian bookworm ships client 15, which
+# cannot dump a 16 server, so client 16 comes from the PostgreSQL project's repository
+# (PGDG), configured by Debian's postgresql-common helper with the signing key that
+# package ships. Credentials arrive as environment variables at run time (never baked in,
+# never on a command line: the ops scripts convert URLs to libpq variables and a private
+# PGPASSFILE). No default command: every job names what it runs.
+FROM build AS ops
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates postgresql-common \
+ && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+ && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && rm -rf /var/lib/apt/lists/*
+ENV NODE_ENV=production
+USER node
+CMD ["sh", "-c", "echo 'flexibx-ops: name the command to run' >&2; exit 64"]
 
 # ── Runtime ─────────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS runner

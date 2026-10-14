@@ -791,7 +791,8 @@ gets `UnconfiguredMailer` (every send fails).
   `src/server/auth/two-factor.ts` (HTTP endpoints disabled, rate-limited:
   `two-factor-verify` per client, `two-factor-manage` per user; Better Auth adds 5
   attempts per challenge and a 15-minute lock after 10 failures); each TOTP code is accepted
-  once (`two_factor_used_codes`; Better Auth alone would accept it again within its
+  once (`two_factor_used_codes`, written only by the SECURITY DEFINER function
+  `two_factor_claim_code`, database clock; Better Auth alone would accept it again within its
   window, so a replayed code's new session is removed). A password sign-in of an
   enrolled account creates no session until the code is verified. Sessions created by a
   second-factor verification carry `sessions.mfa_verified_at` (set only by the

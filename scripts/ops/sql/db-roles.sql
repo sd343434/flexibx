@@ -14,11 +14,16 @@
 --   grant_role  the operator credential of `pnpm admin:grant` (ADMIN_GRANT_DATABASE_URL):
 --               reads what the grant needs, claims the TOTP code, writes denial audits,
 --               and EXECUTEs public.platform_admin_grant / platform_admin_revoke.
+--   Both limited roles claim TOTP codes only through public.two_factor_claim_code() and
+--   hold no privilege on two_factor_used_codes (they cannot delete an unexpired claim).
 --
 -- Run by a superuser, or by owner_role itself when it already owns everything. Idempotent:
 -- run it again after EVERY migration (new tables and new users columns need privileges).
--- Refuses (and changes nothing: one transaction) when app_role or grant_role are
--- privileged or can reach owner_role through role membership.
+-- Refuses (and changes nothing: one transaction) when app_role or grant_role carry a
+-- privileged attribute or are a member — directly or through other roles — of ANY role:
+-- the owner, a superuser, a managed-service admin role such as rds_superuser, or a
+-- predefined role such as pg_write_all_data / pg_read_all_data. Membership is checked by
+-- what it grants (pg_has_role), not by the SUPERUSER attribute of the target.
 
 \set ON_ERROR_STOP 1
 SELECT set_config('flexibx.roles_owner', :'owner_role', false),
@@ -57,6 +62,15 @@ BEGIN
     END IF;
     IF EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper AND pg_has_role(limited, r.oid, 'MEMBER')) THEN
       RAISE EXCEPTION 'db-roles: % can reach a superuser through role membership', limited;
+    END IF;
+    -- Any other membership (rds_superuser, pg_write_all_data, a group role, …): the limited
+    -- roles must belong to no role at all. pg_database_owner is implicit for the database
+    -- owner and is checked after the ownership transfer (postconditions).
+    SELECT string_agg(r.rolname, ', ' ORDER BY r.rolname) INTO cols FROM pg_roles r
+      WHERE r.rolname <> limited AND r.rolname <> 'pg_database_owner'
+        AND pg_has_role(limited, r.oid, 'MEMBER');
+    IF cols IS NOT NULL THEN
+      RAISE EXCEPTION 'db-roles: % must not be a member of any role (member of: %)', limited, cols;
     END IF;
   END LOOP;
   IF pg_has_role(app_r, grant_r, 'MEMBER') OR pg_has_role(grant_r, app_r, 'MEMBER') THEN
@@ -127,11 +141,13 @@ BEGIN
   EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON public.audit_logs FROM %I', app_r);
   -- Migration bookkeeping belongs to the migration role.
   EXECUTE format('REVOKE ALL ON public._prisma_migrations FROM %I', app_r);
+  -- Used TOTP codes are written only by public.two_factor_claim_code() (section 6): a
+  -- table privilege cannot be limited to expired rows.
+  EXECUTE format('REVOKE ALL ON public.two_factor_used_codes FROM %I', app_r);
 
   -- 5. Grant role: only what `pnpm admin:grant` needs.
   EXECUTE format('GRANT SELECT (id, email, email_verified, two_factor_enabled, is_platform_admin) ON public.users TO %I', grant_r);
   EXECUTE format('GRANT SELECT ON public.two_factors TO %I', grant_r);
-  EXECUTE format('GRANT SELECT, INSERT, DELETE ON public.two_factor_used_codes TO %I', grant_r);
   EXECUTE format('GRANT INSERT ON public.audit_logs TO %I', grant_r);
 
   -- 6. Functions: the SECURITY DEFINER pair is executable by the grant role only.
@@ -141,6 +157,9 @@ BEGIN
   EXECUTE format('REVOKE ALL ON FUNCTION public.platform_admin_revoke(uuid, text, text) FROM %I', app_r);
   EXECUTE format('GRANT EXECUTE ON FUNCTION public.platform_admin_grant(uuid, text, text) TO %I', grant_r);
   EXECUTE format('GRANT EXECUTE ON FUNCTION public.platform_admin_revoke(uuid, text, text) TO %I', grant_r);
+  -- The TOTP claim (both roles): removes only the account's expired claims, then claims.
+  REVOKE ALL ON FUNCTION public.two_factor_claim_code(uuid, text) FROM PUBLIC;
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.two_factor_claim_code(uuid, text) TO %I, %I', app_r, grant_r);
 
   -- 7. Future objects created by the owner (new migrations).
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', owner_r, app_r);
@@ -154,9 +173,43 @@ BEGIN
      OR has_table_privilege(app_r, 'public.audit_logs', 'DELETE')
      OR has_column_privilege(grant_r, 'public.users', 'is_platform_admin', 'UPDATE')
      OR has_schema_privilege(app_r, 'public', 'CREATE')
-     OR has_schema_privilege(grant_r, 'public', 'CREATE') THEN
+     OR has_schema_privilege(grant_r, 'public', 'CREATE')
+     OR has_table_privilege(app_r, 'public.two_factor_used_codes', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege(grant_r, 'public.two_factor_used_codes', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+     OR NOT has_function_privilege(app_r, 'public.two_factor_claim_code(uuid, text)', 'EXECUTE')
+     OR NOT has_function_privilege(grant_r, 'public.two_factor_claim_code(uuid, text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'db-roles: postcondition failed (privileges)';
   END IF;
+  -- The grant role reaches no table beyond the three it needs (column privileges on users
+  -- are checked above and by the tests).
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO cols
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND c.relname NOT IN ('two_factors', 'audit_logs')
+      AND has_table_privilege(grant_r, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER');
+  IF cols IS NOT NULL THEN
+    RAISE EXCEPTION 'db-roles: postcondition failed (grant role has privileges on: %)', cols;
+  END IF;
+  -- SECURITY DEFINER functions the limited roles can execute: exactly the approved ones.
+  SELECT string_agg(p.oid::regprocedure::text, ', ') INTO cols
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND (
+        (has_function_privilege(app_r, p.oid, 'EXECUTE')
+          AND p.oid <> 'public.two_factor_claim_code(uuid, text)'::regprocedure)
+        OR (has_function_privilege(grant_r, p.oid, 'EXECUTE')
+          AND p.oid NOT IN ('public.two_factor_claim_code(uuid, text)'::regprocedure,
+                            'public.platform_admin_grant(uuid, text, text)'::regprocedure,
+                            'public.platform_admin_revoke(uuid, text, text)'::regprocedure)));
+  IF cols IS NOT NULL THEN
+    RAISE EXCEPTION 'db-roles: postcondition failed (unapproved SECURITY DEFINER functions executable: %)', cols;
+  END IF;
+  -- After the ownership transfer: still no membership at all (incl. pg_database_owner).
+  FOREACH limited IN ARRAY ARRAY[app_r, grant_r] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> limited AND pg_has_role(limited, r.oid, 'MEMBER')) THEN
+      RAISE EXCEPTION 'db-roles: postcondition failed (% is a member of another role)', limited;
+    END IF;
+  END LOOP;
   IF EXISTS (
     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND (pg_has_role(app_r, c.relowner, 'MEMBER') OR pg_has_role(grant_r, c.relowner, 'MEMBER'))

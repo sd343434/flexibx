@@ -144,7 +144,7 @@ describe("platform admin grant (proof of possession)", () => {
   it("refuses a code that was already used (sign-in or an earlier grant)", async () => {
     const person = await account({ enroll: true });
     const code = totp(person.key, 1);
-    expect(await claimTotpCode(system, person.id, code, new Date())).toBe(true); // a sign-in
+    expect(await claimTotpCode(system, person.id, code)).toBe(true); // a sign-in
     expect(await grant(person.email, code)).toEqual({ status: "DENIED", reason: "INVALID_CODE" });
     expect(await isAdmin(person.id)).toBe(false);
   });

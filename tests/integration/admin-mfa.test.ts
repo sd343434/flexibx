@@ -557,18 +557,29 @@ describe("platform admin MFA gate", () => {
 
   it("accepts each TOTP code once, also under concurrency, and forgets it after the window", async () => {
     const admin = await newAccount({ admin: true });
-    const now = new Date();
     const claims = await Promise.all(
-      Array.from({ length: 6 }, () => claimTotpCode(system, admin.id, "123456", now)),
+      Array.from({ length: 6 }, () => claimTotpCode(system, admin.id, "123456")),
     );
     expect(claims.filter(Boolean)).toHaveLength(1);
-    expect(await claimTotpCode(system, admin.id, "654321", now)).toBe(true);
+    expect(await claimTotpCode(system, admin.id, "654321")).toBe(true);
     // Codes are per user, and stored hashed.
     const other = await newAccount();
-    expect(await claimTotpCode(system, other.id, "123456", now)).toBe(true);
+    expect(await claimTotpCode(system, other.id, "123456")).toBe(true);
     const rows = await system.twoFactorUsedCode.findMany({ where: { userId: admin.id } });
     expect(JSON.stringify(rows)).not.toContain("123456");
-    const later = new Date(now.getTime() + USED_TOTP_CODE_TTL_MS + 1000);
-    expect(await claimTotpCode(system, admin.id, "123456", later)).toBe(true);
+    // Lifetime set by the database clock (USED_TOTP_CODE_TTL_MS documents it).
+    const [lifetime] = await system.$queryRaw<{ seconds: number }[]>`
+      SELECT round(extract(epoch FROM max(expires_at) - now()))::int AS seconds
+      FROM two_factor_used_codes WHERE user_id = ${admin.id}::uuid`;
+    expect(lifetime?.seconds).toBeGreaterThan(USED_TOTP_CODE_TTL_MS / 1000 - 10);
+    expect(lifetime?.seconds).toBeLessThanOrEqual(USED_TOTP_CODE_TTL_MS / 1000);
+    // After the window (database clock), the code can be used again; expired claims of
+    // OTHER accounts are left alone by this account's claim.
+    await system.$executeRaw`
+      UPDATE two_factor_used_codes SET expires_at = now() - interval '1 second'
+      WHERE user_id IN (${admin.id}::uuid, ${other.id}::uuid)`;
+    expect(await claimTotpCode(system, admin.id, "123456")).toBe(true);
+    expect(await system.twoFactorUsedCode.count({ where: { userId: admin.id } })).toBe(1);
+    expect(await system.twoFactorUsedCode.count({ where: { userId: other.id } })).toBe(1);
   });
 });

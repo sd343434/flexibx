@@ -198,7 +198,7 @@ export async function confirmEnrollment(
   try {
     await deps.auth.api.verifyTOTP({ body: { code }, headers: deps.headers });
     // The enrollment code counts as used: it cannot also serve for a sign-in.
-    await claimTotpCode(deps.db, userId, code, new Date());
+    await claimTotpCode(deps.db, userId, code);
     return { status: "ENABLED" };
   } catch (error) {
     if (

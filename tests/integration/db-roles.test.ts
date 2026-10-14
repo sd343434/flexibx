@@ -35,6 +35,9 @@ const roles = {
   app: `flexibx_t${suffix}_app`,
   grant: `flexibx_t${suffix}_grant`,
   bridge: `flexibx_t${suffix}_bridge`,
+  // Stand-in for a managed-service admin role (rds_superuser on Amazon RDS): NOLOGIN, no
+  // SUPERUSER attribute, but CREATEROLE/CREATEDB and a predefined-role membership.
+  managedAdmin: `flexibx_t${suffix}_rdssu`,
 };
 const database = `flexibx_roles_${suffix}_test`;
 const secrets = {
@@ -128,6 +131,8 @@ beforeAll(async () => {
   await ddl(admin, `CREATE ROLE ${roles.app} LOGIN PASSWORD '${secrets.app}'`);
   await ddl(admin, `CREATE ROLE ${roles.grant} LOGIN PASSWORD '${secrets.grant}'`);
   await ddl(admin, `CREATE ROLE ${roles.bridge} NOLOGIN`);
+  await ddl(admin, `CREATE ROLE ${roles.managedAdmin} NOLOGIN CREATEROLE CREATEDB`);
+  await ddl(admin, `GRANT pg_signal_backend TO ${roles.managedAdmin}`);
   await ddl(admin, `CREATE DATABASE ${database} OWNER ${roles.owner}`);
   // Migrations run as the owner (migration role), exactly as the migrate job would.
   await run(join(root, "node_modules/.bin/prisma"), ["migrate", "deploy"], {
@@ -145,7 +150,7 @@ afterAll(async () => {
   for (const client of Object.values(clients)) await client.$disconnect();
   if (admin !== undefined && skipReason === "") {
     await ddl(admin, `DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
-    for (const role of [roles.app, roles.grant, roles.bridge, roles.owner]) {
+    for (const role of [roles.app, roles.grant, roles.bridge, roles.managedAdmin, roles.owner]) {
       await ddl(admin, `DROP ROLE IF EXISTS ${role}`);
     }
   }
@@ -536,5 +541,90 @@ describe("database privilege boundary (runtime / grant / owner roles)", () => {
         ddl(db("app"), `ALTER TABLE users DISABLE TRIGGER users_platform_admin_grant_guard`),
       ),
     ).toMatch(/must be owner/);
+  }, 60_000);
+  // Membership is refused by what it grants, not only by the SUPERUSER attribute of the
+  // target: a predefined role, a managed-service admin role reached through a group role,
+  // or any group role at all. Each attempt changes nothing; removing it restores a clean run.
+  const membershipCases = [
+    {
+      name: "a predefined role granted directly (pg_write_all_data) to the runtime role",
+      member: () => roles.app,
+      grants: (): [string, string][] => [["pg_write_all_data", roles.app]],
+      expected: () =>
+        `${roles.app} must not be a member of any role (member of: pg_write_all_data)`,
+    },
+    {
+      name: "a managed-service admin role (rds_superuser stand-in) reached by the grant role through a group",
+      member: () => roles.grant,
+      grants: (): [string, string][] => [
+        [roles.managedAdmin, roles.bridge],
+        [roles.bridge, roles.grant],
+      ],
+      expected: () =>
+        `${roles.grant} must not be a member of any role (member of: ${roles.bridge}, ${roles.managedAdmin}, pg_signal_backend)`,
+    },
+    {
+      name: "pg_read_all_data reached indirectly by the runtime role",
+      member: () => roles.app,
+      grants: (): [string, string][] => [
+        ["pg_read_all_data", roles.bridge],
+        [roles.bridge, roles.app],
+      ],
+      expected: () =>
+        `${roles.app} must not be a member of any role (member of: ${roles.bridge}, pg_read_all_data)`,
+    },
+    {
+      name: "an unprivileged group role (no membership is allowed at all)",
+      member: () => roles.grant,
+      grants: (): [string, string][] => [[roles.bridge, roles.grant]],
+      expected: () =>
+        `${roles.grant} must not be a member of any role (member of: ${roles.bridge})`,
+    },
+  ];
+
+  for (const scenario of membershipCases) {
+    it(`refuses ${scenario.name}, changing nothing`, async (ctx) => {
+      if (!available) ctx.skip(skipReason);
+      if (admin === undefined) throw new Error("not set up");
+      const owner = admin;
+      const grants = scenario.grants();
+      for (const [role, member] of grants) await ddl(owner, `GRANT ${role} TO ${member}`);
+      // A privilege the run would have revoked had it not stopped: it must survive.
+      await ddl(db("owner"), `GRANT SELECT ON public.sessions TO ${roles.grant}`);
+      try {
+        const refused = await applyRoles();
+        expect(refused.code).not.toBe(0);
+        expect(refused.output).toContain(scenario.expected());
+        const [still] = await db("owner").$queryRaw<{ granted: boolean }[]>`
+          SELECT has_table_privilege(${roles.grant}, 'public.sessions', 'SELECT') AS granted`;
+        expect(still?.granted).toBe(true);
+      } finally {
+        for (const [role, member] of [...grants].reverse())
+          await ddl(owner, `REVOKE ${role} FROM ${member}`);
+        await ddl(db("owner"), `REVOKE SELECT ON public.sessions FROM ${roles.grant}`);
+      }
+      expect((await applyRoles()).code).toBe(0);
+    }, 60_000);
+  }
+
+  it("after a clean run the limited roles belong to no role and cannot assume a privileged one", async (ctx) => {
+    if (!available) ctx.skip(skipReason);
+    expect((await applyRoles()).code).toBe(0);
+    for (const role of ["app", "grant"] as const) {
+      const memberships = await db("owner").$queryRaw<{ rolname: string }[]>`
+        SELECT r.rolname FROM pg_roles r
+        WHERE r.rolname <> ${roles[role]} AND pg_has_role(${roles[role]}, r.oid, 'MEMBER')`;
+      expect(memberships, role).toEqual([]);
+      for (const target of [
+        "pg_write_all_data",
+        "pg_read_all_data",
+        roles.owner,
+        roles.managedAdmin,
+      ]) {
+        expect(await failure(ddl(db(role), `SET ROLE ${target}`)), `${role} -> ${target}`).toMatch(
+          /permission denied to set role/,
+        );
+      }
+    }
   }, 60_000);
 });

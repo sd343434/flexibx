@@ -117,6 +117,12 @@ leaves at most some of the new, still unused objects — § 3):
 - `20261014130000_ops_check_results`: table `ops_check_results` (results of the periodic
   credit-ledger integrity check). Optional variable `LEDGER_INTEGRITY_INTERVAL_MINUTES`
   (default 60).
+- `20261014150000_totp_claim_function` (Phase D.2, wrapped in `BEGIN … COMMIT`): SECURITY
+  DEFINER function `two_factor_claim_code` (EXECUTE revoked from PUBLIC); the application
+  now claims TOTP codes through it. Order with the role model: migrate → deploy the app →
+  **then** re-run `db-roles.sql` (it removes the table privileges an older app version
+  needs). Rolling the app back to a version before this change after `db-roles.sql` ran
+  makes TOTP sign-ins fail closed — see `PHASE_D_2_SECURITY_HARDENING.md` § 8.
 
 Rehearsed on throwaway databases (2026-10-12): applied to an empty database and to a
 database at the previous release's schema holding users, sessions, memberships and audit

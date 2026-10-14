@@ -371,7 +371,7 @@ export function createAuth(input: AuthConfigInput) {
             const challenge = signInTotpCode(context);
             if (challenge !== null) {
               if (challenge.code === null) return false;
-              if (!(await claimTotpCode(input.db, session.userId, challenge.code, now))) {
+              if (!(await claimTotpCode(input.db, session.userId, challenge.code))) {
                 return false;
               }
             }

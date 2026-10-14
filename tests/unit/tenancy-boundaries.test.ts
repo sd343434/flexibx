@@ -135,15 +135,15 @@ describe("tenancy boundaries", () => {
     const grant = read("src/server/admin/platform-admin-grant.ts");
     for (const marker of [
       "verifyTotpCode(secret, code, now)",
-      "claimTotpCode(tx, user.id, code, now)",
+      "claimTotpCode(tx, user.id, code)",
       "public.platform_admin_grant(",
     ]) {
       expect(grant.indexOf(marker), marker).toBeGreaterThan(0);
     }
     expect(grant.indexOf("verifyTotpCode(secret, code, now)")).toBeLessThan(
-      grant.indexOf("claimTotpCode(tx, user.id, code, now)"),
+      grant.indexOf("claimTotpCode(tx, user.id, code)"),
     );
-    expect(grant.indexOf("claimTotpCode(tx, user.id, code, now)")).toBeLessThan(
+    expect(grant.indexOf("claimTotpCode(tx, user.id, code)")).toBeLessThan(
       grant.indexOf("public.platform_admin_grant("),
     );
     expect(grant).not.toContain("set_config('flexibx.platform_admin_grant'");

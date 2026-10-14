@@ -692,88 +692,103 @@ function render(locale: "ar" | "en", node: ReactNode): string {
   );
 }
 
-describe("Autopilot views", () => {
-  it("shows each step's honest state, the report and links to the drafts", async () => {
-    const ctx = await admin();
-    await updateAutomationPolicy(db, ctx, {
-      enabled: false,
-      planningCadence: "OFF",
-      allowDrafts: true,
-      maxDraftsPerRun: "1",
-    });
-    const deps: OrchestrationDeps<PlanningServices> = {
-      db,
-      services: { ai: () => ({ provider: createFakeProvider(), timeoutMs: 5_000 }) },
-      workflows: { content_planning: contentPlanningWorkflow },
-    };
-    const { runId } = await startPlanningRun(deps, ctx);
-    await executeRun(deps, ctx.workspaceId, runId);
-    const failed = await startPlanningRun(
-      { ...deps, services: { ai: () => ({ provider: null, timeoutMs: 5_000 }) } },
-      { ...ctx },
-    ).catch(() => null);
-    expect(failed).toMatchObject({ created: false }); // same person, same minute: deduplicated
+/**
+ * Manual runs are deduplicated per person per UTC minute (runs.ts). A test that expects two
+ * calls to fall in the same minute waits out the last seconds of a minute first; otherwise
+ * a minute boundary between the calls starts a second run (diagnosed in Phase D.2).
+ */
+async function awayFromMinuteBoundary(marginMs = 15_000): Promise<void> {
+  const left = 60_000 - (Date.now() % 60_000);
+  if (left < marginMs) await new Promise((resolve) => setTimeout(resolve, left + 250));
+}
 
-    const runs = await system.agentRun.findMany({
-      where: { workspaceId: ctx.workspaceId },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        workflow: true,
-        trigger: true,
-        state: true,
-        failureCode: true,
-        summary: true,
-        createdAt: true,
-        finishedAt: true,
-        requestedBy: { select: { name: true } },
-        tasks: {
-          orderBy: { createdAt: "asc" },
-          select: {
-            key: true,
-            state: true,
-            risk: true,
-            attempts: true,
-            maxAttempts: true,
-            failureCode: true,
+describe("Autopilot views", () => {
+  it(
+    "shows each step's honest state, the report and links to the drafts",
+    { timeout: 40_000 },
+    async () => {
+      const ctx = await admin();
+      await updateAutomationPolicy(db, ctx, {
+        enabled: false,
+        planningCadence: "OFF",
+        allowDrafts: true,
+        maxDraftsPerRun: "1",
+      });
+      const deps: OrchestrationDeps<PlanningServices> = {
+        db,
+        services: { ai: () => ({ provider: createFakeProvider(), timeoutMs: 5_000 }) },
+        workflows: { content_planning: contentPlanningWorkflow },
+      };
+      await awayFromMinuteBoundary();
+      const { runId } = await startPlanningRun(deps, ctx);
+      await executeRun(deps, ctx.workspaceId, runId);
+      const failed = await startPlanningRun(
+        { ...deps, services: { ai: () => ({ provider: null, timeoutMs: 5_000 }) } },
+        { ...ctx },
+      ).catch(() => null);
+      expect(failed).toMatchObject({ created: false }); // same person, same minute: deduplicated
+
+      const runs = await system.agentRun.findMany({
+        where: { workspaceId: ctx.workspaceId },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          workflow: true,
+          trigger: true,
+          state: true,
+          failureCode: true,
+          summary: true,
+          createdAt: true,
+          finishedAt: true,
+          requestedBy: { select: { name: true } },
+          tasks: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              key: true,
+              state: true,
+              risk: true,
+              attempts: true,
+              maxAttempts: true,
+              failureCode: true,
+            },
           },
         },
-      },
-    });
-    const html = render(
-      "en",
-      createElement(RunList, {
-        slug: "acme",
-        locale: "en",
-        timeZone: "Asia/Riyadh",
-        runs,
-        canManage: true,
-      }),
-    );
-    expect(html).toContain('data-state="SUCCEEDED"');
-    expect(html).toContain("Review the workspace");
-    expect(html).toContain("1 draft created");
-    expect(html).toContain("7 ideas planned");
-    expect(html.match(/data-testid="automation-draft-link"/g)).toHaveLength(1);
-    expect(html).not.toContain("automation-run-continue");
-    const failedHtml = render(
-      "ar",
-      createElement(RunList, {
-        slug: "acme",
-        locale: "ar",
-        timeZone: "Asia/Riyadh",
-        canManage: true,
-        runs: runs.map((run) => ({
-          ...run,
-          state: "FAILED" as const,
-          failureCode: "plan_ideas:ai_not_configured",
-          summary: null,
-        })),
-      }),
-    );
-    expect(failedHtml).toContain("الذكاء الاصطناعي غير مُفعّل على هذا الخادم");
-    expect(failedHtml).toContain('role="alert"');
-  });
+      });
+      const html = render(
+        "en",
+        createElement(RunList, {
+          slug: "acme",
+          locale: "en",
+          timeZone: "Asia/Riyadh",
+          runs,
+          canManage: true,
+        }),
+      );
+      expect(html).toContain('data-state="SUCCEEDED"');
+      expect(html).toContain("Review the workspace");
+      expect(html).toContain("1 draft created");
+      expect(html).toContain("7 ideas planned");
+      expect(html.match(/data-testid="automation-draft-link"/g)).toHaveLength(1);
+      expect(html).not.toContain("automation-run-continue");
+      const failedHtml = render(
+        "ar",
+        createElement(RunList, {
+          slug: "acme",
+          locale: "ar",
+          timeZone: "Asia/Riyadh",
+          canManage: true,
+          runs: runs.map((run) => ({
+            ...run,
+            state: "FAILED" as const,
+            failureCode: "plan_ideas:ai_not_configured",
+            summary: null,
+          })),
+        }),
+      );
+      expect(failedHtml).toContain("الذكاء الاصطناعي غير مُفعّل على هذا الخادم");
+      expect(failedHtml).toContain('role="alert"');
+    },
+  );
 
   it("lists a run's steps in workflow order (tasks share their creation time)", () => {
     const keys = ["report", "zzz", "observe", "create_drafts", "plan_ideas"];

@@ -8,20 +8,49 @@ the platform-admin trigger is not a security boundary against it
 
 ## 1. Roles
 
-| Role                  | Used by                                                                 | Can                                                                                                                                                                                                                      | Cannot                                                                                                                                                                                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **owner** (`*_owner`) | the one-off migrate job, `db-roles.sql`, emergency DBA work             | everything (owns the database, schema `public`, every table, sequence, type, trigger and function)                                                                                                                       | — (it is the trust root: keep it in the deployment pipeline only)                                                                                                                                                                                                                                                |
-| **app** (`*_app`)     | the web app and scheduled jobs (`DATABASE_URL`), `pnpm admin:mfa-reset` | SELECT/INSERT/UPDATE/DELETE on application tables; UPDATE on every `users` column except `is_platform_admin`                                                                                                             | set `is_platform_admin` (no column privilege; new rows refused by the guard trigger); execute `platform_admin_grant`/`_revoke`; ALTER/DROP/REPLACE any table, trigger or function; create schemas or objects; UPDATE/DELETE/TRUNCATE `audit_logs`; read `_prisma_migrations`; reach the owner through membership |
-| **grant** (`*_grant`) | `pnpm admin:grant` (`ADMIN_GRANT_DATABASE_URL`), revocations            | read `users` (id, email, email_verified, two_factor_enabled, is_platform_admin) and `two_factors`; claim codes in `two_factor_used_codes`; INSERT `audit_logs`; EXECUTE `platform_admin_grant` / `platform_admin_revoke` | update `users` at all; read sessions, accounts or any other table; DDL                                                                                                                                                                                                                                           |
+| Role                  | Used by                                                                 | Can                                                                                                                                                                                                        | Cannot                                                                                                                                                                                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **owner** (`*_owner`) | the one-off migrate job, `db-roles.sql`, emergency DBA work             | everything (owns the database, schema `public`, every table, sequence, type, trigger and function)                                                                                                         | — (it is the trust root: keep it in the deployment pipeline only)                                                                                                                                                                                                                                                                                     |
+| **app** (`*_app`)     | the web app and scheduled jobs (`DATABASE_URL`), `pnpm admin:mfa-reset` | SELECT/INSERT/UPDATE/DELETE on application tables (none on `two_factor_used_codes`); UPDATE on every `users` column except `is_platform_admin`; EXECUTE `two_factor_claim_code`                            | set `is_platform_admin` (no column privilege; new rows refused by the guard trigger); execute `platform_admin_grant`/`_revoke`; ALTER/DROP/REPLACE any table, trigger or function; create schemas or objects; UPDATE/DELETE/TRUNCATE `audit_logs`; read `_prisma_migrations`; read or write `two_factor_used_codes` directly; be a member of any role |
+| **grant** (`*_grant`) | `pnpm admin:grant` (`ADMIN_GRANT_DATABASE_URL`), revocations            | read `users` (id, email, email_verified, two_factor_enabled, is_platform_admin) and `two_factors`; INSERT `audit_logs`; EXECUTE `platform_admin_grant` / `platform_admin_revoke` / `two_factor_claim_code` | update `users` at all; read sessions, accounts or any other table (incl. `two_factor_used_codes`); be a member of any role; DDL                                                                                                                                                                                                                       |
 
 `scripts/ops/sql/db-roles.sql` applies all of this to one database (ownership transfer,
 revokes, grants, default privileges for future tables) in **one transaction**, after
 checking that the app and grant roles are not superuser/CREATEROLE/CREATEDB/BYPASSRLS/
-REPLICATION and cannot reach the owner (or a superuser) through any chain of role
-memberships; it ends with postconditions and rolls back if any fails. It never creates
+REPLICATION and are a member of **no role at all**, directly or through a chain — the
+owner, a superuser, a managed-service admin role such as `rds_superuser` (which has no
+SUPERUSER attribute), predefined roles such as `pg_write_all_data` / `pg_read_all_data`, or
+any group role; it ends with postconditions (no table privilege on
+`two_factor_used_codes`, the grant role reaches only its three tables, only the approved
+SECURITY DEFINER functions are executable, still no membership after the ownership
+transfer) and rolls back if any fails. It never creates
 roles or passwords. It is idempotent and must be run again after every migration (new
 tables get privileges through default privileges, but a new `users` column needs the
 column grant).
+
+**TOTP codes (Phase D.2).** Both limited roles claim a code only through
+`public.two_factor_claim_code(uuid, text)` (SECURITY DEFINER, owner-owned, fixed
+`search_path`; migration `20261014150000`): it removes only that account's claims expired
+by the database clock and inserts the claim. Neither role has any privilege on
+`two_factor_used_codes`, so neither can delete an unexpired claim to replay a code.
+Deploy the application version that calls the function **before** re-running
+`db-roles.sql` (an older version writes the table directly and would be refused —
+sign-ins with TOTP would fail closed).
+
+**Running the script without exposing credentials.** Use the `ops` image (`Dockerfile`
+target `ops`: the migrate image plus the PostgreSQL 16 client) as a one-off task next to
+the database, with the owner URL injected as an environment variable by the secret
+manager, and let `scripts/ops/lib/pgenv.sh` turn it into libpq variables and a private
+`PGPASSFILE`:
+`OWNER_URL=… bash -c '. scripts/ops/lib/pgenv.sh && pg_use_url OWNER_URL && psql -X -v ON_ERROR_STOP=1 -v owner_role=… -v app_role=… -v grant_role=… -f scripts/ops/sql/db-roles.sql'`
+(`OWNER_URL` comes from the task's secret, not from a typed command). The role names
+passed with `-v` are not secrets.
+
+**Managed PostgreSQL (e.g. Amazon RDS).** The membership and privilege checks are proven
+on a local PostgreSQL 16 with a stand-in for `rds_superuser`; on the managed service,
+prove in staging that the master user can create the roles, transfer ownership, set
+default privileges, column grants and SECURITY DEFINER functions, and that the script's
+checks pass (docs/runbooks/PHASE_D_2_SECURITY_HARDENING.md § 7).
 
 **Trust boundary (stated plainly):** the database can enforce _who_ may grant (only the
 grant role), _what_ is required of the account, and that every grant is audited with the
