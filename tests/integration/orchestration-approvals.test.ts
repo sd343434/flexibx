@@ -665,6 +665,28 @@ describe("Autopilot approvals view", () => {
     expect(html).toContain('data-risk="SPEND"');
     expect(html).toContain("boost_post");
     expect(html).toMatch(/data-testid="automation-approval-amount">SAR\s?50\.00</);
+    // Minor units follow each currency's own digits (shared currencyDigits).
+    const pending = approvals[0];
+    if (pending === undefined) throw new Error("no approval");
+    for (const [currency, shown] of [
+      ["KWD", /KWD\s?5\.000</],
+      ["JPY", /(¥|JP¥|JPY\s?)5,000</],
+    ] as const) {
+      const priced = {
+        ...pending,
+        snapshot: { ...pending.snapshot, amount: { minor: 5_000, currency } },
+      };
+      const other = render(
+        "en",
+        createElement(ApprovalList, {
+          ...props,
+          approvals: [priced],
+          locale: "en",
+          canApprove: true,
+        }),
+      );
+      expect(other, currency).toMatch(shown);
+    }
     expect(html).toContain("Spends money");
     expect(html).toContain('data-testid="automation-approve"');
     expect(html).toContain('data-testid="automation-reject"');

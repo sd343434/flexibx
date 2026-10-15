@@ -109,8 +109,6 @@ export const optionalLocalDateTime = z.preprocess(
   z.string().regex(LOCAL_DATE_TIME_PATTERN).nullable(),
 );
 
-export const localDateTime = z.string().regex(LOCAL_DATE_TIME_PATTERN);
-
 const nonNegativeDecimal = (maxIntegerDigits: number) =>
   z.preprocess(
     (value) =>
@@ -299,12 +297,6 @@ export const changeCampaignStatusInputSchema = z.strictObject({
 });
 
 // ── Content ──────────────────────────────────────────────────────────────────
-
-export const contentMetadataSchema = z.strictObject({
-  hashtags: textList(30, 60),
-  callToAction: optionalText(200),
-  link: optionalUrl,
-});
 
 export const contentFieldsSchema = z.strictObject({
   title: requiredText(200),

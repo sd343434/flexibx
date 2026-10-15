@@ -153,10 +153,6 @@ const MAX_SIGNED_URL_TTL_SECONDS = 3600;
 const KEY_PATTERN =
   /^workspaces\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([a-z-]+)\/[0-9a-f-]{36}\.[a-z0-9]+$/;
 
-export function isAllowedContentType(value: string): value is AllowedContentType {
-  return Object.hasOwn(CONTENT_TYPE_EXTENSIONS, value);
-}
-
 export function isStorageCategory(value: string): value is StorageCategory {
   return Object.hasOwn(STORAGE_CATEGORIES, value);
 }

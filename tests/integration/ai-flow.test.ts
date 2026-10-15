@@ -11,6 +11,7 @@ import {
   submitApply,
   submitAssist,
   submitGenerate,
+  type StudioTool,
 } from "@/app/[locale]/w/[workspaceSlug]/ai/ai-actions";
 import { WorkspaceRole } from "@/generated/prisma/enums";
 import {
@@ -171,6 +172,24 @@ describe("AI actions", () => {
     const state = await submitGenerate("ai-off", "en", "ideas", null, form({ topic: "x" }));
     expect(state).toMatchObject({ error: { code: "SERVICE_UNAVAILABLE" }, values: { topic: "x" } });
     expect((await getAiStudioPage("ai-off", undefined)).configured).toBe(false);
+  });
+
+  it("refuses a tool name outside the table (inherited properties included), calling nothing", async () => {
+    ai.provider = "fake";
+    const { members } = await team("ai-tool", [WorkspaceRole.OWNER]);
+    actAs(nth(members, 0));
+    for (const tool of ["constructor", "__proto__", "toString", "hasOwnProperty", "video"]) {
+      const state = await submitGenerate(
+        "ai-tool",
+        "en",
+        tool as StudioTool,
+        null,
+        form({ topic: "x" }),
+      );
+      expect(state, tool).toMatchObject({ error: { code: "VALIDATION_FAILED" }, values: {} });
+    }
+    expect(await system.aiGeneration.count()).toBe(0);
+    expect(await system.rateLimit.count({ where: { key: { contains: "ai-generate" } } })).toBe(0);
   });
 
   it("limits each person to 20 generations per 10 minutes", async () => {

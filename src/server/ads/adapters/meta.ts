@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+import { graphFailureKind } from "../../meta/graph-errors";
 import {
   AdPlatformError,
   inclusiveDays,
@@ -81,24 +82,10 @@ const int = (value: unknown): number | null => {
   return typeof number === "number" && Number.isSafeInteger(number) && number >= 0 ? number : null;
 };
 
-/** Graph error codes → normalized failures (https://developers.facebook.com/docs/graph-api/guides/error-handling). */
+/** Graph error codes → normalized failures (shared table, then the HTTP status). */
 export function metaFailure(code: number | null, httpStatus: number): AdPlatformError {
-  if (code === 190 || code === 102 || code === 463 || code === 467) {
-    return new AdPlatformError("token_expired", code);
-  }
-  if (code === 10 || code === 3 || (code !== null && code >= 200 && code <= 299)) {
-    return new AdPlatformError("permission_missing", code);
-  }
-  if (
-    code === 4 ||
-    code === 17 ||
-    code === 32 ||
-    code === 613 ||
-    (code !== null && code >= 80000 && code <= 80014)
-  ) {
-    return new AdPlatformError("rate_limited", code);
-  }
-  if (code === 100) return new AdPlatformError("invalid_request", code);
+  const kind = graphFailureKind(code);
+  if (kind !== null) return new AdPlatformError(kind, code);
   if (httpStatus === 401) return new AdPlatformError("token_expired", code);
   if (httpStatus === 403) return new AdPlatformError("permission_missing", code);
   return new AdPlatformError("provider_error", code);
@@ -224,6 +211,8 @@ export function createMetaAdapter(config: MetaAdapterConfig): AdPlatformAdapter 
         headers: { accept: "application/json" },
         signal: AbortSignal.timeout(TIMEOUT_MS),
         cache: "no-store",
+        // The URL carries the access token: never follow a redirect to another host.
+        redirect: "error",
       });
     } catch {
       throw new AdPlatformError("provider_error");

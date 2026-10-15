@@ -12,6 +12,7 @@ import {
   assertUploadAllowed,
   assertValidKey,
   resolveTtl,
+  STORAGE_CATEGORIES,
   StorageAccessError,
   type AllowedContentType,
   type SignedUpload,
@@ -47,6 +48,40 @@ export function classifyAccessError(error: unknown): StorageAccessFailure {
 }
 
 /**
+ * Time limits for S3 requests (the SDK sets none by default, so a stalled endpoint would
+ * hold a request forever). Connection and idle limits apply to every request; `put` and
+ * `getObject` also get a whole-transfer deadline sized for the bytes moved, so a slow but
+ * progressing transfer of a large video is not cut off while a stalled one is.
+ */
+export interface S3Timeouts {
+  /** Establishing the TCP/TLS connection. */
+  readonly connectionMs: number;
+  /** No bytes in either direction on an open request. */
+  readonly idleMs: number;
+  /** Fixed part of a transfer deadline (latency, server processing). */
+  readonly transferBaseMs: number;
+  /** Slowest throughput still accepted, in bytes per second. */
+  readonly minBytesPerSecond: number;
+}
+
+export const S3_TIMEOUTS: S3Timeouts = {
+  connectionMs: 10_000,
+  idleMs: 60_000,
+  transferBaseMs: 30_000,
+  minBytesPerSecond: 1024 * 1024,
+};
+
+/** The largest object any category allows: the bound for a download of unknown size. */
+const MAX_OBJECT_BYTES = Math.max(
+  ...Object.values(STORAGE_CATEGORIES).map((category) => category.maxBytes),
+);
+
+/** Whole-transfer deadline for `bytes` at the slowest accepted throughput. */
+export function transferDeadlineMs(bytes: number, timeouts: S3Timeouts = S3_TIMEOUTS): number {
+  return timeouts.transferBaseMs + Math.ceil((bytes / timeouts.minBytesPerSecond) * 1000);
+}
+
+/**
  * Implementation over the S3 API, intended for S3-compatible services. Its automated tests
  * use SDK test doubles; compatibility with any specific service is not verified here.
  * Wasabi (configured through this class by wasabi-storage.ts) is NOT yet verified against
@@ -58,7 +93,10 @@ export class S3StorageService implements StorageService {
   private readonly bucket: string;
   private readonly publicBaseUrl: string | undefined;
 
-  constructor(env: StorageEnv, client?: S3Client) {
+  private readonly timeouts: S3Timeouts;
+
+  constructor(env: StorageEnv, client?: S3Client, timeouts: S3Timeouts = S3_TIMEOUTS) {
+    this.timeouts = timeouts;
     this.bucket = env.S3_BUCKET;
     this.publicBaseUrl = env.S3_PUBLIC_BASE_URL?.replace(/\/+$/, "");
     this.client =
@@ -71,6 +109,10 @@ export class S3StorageService implements StorageService {
           secretAccessKey: env.S3_SECRET_ACCESS_KEY,
         },
         ...(env.S3_ENDPOINT === undefined ? {} : { endpoint: env.S3_ENDPOINT }),
+        requestHandler: {
+          connectionTimeout: timeouts.connectionMs,
+          socketTimeout: timeouts.idleMs,
+        },
       });
   }
 
@@ -87,6 +129,7 @@ export class S3StorageService implements StorageService {
         Body: body,
         ContentType: options.contentType,
       }),
+      { abortSignal: AbortSignal.timeout(transferDeadlineMs(body.byteLength, this.timeouts)) },
     );
   }
 
@@ -155,9 +198,13 @@ export class S3StorageService implements StorageService {
 
   async getObject(key: string): Promise<StoredObjectData | null> {
     assertValidKey(key);
+    // One deadline for the response and reading the body: the size is unknown up front,
+    // so it is sized for the largest object a category allows.
+    const abortSignal = AbortSignal.timeout(transferDeadlineMs(MAX_OBJECT_BYTES, this.timeouts));
     try {
       const result = await this.client.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+        { abortSignal },
       );
       if (result.Body === undefined) return null;
       return {

@@ -107,10 +107,6 @@ export const RATE_LIMIT_BUCKETS = Object.keys(RATE_LIMIT_RULES) as RateLimitBuck
 /** Better Auth path prefix of the limiter checkpoint endpoint (internal only). */
 export const RATE_LIMIT_CHECKPOINT_PREFIX = "/flexibx/rate-limit";
 
-export function isRateLimitBucket(value: unknown): value is RateLimitBucket {
-  return typeof value === "string" && Object.hasOwn(RATE_LIMIT_RULES, value);
-}
-
 /**
  * Opaque, stable identifier for a subject (normalized email or user id) within a
  * bucket: HMAC-SHA256 keyed with AUTH_SECRET, so a leaked `rate_limits` table cannot be

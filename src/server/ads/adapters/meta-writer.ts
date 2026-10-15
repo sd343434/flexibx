@@ -58,7 +58,6 @@ const FACEBOOK_POSITIONS: Readonly<Partial<Record<AdPlacement, string>>> = {
   FACEBOOK_STORIES: "story",
   FACEBOOK_REELS: "facebook_reels",
 };
-export const META_PLACEMENTS = Object.keys(FACEBOOK_POSITIONS) as AdPlacement[];
 
 /**
  * Currencies whose Meta amounts are NOT in 1/100 units even though ISO 4217 gives them

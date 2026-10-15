@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 
+import { graphFailureKind } from "../meta/graph-errors";
+
 // Meta Graph calls for the AI Social Manager: the Pages (and their Instagram professional
 // accounts) a person manages, the Page webhook subscription, replies to comments and
 // messages, and reading recent comments. Pure (no `server-only`) for tests; `fetch` is
@@ -50,14 +52,10 @@ const cleanId = (value: unknown) => {
   return text !== null && ID.test(text) ? text : null;
 };
 
-/** Graph error codes → failures (190 token, 10/200-299 permission, 4/17/32/613 rate). */
+/** Graph error codes → failures: the shared table, plus the closed 24-hour window. */
 function failureOf(code: number | null, subcode: number | null): SocialFailure {
-  if (code === 190 || code === 102) return "token_expired";
   if (code === 10 && subcode === 2018278) return "window_closed";
-  if (code === 10 || (code !== null && code >= 200 && code <= 299)) return "permission_missing";
-  if (code === 4 || code === 17 || code === 32 || code === 613) return "rate_limited";
-  if (code === 100) return "invalid_request";
-  return "provider_error";
+  return graphFailureKind(code) ?? "provider_error";
 }
 
 export interface ManagedPage {

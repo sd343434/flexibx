@@ -185,12 +185,7 @@ export async function countVideosExpiringWithin(
   });
 }
 
-const DOWNLOADABLE_KINDS = ["VIDEO", "THUMBNAIL"] as const;
-export type DownloadableKind = (typeof DOWNLOADABLE_KINDS)[number];
-
-export function isDownloadableKind(value: string): value is DownloadableKind {
-  return (DOWNLOADABLE_KINDS as readonly string[]).includes(value);
-}
+export type DownloadableKind = "VIDEO" | "THUMBNAIL";
 
 function downloadName(title: string, contentType: string): string {
   const base =

@@ -123,4 +123,24 @@ describe("webhook body size cap", () => {
     expect(response.status).toBe(413);
     expect(big.pulls()).toBeLessThan(25);
   });
+
+  it(
+    "the WhatsApp webhook and Meta's user callbacks answer 413 to an oversized chunked body",
+    { timeout: 20_000 },
+    async () => {
+      const routes = [
+        await import("@/app/api/integrations/whatsapp/webhook/route"),
+        await import("@/app/api/integrations/meta/deauthorize/route"),
+        await import("@/app/api/integrations/meta/data-deletion/route"),
+      ];
+      for (const { POST } of routes) {
+        // No Content-Length: only the streaming cap can stop it. 20 MiB is 320 chunks; the
+        // largest cap (WhatsApp, 3 MiB) is passed after about 49.
+        const big = streamed(20 * 1024 * 1024, { "x-hub-signature-256": "sha256=00" });
+        const response = await POST(big.request);
+        expect(response.status).toBe(413);
+        expect(big.pulls()).toBeLessThan(60);
+      }
+    },
+  );
 });

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inclusiveDays } from "@/server/ads/adapter";
-import { majorToMinor, readCampaignSpec } from "@/server/ads/model";
+import { currencyDigits, majorToMinor, readCampaignSpec } from "@/server/ads/model";
 import {
   accountHistory,
   expectedResults,
@@ -64,6 +64,15 @@ describe("money", () => {
     expect(majorToMinor("1.234", "KWD")).toBe(1234);
     expect(majorToMinor("-1", "SAR")).toBeNull();
     expect(majorToMinor("1e5", "SAR")).toBeNull();
+  });
+
+  it("knows each currency's digits and falls back to 2 for a code Intl rejects", () => {
+    expect(currencyDigits("SAR")).toBe(2);
+    expect(currencyDigits("JPY")).toBe(0);
+    expect(currencyDigits("KWD")).toBe(3);
+    // A malformed code makes Intl.NumberFormat throw; the helper must not.
+    expect(currencyDigits("NOT-A-CODE")).toBe(2);
+    expect(currencyDigits("")).toBe(2);
   });
 
   it("parses a person's budget in Arabic or Western digits", () => {

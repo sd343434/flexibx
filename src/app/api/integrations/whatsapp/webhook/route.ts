@@ -1,3 +1,4 @@
+import { readBodyCapped } from "@/server/http/read-body";
 import { MAX_WEBHOOK_BYTES } from "@/server/whatsapp/webhook";
 import {
   answerVerification,
@@ -20,9 +21,12 @@ export function GET(request: Request): Response {
 
 /** POST /api/integrations/whatsapp/webhook — signed WhatsApp notifications. */
 export async function POST(request: Request): Promise<Response> {
-  if (Number(request.headers.get("content-length") ?? "0") > MAX_WEBHOOK_BYTES) {
-    return reply({ status: 413, body: "too large" });
+  // The size cap applies while the body streams in (chunked bodies have no length header).
+  const body = await readBodyCapped(request, MAX_WEBHOOK_BYTES);
+  if (!body.ok) {
+    return body.reason === "too_large"
+      ? reply({ status: 413, body: "too large" })
+      : reply({ status: 400, body: "unreadable body" });
   }
-  const raw = new Uint8Array(await request.arrayBuffer());
-  return reply(await handleNotification(raw, request.headers.get("x-hub-signature-256")));
+  return reply(await handleNotification(body.bytes, request.headers.get("x-hub-signature-256")));
 }

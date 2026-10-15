@@ -27,6 +27,14 @@ const BEARER_PATTERN = /\b(bearer)\s+[a-z0-9._~+/=-]+/gi;
 export const INVITATION_URL_PATTERN =
   /(?:\/|%2F)invite(?:\/|%2F)|^\/api\/integrations\/[a-z]+\/(?:callback|webhook)(?:[?#]|$)/i;
 
+/**
+ * Secret query parameters of Graph and OAuth URLs (`?access_token=…`, `&code=…`,
+ * `&appsecret_proof=…`, also `hub.verify_token`, `client_secret`, `refresh_token`) →
+ * `name=[REDACTED]`, so a URL inside an error message or log line never carries them.
+ */
+const QUERY_SECRET_PATTERN =
+  /([?&](?:hub\.)?(?:access_token|refresh_token|verify_token|client_secret|appsecret_proof|code)=)[^&#\s"']+/gi;
+
 /** `/ar/invite/<one-time token>` → `/ar/invite/[REDACTED]`, also URL-encoded. */
 const INVITE_TOKEN_PATTERN = /((?:\/|%2F)invite(?:\/|%2F))[A-Za-z0-9_-]+/gi;
 
@@ -40,6 +48,7 @@ export function redactString(value: string): string {
   return value
     .replace(URL_CREDENTIALS_PATTERN, `$1:${REDACTED}@`)
     .replace(BEARER_PATTERN, `$1 ${REDACTED}`)
+    .replace(QUERY_SECRET_PATTERN, `$1${REDACTED}`)
     .replace(INVITE_TOKEN_PATTERN, `$1${REDACTED}`);
 }
 

@@ -5,6 +5,7 @@ import { ActionButton, inputClass } from "@/components/marketing/entity-form";
 import { Badge, EmptyState } from "@/components/marketing/page-parts";
 import { Link } from "@/i18n/navigation";
 import { cn } from "@/lib/utils";
+import { currencyDigits } from "@/server/ads/model";
 import type { AutopilotPage } from "@/server/orchestration/automation-queries";
 import { formatDeletionTime } from "@/server/videos/retention-policy";
 
@@ -254,10 +255,7 @@ export function ExceptionList({
 
 /** Minor units → the currency's major units (2 decimals for SAR, 0 for JPY, 3 for KWD). */
 function majorUnits(minor: number, currency: string): number {
-  const digits =
-    new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()
-      .maximumFractionDigits ?? 2;
-  return minor / 10 ** digits;
+  return minor / 10 ** currencyDigits(currency);
 }
 
 function detailText(value: unknown): string {

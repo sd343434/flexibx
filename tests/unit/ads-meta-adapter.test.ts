@@ -16,6 +16,7 @@ const TOKEN = "EAAB-test-long-lived-token";
 interface Call {
   readonly method: string;
   readonly url: URL;
+  readonly redirect: RequestRedirect | undefined;
 }
 
 type Route = (url: URL) => { status?: number; body: unknown };
@@ -26,7 +27,7 @@ function fakeGraph(routes: Record<string, Route>) {
     const url = new URL(
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
     );
-    calls.push({ method: init?.method ?? "GET", url });
+    calls.push({ method: init?.method ?? "GET", url, redirect: init?.redirect });
     const key = Object.keys(routes).find((path) => url.pathname.endsWith(path));
     const route = key === undefined ? undefined : routes[key];
     const answer =
@@ -216,6 +217,8 @@ describe("Meta reads", () => {
     expect(pages).toBe(2);
     expect(calls[1]?.url.searchParams.get("after")).toBe("c1");
     expect(calls[0]?.url.searchParams.get("appsecret_proof")).toBe(proof(TOKEN));
+    // The URL carries the token: a redirect is an error, never followed to another host.
+    expect(calls.map((call) => call.redirect)).toEqual(["error", "error"]);
   });
 
   it("reads campaigns, ad sets, ads and insights into a valid unified snapshot (GET only)", async () => {

@@ -1,5 +1,7 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -11,6 +13,8 @@ import {
   generateCopyAction,
   generateIdeasAction,
 } from "@/server/ai/ai-actions";
+import { AppError } from "@/server/errors/app-error";
+import { toErrorResponseBody } from "@/server/errors/http";
 
 import type { MarketingFormState } from "../marketing-actions";
 
@@ -55,6 +59,12 @@ export async function submitGenerate(
   _previous: MarketingFormState,
   formData: FormData,
 ): Promise<MarketingFormState> {
+  // `tool` is a bound argument the browser can change: only the table's own keys (never an
+  // inherited property such as `constructor`) select an action.
+  if (!Object.hasOwn(TOOLS, tool)) {
+    const error = new AppError("VALIDATION_FAILED", { message: "unknown AI Studio tool" });
+    return { error: toErrorResponseBody(error, randomUUID()).error, values: {} };
+  }
   const { action, fields } = TOOLS[tool];
   const values = collect(formData, fields);
   const result = await action({ slug, uiLocale: toLocale(locale), ...values });
