@@ -85,6 +85,8 @@ describe("POST /api/internal/automation-tick", () => {
       creditHoldsReleased: 0,
       videoJobsResumed: 0,
       failedPhases: [],
+      status: "completed",
+      skippedPhases: [],
     });
     expect(JSON.stringify(body)).not.toContain(ctx.workspaceId);
     expect(

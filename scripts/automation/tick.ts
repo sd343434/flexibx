@@ -8,9 +8,11 @@
 //
 // For development and for hosts with the full source tree; production schedulers call the
 // endpoint. It needs the same server environment as the app; a local .env file is loaded
-// when present. Exits non-zero when a phase failed (the other phases still ran).
+// when present. Exits non-zero when a phase failed (the other phases still ran); a tick
+// skipped because another is running, or cut short by its time budget, exits 0 and is
+// logged and alerted (runScheduledAutomationTick).
 
-import { getSystemDb } from "@/server/db/client";
+import { closeTickLockDb, getSystemDb } from "@/server/db/client";
 import { logger } from "@/server/logger";
 import { runScheduledAutomationTick } from "@/server/orchestration/runtime";
 
@@ -26,5 +28,8 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    await Promise.allSettled([Promise.resolve().then(() => getSystemDb().$disconnect())]);
+    await Promise.allSettled([
+      Promise.resolve().then(() => getSystemDb().$disconnect()),
+      closeTickLockDb(),
+    ]);
   });

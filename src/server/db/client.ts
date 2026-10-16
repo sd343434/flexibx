@@ -15,6 +15,7 @@ interface DbSingletons {
   base?: PrismaClient;
   guarded?: GuardedPrismaClient;
   retention?: { system: PrismaClient; db: GuardedPrismaClient };
+  tickLock?: PrismaClient;
 }
 
 // Reuse clients across hot reloads in development (one connection pool per process).
@@ -62,6 +63,30 @@ export async function closeBoundedRetentionDb(): Promise<void> {
   const retention = singletons.retention;
   delete singletons.retention;
   await retention?.system.$disconnect();
+}
+
+/**
+ * A small pool that only holds the scheduler tick's single-flight advisory lock (reviewed
+ * call site: src/server/orchestration/runtime.ts). Separate from the application pool so
+ * a long tick never takes a connection the app needs; statements and connection waits are
+ * bounded. More than one connection, so a second tick in the same process can still ask
+ * for the lock (and be told it is taken) while the first holds it. UNGUARDED: it runs the
+ * lock query and nothing else.
+ */
+export function getTickLockDb(): PrismaClient {
+  singletons.tickLock ??= createBoundedPrismaClient(getEnv().DATABASE_URL, {
+    statementTimeoutMs: 5_000,
+    connectionTimeoutMs: 5_000,
+    maxConnections: 3,
+  });
+  return singletons.tickLock;
+}
+
+/** Closes the tick-lock pool, if one was opened (processes that end after one tick). */
+export async function closeTickLockDb(): Promise<void> {
+  const lock = singletons.tickLock;
+  delete singletons.tickLock;
+  await lock?.$disconnect();
 }
 
 /**

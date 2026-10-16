@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
 // Requires `Authorization: Bearer $AUTOMATION_CRON_SECRET`; a 404 when the secret is
 // unset or the token is missing/wrong, so its existence is not revealed. Authorized calls
 // share one limit of 12 per 10 minutes (429 above it). Responses hold counts only.
-// Overlapping calls are safe: slots are claimed by compare-and-set and tasks by lease.
+// Single flight across instances (advisory lock): an overlapping call returns
+// `status: "skipped"`. Items are also claimed by compare-and-set and tasks by lease.
 
 const RATE_LIMIT_SUBJECT = "internal-automation-tick";
 

@@ -95,6 +95,18 @@ tooling).
    Refuses on a checksum mismatch, a `--confirm-target` that is not the target's name, or a
    target with any table (it cannot overwrite a live database). Runs in one transaction.
 
+   Failure modes (exit 2 = refused before any change, exit 1 = `FAILED`):
+   - Refused (checksum, missing `.sha256`, wrong name, non-empty target): nothing was
+     written. Fix the cause; never edit the `.sha256` file to make a dump pass.
+   - `FAILED` during `pg_restore` (connection lost, disk full, an object that already
+     exists such as a leftover type or extension, a dump from a newer major version): the
+     single transaction rolls back, so the target is left as it was (no partial restore).
+     Drop and recreate the target database anyway before retrying, so the next attempt
+     starts from a known-empty state.
+   - Restored but verification fails (§ 5): the restored database is not usable; do not
+     point the app at it. Try the previous backup (or PITR) and record the failure (§ 6).
+   - Interrupted by the operator (Ctrl-C) or the task runner's timeout: same as `FAILED`.
+
 4. Apply migrations that are newer than the dump, if the application version is newer:
    `DATABASE_URL=… pnpm db:deploy` (forward only, see DEPLOYMENT.md).
 5. Verify (§ 5). Do not reopen traffic until every check passes.

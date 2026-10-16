@@ -10,8 +10,12 @@
 ARG NODE_IMAGE=node:22.22.3-bookworm-slim
 
 FROM ${NODE_IMAGE} AS base
+# COREPACK_HOME: pnpm is fetched once at build time (as root) into a shared, world-readable
+# directory, so the `migrate` and `ops` jobs (USER node) run `pnpm` without network access
+# (the default cache is root's home, which node cannot read).
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
+    COREPACK_HOME=/corepack \
     NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable
 WORKDIR /app

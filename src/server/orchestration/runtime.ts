@@ -4,7 +4,7 @@ import type { AiRuntime } from "../ai/ai-service";
 import { providerFromEnv } from "../ai/configured-provider";
 import { creditsSettingsFromEnv } from "../billing/config";
 import { releaseStaleHolds } from "../billing/credits";
-import { getDb, getSystemDb } from "../db/client";
+import { getDb, getSystemDb, getTickLockDb } from "../db/client";
 import { getAiEnv, getVideoEnv } from "../env";
 import { logger } from "../logger";
 import type { Alert } from "../monitoring/alert-sink";
@@ -118,6 +118,14 @@ export interface ScheduledTickSummary {
   readonly videoJobsResumed: number;
   /** Phases that failed on this tick (logged); the others still ran. */
   readonly failedPhases: readonly string[];
+  /**
+   * completed: every phase was started. partial: the tick ran out of its time budget
+   * (TICK_TIME_BUDGET_MS) and did not start `skippedPhases` (the next tick runs them).
+   * skipped: another tick held the single-flight lock; nothing ran.
+   */
+  readonly status: "completed" | "partial" | "skipped";
+  /** Phases not started because the time budget had run out (partial only). */
+  readonly skippedPhases: readonly string[];
 }
 
 const EMPTY_SOCIAL = { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 } as const;
@@ -155,12 +163,6 @@ export const DEFAULT_TICK_PHASES: TickPhases = {
   },
 };
 
-/**
- * One scheduler tick: the single entry point for POST /api/internal/automation-tick and
- * `pnpm automation:tick`. Each phase runs on its own — a phase that fails as a whole is
- * logged and reported in `failedPhases`, and the following phases still run (each phase
- * also isolates its own items).
- */
 /** Monitoring work around the tick: logged on failure, never fails the tick. */
 async function bestEffort(name: string, work: () => Promise<unknown>): Promise<void> {
   try {
@@ -185,7 +187,11 @@ async function bestEffort(name: string, work: () => Promise<unknown>): Promise<v
  * (credit holds, sends, publishes) and ledger inconsistencies. Alerts are throttled per
  * key (alert-sink.ts).
  */
-async function reportTick(failedPhases: readonly string[], at: Date): Promise<void> {
+async function reportTick(
+  failedPhases: readonly string[],
+  skippedPhases: readonly string[],
+  at: Date,
+): Promise<void> {
   const intervalMs = ledgerIntegrityIntervalMs();
   await bestEffort("ledger_integrity", () =>
     runLedgerIntegrityCheck(getSystemDb(), at, { intervalMs }),
@@ -194,6 +200,14 @@ async function reportTick(failedPhases: readonly string[], at: Date): Promise<vo
     recordJobFinished(getSystemDb(), "automation-tick", failedPhases, at),
   );
   const alerts: Alert[] = [];
+  if (skippedPhases.length > 0) {
+    alerts.push({
+      key: "automation_tick_over_budget",
+      severity: "warning",
+      title: "Scheduled tick ran out of its time budget",
+      details: { skippedPhases: [...skippedPhases] },
+    });
+  }
   if (failedPhases.length > 0) {
     alerts.push({
       key: "automation_tick_phase_failed",
@@ -222,15 +236,143 @@ async function reportTick(failedPhases: readonly string[], at: Date): Promise<vo
   await Promise.all(alerts.map((entry) => alert(entry)));
 }
 
+/**
+ * One scheduler tick: the single entry point for POST /api/internal/automation-tick and
+ * `pnpm automation:tick`. Single flight across every instance (tickLock): a tick that
+ * finds another running returns `status: "skipped"` with an overlap alert. Each phase runs
+ * on its own — a phase that fails as a whole is logged and reported in `failedPhases`, and
+ * the following phases still run (each phase also isolates its own items). No phase is
+ * started after the time budget; those are reported in `skippedPhases` (alerted) and run
+ * on the next tick.
+ */
 export async function runScheduledAutomationTick(
   now: () => Date = () => new Date(),
   phases: TickPhases = DEFAULT_TICK_PHASES,
+  options: TickOptions = {},
 ): Promise<ScheduledTickSummary> {
+  const lock = options.lock ?? withTickLock;
+  const outcome = await lock(() => runTickPhases(now, phases, options));
+  if (outcome.ran) {
+    if (outcome.lockLost === true) {
+      // The work went on past the lock's transaction timeout: another tick could have
+      // started meanwhile (harmless: items are claimed by lease / compare-and-set).
+      logger.warn({ event: "automation_tick.lock_expired" }, "Tick outlived its lock");
+      await alert({
+        key: "automation_tick_lock_expired",
+        severity: "warning",
+        title: "Scheduled tick ran past its single-flight lock",
+      });
+    }
+    return outcome.value;
+  }
+  logger.warn({ event: "automation_tick.overlap" }, "Scheduled tick skipped: another is running");
+  await alert({
+    key: "automation_tick_overlap",
+    severity: "warning",
+    title: "Scheduled tick skipped: the previous one was still running",
+  });
+  return {
+    recovered: 0,
+    scheduled: 0,
+    skippedNoDelegate: 0,
+    advanced: 0,
+    runs: {},
+    social: EMPTY_SOCIAL,
+    creditHoldsReleased: 0,
+    videoJobsResumed: 0,
+    failedPhases: [],
+    status: "skipped",
+    skippedPhases: [],
+  };
+}
+
+/**
+ * A tick stops starting phases this long after it began (checked between phases; a phase
+ * already running is not interrupted — each one bounds its own items with leases,
+ * per-step timeouts and batch limits). Shorter than the 5-minute schedule, so a slow tick
+ * normally finishes before the next slot; phases not started run on the next tick.
+ */
+export const TICK_TIME_BUDGET_MS = 4 * 60 * 1000;
+
+/**
+ * The single-flight lock's transaction times out (and releases the lock) after this, even
+ * if the tick is still running, so a hung tick cannot block the scheduler for long.
+ */
+export const TICK_LOCK_TIMEOUT_MS = 9 * 60 * 1000;
+
+/** Advisory lock key of the scheduler tick (stable, arbitrary; distinct from retention's). */
+export const TICK_LOCK_KEY = 0x5e7a_71c4;
+
+export type TickLock = <T>(
+  work: () => Promise<T>,
+) => Promise<{ ran: true; value: T; lockLost?: boolean } | { ran: false }>;
+
+export interface TickOptions {
+  /** Time budget for starting phases (default TICK_TIME_BUDGET_MS). */
+  readonly timeBudgetMs?: number;
+  /** Milliseconds since an arbitrary origin (default performance.now()). Tests only. */
+  readonly elapsedClock?: () => number;
+  /** The single-flight lock (default: the database advisory lock). Tests only. */
+  readonly lock?: TickLock;
+}
+
+/**
+ * Cluster-wide single flight, the same pattern as the video retention run: a
+ * transaction-level advisory lock held in an interactive transaction on its own
+ * one-connection pool, released on commit, rollback, the transaction timeout or a dropped
+ * connection (crash-safe: never held after the process is gone). Works behind
+ * transaction-mode poolers. If the work outlives the transaction timeout, the lock is
+ * released and the result is still returned (`lockLost`).
+ */
+export function tickLock(
+  timeoutMs: number = TICK_LOCK_TIMEOUT_MS,
+  db: () => ReturnType<typeof getTickLockDb> = getTickLockDb,
+): TickLock {
+  return async <T>(work: () => Promise<T>) => {
+    let done: { value: T } | undefined;
+    try {
+      const ran = await db().$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<{ ok: boolean }[]>`
+            SELECT pg_try_advisory_xact_lock(${TICK_LOCK_KEY}::bigint) AS "ok"`;
+          if (rows[0]?.ok !== true) return false;
+          done = { value: await work() };
+          return true;
+        },
+        { maxWait: 10_000, timeout: timeoutMs },
+      );
+      return ran && done !== undefined
+        ? { ran: true as const, value: done.value }
+        : { ran: false as const };
+    } catch (error) {
+      // The work finished, but its transaction had already timed out (commit refused).
+      if (done !== undefined) return { ran: true as const, value: done.value, lockLost: true };
+      throw error;
+    }
+  };
+}
+
+const withTickLock: TickLock = (work) => tickLock()(work);
+
+/** The phases of one tick, under its time budget. */
+async function runTickPhases(
+  now: () => Date,
+  phases: TickPhases,
+  options: TickOptions,
+): Promise<ScheduledTickSummary> {
+  const elapsed = options.elapsedClock ?? (() => performance.now());
+  const budgetMs = options.timeBudgetMs ?? TICK_TIME_BUDGET_MS;
+  const startedAt = elapsed();
   const failedPhases: string[] = [];
+  const skippedPhases: string[] = [];
   await bestEffort("heartbeat_start", () =>
     recordJobStarted(getSystemDb(), "automation-tick", now()),
   );
   async function phase<T>(name: string, fallback: T, work: () => Promise<T>): Promise<T> {
+    if (elapsed() - startedAt >= budgetMs) {
+      skippedPhases.push(name);
+      return fallback;
+    }
     try {
       return await work();
     } catch (error) {
@@ -256,7 +398,13 @@ export async function runScheduledAutomationTick(
         : outcome.status;
     runs[key] = (runs[key] ?? 0) + 1;
   }
-  await reportTick(failedPhases, now());
+  if (skippedPhases.length > 0) {
+    logger.warn(
+      { event: "automation_tick.over_budget", skippedPhases, budgetMs },
+      "Scheduled tick ran out of its time budget",
+    );
+  }
+  await reportTick(failedPhases, skippedPhases, now());
   return {
     recovered: summary.recovered,
     scheduled: summary.scheduled,
@@ -267,5 +415,7 @@ export async function runScheduledAutomationTick(
     creditHoldsReleased,
     videoJobsResumed,
     failedPhases,
+    status: skippedPhases.length > 0 ? "partial" : "completed",
+    skippedPhases,
   };
 }
