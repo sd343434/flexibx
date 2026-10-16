@@ -169,6 +169,13 @@ test("the marketing foundation, content workflow and calendar in /en", async ({ 
   await expect(page.getByTestId("content-form")).toHaveCount(0);
   await page.getByTestId("transition-approve").getByRole("button").click();
   await expect(page.getByTestId("content-status")).toHaveText("Approved");
+  // No Meta connection in this workspace: the publishing card says posts would be held
+  // (and why) instead of offering an instant "publish now".
+  const onHold = page.getByTestId("content-publishing-on-hold");
+  await expect(onHold).toBeVisible();
+  await expect(
+    onHold.locator('[data-blocker="not_connected"], [data-blocker="meta_not_configured"]'),
+  ).toHaveCount(1);
   await page.fill('[data-testid="schedule-at"]', "2020-01-01T10:00");
   await page.getByTestId("transition-schedule").getByRole("button").click();
   await expect(page.getByTestId("action-error")).toBeVisible();

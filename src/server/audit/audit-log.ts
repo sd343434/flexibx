@@ -109,6 +109,8 @@ export const AUDIT_ACTIONS = [
   "social.guidance_applied",
   "social.lesson_dismissed",
   "social.post_queued",
+  "social.post_rescheduled",
+  "social.post_cancelled",
   "social.post_published",
   "social.post_uncertain",
   "ads.connect_started",

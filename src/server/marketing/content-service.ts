@@ -6,6 +6,7 @@ import type { GuardedPrismaClient } from "../db/prisma";
 import type { Db, GuardedTransactionClient } from "../db/types";
 import type { TenantContext } from "../tenancy/context";
 import { assertCan, can } from "../tenancy/permissions";
+import { followContentStatus, hasPostInFlight, moveQueuedPosts } from "../social/queued-posts";
 
 import {
   changedFields,
@@ -378,8 +379,10 @@ export async function updateContentIn(
  * Runs one workflow transition. The client names the transition, never the resulting
  * status; the rule decides the permission, the allowed starting statuses and the result.
  * `schedule` needs a future time (`scheduledAt`, workspace time zone; the planned time is
- * used when none is given). `publish` records that the content went out (no external
- * publishing happens in Flexibx yet).
+ * used when none is given). `publish` records that the content went out by other means
+ * (a person published it themselves). Queued Facebook posts follow the new status in the
+ * same transaction (social/queued-posts.ts): they move with a new schedule and are
+ * cancelled when the content is unscheduled, marked published or no longer approved.
  */
 export async function transitionContent(
   db: GuardedPrismaClient,
@@ -408,6 +411,7 @@ export async function transitionContent(
     }
 
     const data: Prisma.ContentItemUpdateManyMutationInput = { status: rule.to };
+    let scheduledFor: Date | null = null;
     if (input.transition === "schedule") {
       const zone = await workspaceTimeZone(tx, ctx);
       const requested = toInstant(input.scheduledAt, zone, "scheduledAt");
@@ -415,6 +419,7 @@ export async function transitionContent(
       if (when === null) throw fieldError("scheduledAt", "schedule_required");
       if (when.getTime() <= now.getTime()) throw fieldError("scheduledAt", "schedule_in_past");
       data.scheduledAt = when;
+      scheduledFor = when;
     }
     if (rule.to === "PUBLISHED") data.publishedAt = now;
 
@@ -431,6 +436,7 @@ export async function transitionContent(
       entityId: input.contentId,
       metadata: { transition: input.transition, from: existing.status, to: rule.to },
     });
+    await followContentStatus(tx, ctx, input.contentId, existing.status, rule.to, scheduledFor);
     return { contentId: input.contentId, status: rule.to };
   });
 }
@@ -482,6 +488,11 @@ export async function rescheduleContent(
       entityId: input.contentId,
       metadata: { fields: ["scheduledAt"], status: existing.status },
     });
+    // A committed schedule moved: its queued Facebook posts go out at the new time. (A
+    // planned date on unscheduled work moves nothing: its posts were queued for "now".)
+    if (existing.status === "SCHEDULED" && scheduledAt !== null) {
+      await moveQueuedPosts(tx, ctx, input.contentId, scheduledAt);
+    }
     return { contentId: input.contentId, scheduledAt };
   });
 }
@@ -500,6 +511,11 @@ export async function deleteContent(
     });
     if (existing === null) throw notFound("content");
     assertCan(ctx, contentDeletePermission(existing.status));
+    // Deleting removes its publications too: never while one may be going out (or went
+    // out unconfirmed), or the only record of a post on the Page would be lost.
+    if (await hasPostInFlight(tx, ctx.workspaceId, contentId)) {
+      throw conflict("content", "publication_in_flight", { status: existing.status });
+    }
     const { count } = await tx.contentItem.deleteMany({
       where: { workspaceId: ctx.workspaceId, id: contentId, status: existing.status },
     });

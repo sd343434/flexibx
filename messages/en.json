@@ -400,6 +400,7 @@
     "reference_archived": "Archived items can't be newly linked.",
     "invalid_transition": "This step isn't available for the item's current status. Refresh and try again.",
     "content_locked": "Only drafts can be edited. Move this item back to draft first.",
+    "publication_in_flight": "A Facebook post of this item is being published or waits for a check on the Page. Settle it on the content page first.",
     "campaign_locked": "Archived campaigns can't be changed.",
     "schedule_required": "Choose the date and time to schedule.",
     "schedule_in_past": "The scheduled time must be in the future.",
@@ -798,7 +799,7 @@
       "body": "Body",
       "noBody": "No body text yet.",
       "assets": "Images",
-      "externalNotice": "Flexibx doesn't post to social networks yet. “Mark as published” records that you published it yourself.",
+      "externalNotice": "“Mark as published” records that you published this yourself. To have Flexibx publish it, use the Facebook Page card below (text and link only; other networks are not available yet). Marking it as published cancels posts still waiting there.",
       "fields": {
         "title": "Title",
         "body": "Body",
@@ -896,7 +897,9 @@
         "video_expiry_reminder": "sent a reminder that an AI video will be deleted",
         "video_files_deleted": "deleted an AI video after 7 days",
         "video_deletion_failed": "will retry deleting an AI video",
-        "video_metadata_purged": "removed the records of an old AI video"
+        "video_metadata_purged": "removed the records of an old AI video",
+        "social_post_rescheduled": "moved queued Facebook posts to the new time",
+        "social_post_cancelled": "cancelled queued Facebook posts"
       },
       "systemActor": "Flexibx"
     }
@@ -2229,12 +2232,13 @@
     },
     "publishing": {
       "title": "Publish to a Facebook Page",
-      "hint": "Approved content is published on the Page at its scheduled time (text and link). Images and Instagram publishing are not available yet.",
+      "hint": "Approved content is published on the Page by the scheduler, which runs every few minutes: at the content's scheduled time, or at the next run once you queue it. Text and link only; images and Instagram publishing are not available yet.",
       "needsApproval": "Approve this content first: only approved or scheduled content can be published.",
       "noPages": "No Facebook Page yet: refresh your Pages on the AI social manager page.",
       "page": "Page",
       "schedule": "Publish at the scheduled time",
-      "publishNow": "Publish now",
+      "queueNow": "Queue for the next run",
+      "queueNowHint": "Not instant: the post goes out at the scheduler's next run, usually within a few minutes.",
       "working": "Working…",
       "cancel": "Cancel",
       "check": "Check on the Page",
@@ -2246,16 +2250,37 @@
         "FAILED": "Failed",
         "CANCELLED": "Cancelled"
       },
+      "dueNext": "Goes out at the next scheduler run",
+      "waiting": "Waiting",
+      "onHold": {
+        "title": "Queued posts are on hold",
+        "intro": "Nothing on this page is published while any of these remains:",
+        "sending_disabled": "Publishing is switched off on this server (SOCIAL_SENDING_ENABLED). An operator must turn it back on.",
+        "meta_not_configured": "Meta is not set up on this server, so nothing can be published to Facebook.",
+        "not_connected": "Connect your Meta account on the Ads page first.",
+        "connection_expired": "Your Meta connection expired. Reconnect it on the Ads page.",
+        "emergency_stop": "The emergency stop is on. Resume automation on the Autopilot page.",
+        "scheduler_stale": "The scheduler has not run recently (last run: {last}). Posts go out once it runs again.",
+        "never": "never",
+        "fixAds": "Open Ads",
+        "fixAutopilot": "Open Autopilot",
+        "missedWindow": "Posts held for more than 24 hours after their time are not published: they fail and you can queue them again."
+      },
       "errors": {
         "content_not_approved": "Cancelled: the content was no longer approved.",
+        "unscheduled": "Cancelled: the content was unscheduled.",
+        "marked_published": "Cancelled: the content was marked as published by hand.",
         "channel_disabled": "The Page is turned off.",
+        "missed_window": "Not published: it was held for more than 24 hours after its time. Queue it again if it is still relevant.",
         "not_published_confirmed": "Confirmed not published. You can queue it again.",
-        "token_expired": "The Meta connection expired. Reconnect it.",
+        "reconnect": "The Meta connection expired. Reconnect it on the Ads page, then queue it again.",
         "permission_missing": "Meta did not grant permission to publish on this Page.",
-        "social_page_unavailable": "This Page is no longer available to your Meta connection.",
-        "provider_error": "Meta did not confirm the post: check the Page.",
+        "page_unavailable": "This Page is no longer available to your Meta connection.",
+        "not_configured": "Meta is not set up on this server.",
+        "rate_limited": "Meta asked us to slow down. Queue it again in a while.",
+        "provider_error": "Meta refused the post. Queue it again; if it repeats, check the Page.",
         "no_answer": "Meta did not answer: check on the Page before queuing it again.",
-        "other": "Something went wrong."
+        "other": "Something went wrong. Queue it again; if it repeats, contact support."
       },
       "moreOpen": "{count, plural, one {# more post needs attention} other {# more posts need attention}} — handle the ones above first.",
       "newest": "Newest",

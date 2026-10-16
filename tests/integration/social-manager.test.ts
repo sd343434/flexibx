@@ -50,6 +50,12 @@ import { disconnect } from "@/server/ads/connections";
 import { forgetMetaUser } from "@/server/ads/meta-deauthorization";
 import { MAX_LOOKUP_REQUESTS } from "@/server/social/meta-social";
 import { socialSweep } from "@/server/social/social-runtime";
+import { publishingReadiness, SCHEDULER_FRESH_SECONDS } from "@/server/social/publishing-readiness";
+import {
+  deleteContent,
+  rescheduleContent,
+  transitionContent,
+} from "@/server/marketing/content-service";
 import { parseSocialWebhook } from "@/server/social/webhook";
 import { createTenantContext, type TenantContext } from "@/server/tenancy/context";
 
@@ -1818,5 +1824,225 @@ describe("the Meta grant's life cycle", () => {
       enabled: true,
     });
     expect(await receive(commentEvent("Hello again?"))).toHaveLength(1);
+  });
+});
+
+// ── Queued posts follow their content; the content page says why posts wait ──
+
+describe("queued posts follow their content's schedule", () => {
+  async function approved(ctx: TenantContext, scheduledAt: Date | null = null) {
+    return system.contentItem.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        title: "Winter menu",
+        body: "Cinnamon latte is back.",
+        status: "APPROVED",
+        scheduledAt,
+      },
+    });
+  }
+  const post = (contentItemId: string) =>
+    system.socialPost.findFirstOrThrow({ where: { contentItemId } });
+  const contentTime = async (id: string) => {
+    const { scheduledAt } = await system.contentItem.findUniqueOrThrow({ where: { id } });
+    if (scheduledAt === null) throw new Error("content has no time");
+    return scheduledAt;
+  };
+
+  it("queuing approved content means the next run, even with a later planned date", async () => {
+    const s = await setup();
+    const planned = new Date(Date.now() + 7 * 86_400_000);
+    const item = await approved(s.owner, planned);
+    const before = Date.now();
+    await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    const queued = await post(item.id);
+    expect(queued.scheduledAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(queued.scheduledAt.getTime()).toBeLessThan(planned.getTime());
+    // Due now: the next scheduler run publishes it.
+    expect(await socialSweep(s.deps, system)).toMatchObject({ published: 1 });
+  });
+
+  it("scheduling and rescheduling move waiting posts; unscheduling cancels them", async () => {
+    const s = await setup();
+    const item = await approved(s.owner);
+    await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    // Scheduled for later: the waiting post goes out then, not now.
+    await transitionContent(db, s.owner, {
+      contentId: item.id,
+      transition: "schedule",
+      scheduledAt: "2031-05-01T10:00",
+    });
+    const scheduled = await contentTime(item.id);
+    expect((await post(item.id)).scheduledAt).toEqual(scheduled);
+    expect(await socialSweep(s.deps, system)).toMatchObject({ published: 0 });
+
+    // Moved on the calendar: the post follows.
+    await rescheduleContent(db, s.owner, { contentId: item.id, scheduledAt: "2031-06-02T09:30" });
+    const moved = await contentTime(item.id);
+    expect(moved).not.toEqual(scheduled);
+    expect(await post(item.id)).toMatchObject({ status: "SCHEDULED", scheduledAt: moved });
+    // Due at the new time only.
+    expect(await socialSweep(s.deps, system, new Date(scheduled.getTime() + 1000))).toMatchObject({
+      published: 0,
+    });
+
+    // Unscheduled: the person took the time back, the post never goes out.
+    await transitionContent(db, s.owner, {
+      contentId: item.id,
+      transition: "unschedule",
+      scheduledAt: null,
+    });
+    expect(await post(item.id)).toMatchObject({ status: "CANCELLED", errorCode: "unscheduled" });
+    await socialSweep(s.deps, system, new Date(moved.getTime() + 1000));
+    expect(s.graph.posts()).toHaveLength(0);
+    const audit = await system.auditLog.findMany({
+      where: { workspaceId: s.owner.workspaceId, action: { startsWith: "social.post_" } },
+      orderBy: { createdAt: "asc" },
+      select: { action: true },
+    });
+    expect(audit.map((entry) => entry.action)).toEqual([
+      "social.post_queued",
+      "social.post_rescheduled",
+      "social.post_rescheduled",
+      "social.post_cancelled",
+    ]);
+  });
+
+  it("marking as published by hand, or reopening as a draft, cancels with the right reason", async () => {
+    const s = await setup();
+    const manual = await approved(s.owner);
+    await queuePost(s.deps, s.owner, manual.id, s.channel.id);
+    await transitionContent(db, s.owner, {
+      contentId: manual.id,
+      transition: "publish",
+      scheduledAt: null,
+    });
+    expect(await post(manual.id)).toMatchObject({
+      status: "CANCELLED",
+      errorCode: "marked_published",
+    });
+
+    const reopened = await approved(s.owner);
+    await queuePost(s.deps, s.owner, reopened.id, s.channel.id);
+    await transitionContent(db, s.owner, {
+      contentId: reopened.id,
+      transition: "reopen",
+      scheduledAt: null,
+    });
+    expect(await post(reopened.id)).toMatchObject({
+      status: "CANCELLED",
+      errorCode: "content_not_approved",
+    });
+    await socialSweep(s.deps, system);
+    expect(s.graph.posts()).toHaveLength(0);
+  });
+
+  it("never touches a post in flight or unconfirmed, and refuses to delete its content", async () => {
+    const s = await setup();
+    const item = await approved(s.owner);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    await system.socialPost.update({ where: { id: postId }, data: { status: "UNCERTAIN" } });
+    await transitionContent(db, s.owner, {
+      contentId: item.id,
+      transition: "reopen",
+      scheduledAt: null,
+    });
+    expect(await post(item.id)).toMatchObject({ status: "UNCERTAIN" });
+    expect(await rejection(deleteContent(db, s.owner, item.id))).toMatchObject({
+      code: "CONFLICT",
+      fields: [{ code: "publication_in_flight" }],
+    });
+    expect(await system.contentItem.count({ where: { id: item.id } })).toBe(1);
+
+    // Settled (confirmed not published): the content can go.
+    await system.socialPost.update({ where: { id: postId }, data: { status: "FAILED" } });
+    await deleteContent(db, s.owner, item.id);
+    expect(await system.socialPost.count({ where: { id: postId } })).toBe(0);
+  });
+
+  it("only the workspace's own posts follow its content", async () => {
+    const s = await setup();
+    const other = await setup();
+    const mine = await approved(s.owner);
+    const theirs = await approved(other.owner);
+    await queuePost(s.deps, s.owner, mine.id, s.channel.id);
+    await queuePost(other.deps, other.owner, theirs.id, other.channel.id);
+    await transitionContent(db, s.owner, {
+      contentId: mine.id,
+      transition: "reopen",
+      scheduledAt: null,
+    });
+    expect(await post(mine.id)).toMatchObject({ status: "CANCELLED" });
+    expect(await post(theirs.id)).toMatchObject({ status: "SCHEDULED", errorCode: null });
+    // Another workspace's content id is simply not found.
+    expect(
+      await rejection(
+        transitionContent(db, s.owner, {
+          contentId: theirs.id,
+          transition: "reopen",
+          scheduledAt: null,
+        }),
+      ),
+    ).toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("why queued posts wait (publishing readiness)", () => {
+  const beat = (at: Date | null) =>
+    system.systemHeartbeat.upsert({
+      where: { name: "automation-tick" },
+      create: { name: "automation-tick", lastStartedAt: at },
+      update: { lastStartedAt: at },
+    });
+
+  it("is ready with a live connection, sending on and a running scheduler", async () => {
+    const s = await setup();
+    await beat(new Date());
+    expect(await publishingReadiness(s.deps, s.owner.workspaceId)).toMatchObject({
+      blockers: [],
+    });
+  });
+
+  it("names every reason a post is held, in the order to fix them", async () => {
+    const s = await setup();
+    // Scheduler never ran on this database.
+    const fresh = await publishingReadiness(
+      { ...s.deps, sendingEnabled: false },
+      s.owner.workspaceId,
+    );
+    expect(fresh.blockers).toEqual(["sending_disabled", "scheduler_stale"]);
+    expect(fresh.schedulerLastRunAt).toBeNull();
+
+    await beat(new Date(Date.now() - (SCHEDULER_FRESH_SECONDS + 60) * 1000));
+    await system.adConnection.updateMany({
+      where: { workspaceId: s.owner.workspaceId },
+      data: { status: "EXPIRED" },
+    });
+    await updateAutomationPolicy(db, s.owner, {
+      enabled: false,
+      planningCadence: "OFF",
+      allowDrafts: false,
+      maxDraftsPerRun: "1",
+    });
+    await setAutomationPaused(db, s.owner, true);
+    expect((await publishingReadiness(s.deps, s.owner.workspaceId)).blockers).toEqual([
+      "connection_expired",
+      "emergency_stop",
+      "scheduler_stale",
+    ]);
+    expect(
+      (await publishingReadiness({ ...s.deps, meta: null }, s.owner.workspaceId)).blockers,
+    ).toEqual(["meta_not_configured", "emergency_stop", "scheduler_stale"]);
+  });
+
+  it("tells 'never connected' from 'expired', per workspace", async () => {
+    const s = await setup();
+    const bare = await createTenant(system, { role: WorkspaceRole.OWNER });
+    await beat(new Date());
+    expect((await publishingReadiness(s.deps, bare.workspaceId)).blockers).toEqual([
+      "not_connected",
+    ]);
+    // The other workspace's live grant is not this one's.
+    expect((await publishingReadiness(s.deps, s.owner.workspaceId)).blockers).toEqual([]);
   });
 });

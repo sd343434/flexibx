@@ -34,7 +34,13 @@ import {
   syncChannels,
 } from "./social-service";
 import { cancelPost, listContentPublications, queuePost, resolveUncertainPost } from "./publishing";
-import { draftCreated, getSocialDeps } from "./social-runtime";
+import { publishingReadiness } from "./publishing-readiness";
+import {
+  draftCreated,
+  getSocialDeps,
+  metaSocialFromEnv,
+  socialSendingEnabled,
+} from "./social-runtime";
 
 // Server entry points for the AI Social Manager pages: session → membership → permission
 // (inside the services). Inputs are bounded here; the services validate them.
@@ -364,15 +370,24 @@ export async function getContentPublishing(
   const ctx = await requireWorkspaceAccess(workspaceSlug, "content.view");
   if (!isUuid(contentId)) return null;
   const db = getDb();
-  const [channels, publications] = await Promise.all([
+  // Only what readiness needs (no ads adapters or AI runtime for a page view).
+  const deps = { db, meta: metaSocialFromEnv(), sendingEnabled: socialSendingEnabled() };
+  const [channels, publications, readiness] = await Promise.all([
     db.socialChannel.findMany({
       where: { workspaceId: ctx.workspaceId, platform: "FACEBOOK", enabled: true },
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
     listContentPublications(db, ctx, contentId, historyAfter === undefined ? {} : { historyAfter }),
+    publishingReadiness(deps, ctx.workspaceId),
   ]);
-  return { channels, ...publications, canPublish: can(ctx.role, "content.publish") };
+  return {
+    channels,
+    ...publications,
+    readiness,
+    now: new Date(),
+    canPublish: can(ctx.role, "content.publish"),
+  };
 }
 
 export const queuePostAction = withAction({

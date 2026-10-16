@@ -34,7 +34,10 @@ export function postOf(content: { title: string; body: string; metadata: unknown
   return { message: body === "" ? content.title : body, link };
 }
 
-/** Queues approved content for a Facebook Page at its scheduled time, or now. */
+/**
+ * Queues approved content for a Facebook Page: scheduled content at its time, approved
+ * content for the next scheduler run (never instantly: the automation tick publishes).
+ */
 export async function queuePost(
   deps: SocialDeps,
   ctx: TenantContext,
@@ -66,8 +69,12 @@ export async function queuePost(
     });
     if (channel === null) throw notFound("social_channel");
     const { message, link } = postOf(content);
+    // Only a committed schedule (SCHEDULED) holds the post back; an approved item's planned
+    // date is a plan, so queuing it means the next scheduler run.
     const scheduledAt =
-      content.scheduledAt !== null && content.scheduledAt > now ? content.scheduledAt : now;
+      content.status === "SCHEDULED" && content.scheduledAt !== null && content.scheduledAt > now
+        ? content.scheduledAt
+        : now;
     const existing = await tx.socialPost.findFirst({
       where: { workspaceId: ctx.workspaceId, contentItemId: contentId, channelId },
       select: { id: true, status: true },

@@ -492,7 +492,8 @@ phases must keep are:
 - **Workflow.** Clients send a content transition name, never a status; each transition
   has one permission (`workflow.ts`), runs as a status-conditional update (no lost
   updates) and is audited with `from`/`to`. Only drafts are editable; `PUBLISHED` is final
-  and manual (no external publishing yet).
+  and records publication by hand; Facebook Page publishing (§ 16) runs separately and
+  cancels its waiting posts when content is marked published by hand.
 - **Permissions.** No new roles or actions: brand/audiences/pillars use `brand.*`,
   goals/campaigns `campaign.*`, content and media `content.*`, the activity history
   `audit.view`. The navigation shows only the sections a role may open.
@@ -722,8 +723,17 @@ Code: `src/server/social/`. Migrations `20261012110000_social_manager` and
   and Instagram publishing are not supported yet), re-checks the approval first, claims
   each post once (the approval is part of the claim), and treats a lost answer as
   `UNCERTAIN` (looked up among the Page's own `published_posts`); a post stuck in
-  `PUBLISHING` for 10 minutes also becomes `UNCERTAIN`. "Publish now" means the next
-  scheduler tick; under the emergency stop posts wait.
+  `PUBLISHING` for 10 minutes also becomes `UNCERTAIN`. Publishing is never instant:
+  queuing approved content means the next scheduler tick (an approved item's planned date
+  does not hold it back), scheduled content goes out at its time. Waiting posts follow
+  their content in the same transaction (`social/queued-posts.ts`): a new schedule or a
+  calendar move moves them, unscheduling, marking published by hand or moving back to a
+  draft cancels them (`unscheduled`, `marked_published`, `content_not_approved`); posts in
+  `PUBLISHING`/`UNCERTAIN` are never touched, and content with such a post cannot be
+  deleted (`publication_in_flight`). The content page names why due posts wait
+  (`social/publishing-readiness.ts`: sending switched off, Meta not set up, not connected
+  or expired, emergency stop, scheduler not run within 15 minutes) and maps every stored
+  error code to an actionable message.
 - **Metrics**: counts and median response time from real rows only.
 
 ## 17. Email delivery

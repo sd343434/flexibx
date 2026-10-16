@@ -118,6 +118,28 @@ a staging bucket, and approval of the procedure.
    new instance, timed; the record (times, counts, verify output) attached to the ops log.
 7. A named operator and reviewer (A4, A6).
 
+### 5.2 Product workflow: content scheduling and Facebook publishing (Pass 3.0)
+
+Fixed and tested (integration on a disposable database with a stand-in Graph API; no
+real Meta call):
+
+- Rescheduling content (content page or calendar) left its queued post at the old time;
+  unscheduling and "mark as published" left the post to go out anyway (it was cancelled
+  later with a wrong reason). Waiting posts now follow the content in the same
+  transaction; in-flight or unconfirmed posts are never touched, and content with such a
+  post cannot be deleted.
+- "Publish now" held approved content until its planned date and implied instant
+  publishing. It is now "Queue for the next run" and queues for the next scheduler tick.
+- A due post held by the server (sending switched off, Meta not set up, no or expired
+  connection, emergency stop, scheduler not running) showed only "Scheduled"; the content
+  page now names the reason and where to fix it. Error codes without a message
+  (`missed_window`, `rate_limited`, ads token codes) showed "Something went wrong"; every
+  stored code now maps to an actionable message in Arabic and English.
+
+Still open (product decisions, not implemented): "Request changes" stores no reason for
+the author (needs a field and a place to show it); images and Instagram publishing are
+not supported; publishing is only as timely as the external scheduler (every 5 minutes).
+
 ## 6. Decisions that block staging (none assumed)
 
 From D.3 § 7 and D.1 § 15.4, all still open: **A1** data residency (with legal advice),
