@@ -42,6 +42,7 @@ import {
 import {
   cancelPost,
   publishPost,
+  listContentPublications,
   queuePost,
   resolveUncertainPost,
 } from "@/server/social/publishing";
@@ -932,9 +933,119 @@ describe("publishing approved content to the Page", () => {
     });
     await socialSweep(s.deps, system);
     expect(s.graph.posts()).toHaveLength(1);
+    // While uncertain it is an open post (with its check action), not history.
+    const before = await listContentPublications(db, s.owner, item.id);
+    expect(before.open.map((post) => [post.id, post.status])).toEqual([[postId, "UNCERTAIN"]]);
+    expect(before.history).toEqual([]);
     expect(await resolveUncertainPost(s.deps, s.owner, postId)).toBe("published");
     expect(await system.contentItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({
       status: "PUBLISHED",
+    });
+    // Settled: it moves to history; resolving again is refused (nothing is posted twice).
+    const after = await listContentPublications(db, s.owner, item.id);
+    expect(after.open).toEqual([]);
+    expect(after.history.map((post) => [post.id, post.status])).toEqual([[postId, "PUBLISHED"]]);
+    expect(await rejection(resolveUncertainPost(s.deps, s.owner, postId))).toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(s.graph.posts()).toHaveLength(1);
+  });
+
+  it("lists every open post, however old, and pages the settled history without repeats or gaps", async () => {
+    const s = await setup();
+    const item = await content(s.owner, "APPROVED");
+    // One post per Page: 48 Pages, 3 open posts and 45 settled ones.
+    const pages = await Promise.all(
+      Array.from({ length: 48 }, (_, i) =>
+        system.socialChannel.create({
+          data: {
+            workspaceId: s.owner.workspaceId,
+            platform: "FACEBOOK",
+            externalId: `9${String(i).padStart(5, "0")}`,
+            pageId: `9${String(i).padStart(5, "0")}`,
+            name: `Page ${String(i)}`,
+          },
+        }),
+      ),
+    );
+    const base = Date.parse("2026-01-01T00:00:00Z");
+    const statuses = ["UNCERTAIN", "FAILED", "SCHEDULED"].concat(
+      Array.from({ length: 45 }, (_, i) => (i % 3 === 0 ? "CANCELLED" : "PUBLISHED")),
+    );
+    await system.socialPost.createMany({
+      data: pages.map((page, i) => ({
+        workspaceId: s.owner.workspaceId,
+        contentItemId: item.id,
+        channelId: page.id,
+        status: statuses[i] ?? "PUBLISHED",
+        message: "m",
+        scheduledAt: new Date(base),
+        // A published row carries its outcome (database CHECK).
+        ...(statuses[i] === "PUBLISHED"
+          ? { publishedAt: new Date(base), externalPostId: `${PAGE}_${String(i)}` }
+          : {}),
+        // The open posts are the OLDEST rows; several settled rows share a timestamp
+        // (the id breaks the tie).
+        createdAt: new Date(base + (i < 3 ? i : 10 + Math.floor(i / 4)) * 60_000),
+      })),
+    });
+
+    const first = await listContentPublications(db, s.owner, item.id, { historyLimit: 20 });
+    expect(first.open.map((post) => post.status).sort()).toEqual(
+      ["FAILED", "SCHEDULED", "UNCERTAIN"].sort(),
+    );
+    expect(first.openTotal).toBe(3);
+    expect(first.history).toHaveLength(20);
+    expect(first.history.every((post) => ["PUBLISHED", "CANCELLED"].includes(post.status))).toBe(
+      true,
+    );
+
+    // Walk the history: every settled row exactly once, in (createdAt, id) descending order.
+    // Pages of 7 against groups of 4 equal timestamps: page boundaries split ties.
+    const seen: string[] = [];
+    let after: string | null = null;
+    let pagesRead = 0;
+    do {
+      const page = await listContentPublications(db, s.owner, item.id, {
+        historyLimit: 7,
+        ...(after === null ? {} : { historyAfter: after }),
+      });
+      seen.push(...page.history.map((post) => post.id));
+      // The open posts are on every page, never pushed out by history.
+      expect(page.open).toHaveLength(3);
+      after = page.nextHistoryAfter;
+      pagesRead += 1;
+    } while (after !== null);
+    expect(pagesRead).toBe(7);
+    const expected = await system.socialPost.findMany({
+      where: { contentItemId: item.id, status: { in: ["PUBLISHED", "CANCELLED"] } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true },
+    });
+    expect(seen).toEqual(expected.map((row) => row.id));
+    expect(new Set(seen).size).toBe(45);
+
+    // A cursor that is not this content's history (an open post, another content's post,
+    // garbage) starts at the newest page instead of leaking or skipping anything.
+    const other = await content(s.owner, "APPROVED");
+    await queuePost(s.deps, s.owner, other.id, s.channel.id);
+    const foreign = await system.socialPost.findFirstOrThrow({
+      where: { contentItemId: other.id },
+    });
+    for (const cursor of [first.open[0]?.id ?? "", foreign.id, "not-a-uuid"]) {
+      const page = await listContentPublications(db, s.owner, item.id, {
+        historyLimit: 20,
+        historyAfter: cursor,
+      });
+      expect(page.history.map((post) => post.id)).toEqual(seen.slice(0, 20));
+    }
+    // Another workspace sees nothing of this content.
+    const stranger = await createTenant(system, { role: WorkspaceRole.OWNER });
+    expect(await listContentPublications(db, stranger, item.id)).toMatchObject({
+      open: [],
+      openTotal: 0,
+      history: [],
+      nextHistoryAfter: null,
     });
   });
 

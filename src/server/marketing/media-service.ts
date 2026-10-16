@@ -9,7 +9,9 @@ import {
   assertKeyBelongsToWorkspace,
   assertUploadAllowed,
   buildWorkspaceKey,
+  putOrCleanUp,
   STORAGE_CATEGORIES,
+  storageErrorSummary,
   type StorageRouter,
   type StorageWriteTarget,
 } from "../storage/storage";
@@ -97,7 +99,13 @@ export async function uploadMedia(
 
   const storageKey = buildWorkspaceKey(ctx.workspaceId, "content-media", image.contentType);
   const { storage, provider } = target;
-  await storage.put(storageKey, bytes, { contentType: image.contentType });
+  // A failed or timed-out write may still have stored the object: it is deleted again.
+  await putOrCleanUp(storage, storageKey, bytes, { contentType: image.contentType }, (error) => {
+    logger?.error(
+      { cleanupError: storageErrorSummary(error) },
+      "Could not remove a media object after a failed write",
+    );
+  });
   try {
     return await db.$transaction(async (tx) => {
       // The provider's location must still be where the object was just written; the
@@ -221,12 +229,19 @@ export async function readMedia(
   assertCan(ctx, "content.view");
   const asset = await db.mediaAsset.findFirst({
     where: { workspaceId: ctx.workspaceId, id: assetId },
-    select: { storageKey: true, storageProvider: true, contentType: true, filename: true },
+    select: {
+      storageKey: true,
+      storageProvider: true,
+      contentType: true,
+      filename: true,
+      sizeBytes: true,
+    },
   });
   if (asset === null) throw notFound("asset");
   assertKeyBelongsToWorkspace(asset.storageKey, ctx.workspaceId);
   const service = await storage.forProvider(asset.storageProvider);
-  const object = await service.getObject(asset.storageKey);
+  // The size recorded at upload bounds the download's deadline.
+  const object = await service.getObject(asset.storageKey, { expectedBytes: asset.sizeBytes });
   if (object === null) throw notFound("asset");
   return { body: object.body, contentType: asset.contentType, filename: asset.filename };
 }

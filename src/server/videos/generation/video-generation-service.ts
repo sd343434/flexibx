@@ -25,7 +25,9 @@ import type { Logger } from "../../logger";
 import {
   assertUploadAllowed,
   buildWorkspaceKey,
+  putOrCleanUp,
   STORAGE_CATEGORIES,
+  storageErrorSummary,
   type StorageWriteTarget,
 } from "../../storage/storage";
 import { isUuid, type TenantContext } from "../../tenancy/context";
@@ -737,7 +739,14 @@ class Run {
     const storageKey = buildWorkspaceKey(this.job.workspaceId, "generated-videos", "video/mp4");
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     try {
-      await target.storage.put(storageKey, bytes, { contentType: "video/mp4" });
+      // A failed or timed-out write may still have stored the video: it is deleted again
+      // (the key is new to this attempt), and the original error decides what happens.
+      await putOrCleanUp(target.storage, storageKey, bytes, { contentType: "video/mp4" }, (e) => {
+        this.deps.logger?.error(
+          { cleanupError: storageErrorSummary(e), jobId: this.job.id },
+          "Could not remove a video after a failed write",
+        );
+      });
     } catch (error) {
       this.deps.logger?.error({ err: error, jobId: this.job.id }, "Could not store a video");
       return { status: "waiting", reason: "storage_unavailable" };

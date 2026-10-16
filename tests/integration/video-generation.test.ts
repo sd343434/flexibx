@@ -4,7 +4,7 @@ import { WorkspaceRole } from "@/generated/prisma/enums";
 import { FakeVideoProvider, type FakeVideoScenario } from "@/server/ai/providers/video/fake";
 import { AppError } from "@/server/errors/app-error";
 import { MemoryStorageService } from "@/server/storage/memory-storage";
-import type { StorageWriteTarget } from "@/server/storage/storage";
+import { StorageTimeoutError, type StorageWriteTarget } from "@/server/storage/storage";
 import type { TenantContext } from "@/server/tenancy/context";
 import { DEFAULT_VIDEO_LIMITS, type VideoLimits } from "@/server/videos/generation/budget";
 import { validateClip } from "@/server/videos/generation/mp4";
@@ -439,6 +439,48 @@ describe("storage and download failures", () => {
     expect(storage.objects.size).toBe(1);
     // Captured once, although the output was handled in two runs.
     expect(await ledger(jobId)).toEqual(["RESERVE:800000", "CAPTURE:400000", "RELEASE:400000"]);
+  });
+
+  it("a write that stored the video but timed out: the object is removed, the job waits and stores it later", async () => {
+    const ctx = await createTenant(system);
+    const storage = new MemoryStorageService();
+    const put = storage.put.bind(storage);
+    let ambiguous = true;
+    const deleted: string[] = [];
+    const remove = storage.delete.bind(storage);
+    storage.delete = (key, options) => {
+      deleted.push(key);
+      return remove(key, options);
+    };
+    storage.put = async (key, body, options) => {
+      await put(key, body, options); // storage has it…
+      if (ambiguous) {
+        ambiguous = false;
+        throw new StorageTimeoutError("put"); // …the client never heard back
+      }
+    };
+    const h = harness({
+      writeTarget: () =>
+        Promise.resolve({ provider: "LEGACY_S3", storage, confirm: () => Promise.resolve() }),
+    });
+    const { jobId } = await requestVideoGeneration(h.deps, ctx, REQUEST);
+    expect(await runVideoJob(h.deps, ctx.workspaceId, jobId)).toEqual({
+      status: "waiting",
+      reason: "storage_unavailable",
+    });
+    // The orphan was deleted (exactly the key just written), no row points at anything.
+    expect(deleted).toHaveLength(1);
+    expect(storage.objects.size).toBe(0);
+    expect(await system.generatedVideoFile.count()).toBe(0);
+    // The next run stores it once, without regenerating.
+    expect(await runVideoJob(h.deps, ctx.workspaceId, jobId)).toEqual({
+      status: "finished",
+      state: "READY_FOR_REVIEW",
+    });
+    expect(h.provider.calls.submit).toBe(1);
+    expect(storage.objects.size).toBe(1);
+    const [file] = await system.generatedVideoFile.findMany({ select: { storageKey: true } });
+    expect(file?.storageKey).not.toBe(deleted[0]); // a fresh key, never the deleted one
   });
 
   it("removes the stored object when the location changed before recording (CONFLICT)", async () => {

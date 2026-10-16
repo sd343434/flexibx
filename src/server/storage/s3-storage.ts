@@ -14,7 +14,9 @@ import {
   resolveTtl,
   STORAGE_CATEGORIES,
   StorageAccessError,
+  StorageTimeoutError,
   type AllowedContentType,
+  type GetObjectOptions,
   type SignedUpload,
   type SignedUploadOptions,
   type StorageAccessFailure,
@@ -28,6 +30,7 @@ import {
  * provider messages can contain hosts or request details and are never surfaced.
  */
 export function classifyAccessError(error: unknown): StorageAccessFailure {
+  if (error instanceof StorageTimeoutError) return "timeout";
   const name = error instanceof Error ? error.name : "";
   const status = (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata
     ?.httpStatusCode;
@@ -49,9 +52,12 @@ export function classifyAccessError(error: unknown): StorageAccessFailure {
 
 /**
  * Time limits for S3 requests (the SDK sets none by default, so a stalled endpoint would
- * hold a request forever). Connection and idle limits apply to every request; `put` and
- * `getObject` also get a whole-transfer deadline sized for the bytes moved, so a slow but
- * progressing transfer of a large video is not cut off while a stalled one is.
+ * hold a request forever). Connection and idle limits apply to every request attempt.
+ * Every operation also has a total deadline across the SDK's retries (3 attempts):
+ * `put` and `getObject` one sized for the bytes moved, so a slow but progressing transfer
+ * of a large video is not cut off while a stalled one is; `delete` and `checkAccess` a
+ * fixed one, longer than the callers' own limits (retention 30 s, admin check 10 s) so a
+ * caller's signal still decides first where one is passed.
  */
 export interface S3Timeouts {
   /** Establishing the TCP/TLS connection. */
@@ -62,6 +68,10 @@ export interface S3Timeouts {
   readonly transferBaseMs: number;
   /** Slowest throughput still accepted, in bytes per second. */
   readonly minBytesPerSecond: number;
+  /** Total for one delete, retries included. */
+  readonly deleteMs: number;
+  /** Total for one bucket check, retries included. */
+  readonly accessCheckMs: number;
 }
 
 export const S3_TIMEOUTS: S3Timeouts = {
@@ -69,7 +79,12 @@ export const S3_TIMEOUTS: S3Timeouts = {
   idleMs: 60_000,
   transferBaseMs: 30_000,
   minBytesPerSecond: 1024 * 1024,
+  deleteMs: 45_000,
+  accessCheckMs: 20_000,
 };
+
+/** The longest delay a Node.js timer accepts. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** The largest object any category allows: the bound for a download of unknown size. */
 const MAX_OBJECT_BYTES = Math.max(
@@ -79,6 +94,51 @@ const MAX_OBJECT_BYTES = Math.max(
 /** Whole-transfer deadline for `bytes` at the slowest accepted throughput. */
 export function transferDeadlineMs(bytes: number, timeouts: S3Timeouts = S3_TIMEOUTS): number {
   return timeouts.transferBaseMs + Math.ceil((bytes / timeouts.minBytesPerSecond) * 1000);
+}
+
+/**
+ * The deadline for a download: sized by the size recorded at write time when the caller
+ * knows it (never above the largest object a category allows), else by that largest size.
+ */
+export function downloadDeadlineMs(
+  expectedBytes: number | undefined,
+  timeouts: S3Timeouts = S3_TIMEOUTS,
+): number {
+  const bytes =
+    expectedBytes !== undefined && Number.isSafeInteger(expectedBytes) && expectedBytes >= 0
+      ? Math.min(expectedBytes, MAX_OBJECT_BYTES)
+      : MAX_OBJECT_BYTES;
+  return transferDeadlineMs(bytes, timeouts);
+}
+
+/**
+ * Runs `work` with one signal that fires on the caller's signal or on `deadlineMs`. A
+ * caller's cancellation surfaces as an AbortError; the deadline (not the caller) ending
+ * it, as a StorageTimeoutError; anything else as it came.
+ */
+async function withinDeadline<T>(
+  operation: StorageTimeoutError["operation"],
+  deadlineMs: number,
+  callerSignal: AbortSignal | undefined,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  // Clamped to what a timer accepts (~24.8 days), so a mis-set throughput cannot throw.
+  const deadline = AbortSignal.timeout(Math.min(Math.max(0, deadlineMs), MAX_TIMER_MS));
+  const signal = callerSignal === undefined ? deadline : AbortSignal.any([callerSignal, deadline]);
+  try {
+    return await work(signal);
+  } catch (error) {
+    if (callerSignal?.aborted === true) {
+      // The SDK reports a cancellation during the body read as a plain Error: always an
+      // AbortError for the caller, whichever stage was cut.
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      const cancelled = new Error(`Storage ${operation} cancelled`, { cause: error });
+      cancelled.name = "AbortError";
+      throw cancelled;
+    }
+    if (deadline.aborted) throw new StorageTimeoutError(operation, { cause: error });
+    throw error;
+  }
 }
 
 /**
@@ -122,23 +182,31 @@ export class S3StorageService implements StorageService {
     options: { readonly contentType: AllowedContentType },
   ): Promise<void> {
     assertValidKey(key);
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: body,
-        ContentType: options.contentType,
-      }),
-      { abortSignal: AbortSignal.timeout(transferDeadlineMs(body.byteLength, this.timeouts)) },
+    await withinDeadline(
+      "put",
+      transferDeadlineMs(body.byteLength, this.timeouts),
+      undefined,
+      (abortSignal) =>
+        this.client.send(
+          new PutObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+            Body: body,
+            ContentType: options.contentType,
+          }),
+          { abortSignal },
+        ),
     );
   }
 
   async delete(key: string, options: StorageDeleteOptions = {}): Promise<void> {
     assertValidKey(key);
-    // The SDK aborts the HTTP request on `signal`; S3 may still have applied the delete.
-    await this.client.send(
-      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
-      options.signal === undefined ? {} : { abortSignal: options.signal },
+    // The SDK aborts the HTTP request on `signal` or the deadline; S3 may still have
+    // applied the delete. Deleting a missing object succeeds, so a retry is safe.
+    await withinDeadline("delete", this.timeouts.deleteMs, options.signal, (abortSignal) =>
+      this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }), {
+        abortSignal,
+      }),
     );
   }
 
@@ -187,30 +255,35 @@ export class S3StorageService implements StorageService {
   /** HEAD on the bucket: proves endpoint, region, bucket and credentials; touches no object. */
   async checkAccess(options: { readonly signal?: AbortSignal } = {}): Promise<void> {
     try {
-      await this.client.send(
-        new HeadBucketCommand({ Bucket: this.bucket }),
-        options.signal === undefined ? {} : { abortSignal: options.signal },
+      await withinDeadline("check", this.timeouts.accessCheckMs, options.signal, (abortSignal) =>
+        this.client.send(new HeadBucketCommand({ Bucket: this.bucket }), { abortSignal }),
       );
     } catch (error) {
       throw new StorageAccessError(classifyAccessError(error));
     }
   }
 
-  async getObject(key: string): Promise<StoredObjectData | null> {
+  async getObject(key: string, options: GetObjectOptions = {}): Promise<StoredObjectData | null> {
     assertValidKey(key);
-    // One deadline for the response and reading the body: the size is unknown up front,
-    // so it is sized for the largest object a category allows.
-    const abortSignal = AbortSignal.timeout(transferDeadlineMs(MAX_OBJECT_BYTES, this.timeouts));
     try {
-      const result = await this.client.send(
-        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
-        { abortSignal },
+      // One signal for the response and reading the body: aborting it destroys the
+      // response stream and its socket.
+      return await withinDeadline(
+        "get",
+        downloadDeadlineMs(options.expectedBytes, this.timeouts),
+        options.signal,
+        async (abortSignal) => {
+          const result = await this.client.send(
+            new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+            { abortSignal },
+          );
+          if (result.Body === undefined) return null;
+          return {
+            body: await result.Body.transformToByteArray(),
+            contentType: result.ContentType ?? null,
+          };
+        },
       );
-      if (result.Body === undefined) return null;
-      return {
-        body: await result.Body.transformToByteArray(),
-        contentType: result.ContentType ?? null,
-      };
     } catch (error) {
       if (error instanceof Error && (error.name === "NoSuchKey" || error.name === "NotFound")) {
         return null;

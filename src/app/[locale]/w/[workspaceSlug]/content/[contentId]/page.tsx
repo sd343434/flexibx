@@ -53,6 +53,8 @@ export default async function ContentRoute({
     content.scheduledAt === null ? "" : utcToZonedLocal(content.scheduledAt, timeZone);
   const slug = workspace.slug;
   const aiParam = (await searchParams).ai;
+  // Continues the publications history after this post id (validated by the service).
+  const postsParam = (await searchParams).posts;
   // AI assistance: drafts the person may edit (content.edit), checked again on the server.
   const assist = content.canEdit
     ? await getContentAssist(slug, content.id, typeof aiParam === "string" ? aiParam : undefined)
@@ -153,6 +155,7 @@ export default async function ContentRoute({
         contentId={content.id}
         status={content.status}
         timeZone={timeZone}
+        historyAfter={typeof postsParam === "string" ? postsParam : undefined}
       />
 
       {content.canEdit && data.options !== null ? (

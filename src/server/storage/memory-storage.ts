@@ -3,6 +3,7 @@ import {
   assertValidKey,
   resolveTtl,
   type AllowedContentType,
+  type GetObjectOptions,
   type SignedUpload,
   type SignedUploadOptions,
   type StorageDeleteOptions,
@@ -85,9 +86,10 @@ export class MemoryStorageService implements StorageService {
     return null;
   }
 
-  getObject(key: string): Promise<StoredObjectData | null> {
+  getObject(key: string, options: GetObjectOptions = {}): Promise<StoredObjectData | null> {
     return settle(() => {
       assertValidKey(key);
+      options.signal?.throwIfAborted();
       const stored = this.objects.get(key);
       return stored === undefined
         ? null

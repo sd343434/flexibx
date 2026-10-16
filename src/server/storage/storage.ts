@@ -31,8 +31,12 @@ export interface StorageService {
   ): Promise<string>;
   /** Public URL if a public base URL (CDN) is configured, otherwise null (private bucket). */
   publicUrl(key: string): string | null;
-  /** The object's bytes, or null when it does not exist (served through access-checked routes). */
-  getObject(key: string): Promise<StoredObjectData | null>;
+  /**
+   * The object's bytes, or null when it does not exist (served through access-checked
+   * routes). `expectedBytes` (the size recorded when it was written) sizes the download
+   * deadline; `signal` cancels the request and the body read.
+   */
+  getObject(key: string, options?: GetObjectOptions): Promise<StoredObjectData | null>;
   /**
    * Checks that the configured bucket is reachable with the configured credentials,
    * without reading or writing objects. Rejects with a StorageAccessError. Optional: a
@@ -87,6 +91,66 @@ export class StorageAccessError extends Error {
 
 export interface StorageDeleteOptions {
   readonly signal?: AbortSignal;
+}
+
+export interface GetObjectOptions {
+  /** Size recorded when the object was written; a download of unknown size gets the largest deadline. */
+  readonly expectedBytes?: number;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * A storage call that ran past its own total deadline (not a caller's cancellation, which
+ * stays an AbortError). For a write or delete the outcome is unknown: the request may
+ * have reached storage before it was abandoned.
+ */
+export class StorageTimeoutError extends Error {
+  constructor(
+    readonly operation: "put" | "get" | "delete" | "check",
+    options?: { readonly cause?: unknown },
+  ) {
+    super(`Storage ${operation} timed out`, options);
+    this.name = "StorageTimeoutError";
+  }
+}
+
+/** Longest wait for the delete that cleans up after a failed write. */
+export const CLEANUP_DELETE_TIMEOUT_MS = 15_000;
+
+/**
+ * Writes an object; if the write fails, deletes the same key before rethrowing. A failed
+ * or timed-out write may still have stored the object, and nothing else would ever find
+ * it. Only for a key the caller has just generated for this write and recorded nowhere
+ * (`buildWorkspaceKey` gives a fresh random name): no other object can have that key.
+ *
+ * The original error is always the one rethrown; a cleanup failure goes to
+ * `onCleanupError`. Best effort: a write still in flight at storage may complete after
+ * the delete (docs/STORAGE_PROVIDERS.md, "Failed writes").
+ */
+export async function putOrCleanUp(
+  storage: StorageService,
+  key: string,
+  body: Uint8Array,
+  options: { readonly contentType: AllowedContentType },
+  onCleanupError?: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await storage.put(key, body, options);
+  } catch (error) {
+    try {
+      await storage.delete(key, { signal: AbortSignal.timeout(CLEANUP_DELETE_TIMEOUT_MS) });
+    } catch (cleanupError) {
+      onCleanupError?.(cleanupError);
+    }
+    throw error;
+  }
+}
+
+/** What a log line may say about a storage error: its name and code, nothing it carries. */
+export function storageErrorSummary(error: unknown): { name: string; code?: string } {
+  if (!(error instanceof Error)) return { name: typeof error };
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? { name: error.name, code } : { name: error.name };
 }
 
 export interface StoredObjectData {

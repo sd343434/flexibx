@@ -223,3 +223,36 @@ code; a lost authenticator AND all backup codes only by an operator with databas
 (`pnpm admin:mfa-reset`, docs/runbooks/INCIDENT_RESPONSE.md), which also ends every
 session of the account. Every enrollment, sign-in with a second factor, backup-code
 regeneration, disable and operator reset is in the audit log (no secrets).
+
+## 10. Time limits and failed writes
+
+**Time limits** (`src/server/storage/s3-storage.ts`, `S3_TIMEOUTS`). Every request attempt
+has a 10 s connection limit and a 60 s idle limit (no bytes either way). The SDK makes up
+to 3 attempts; each operation also has a total deadline across them:
+
+| Operation     | Total deadline                                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `put`         | 30 s + 1 s per MiB of the body                                                                                       |
+| `getObject`   | 30 s + 1 s per MiB of the size recorded at write time (`expectedBytes`); unknown size → the largest, 500 MiB (530 s) |
+| `delete`      | 45 s (retention passes its own 30 s signal, which decides first)                                                     |
+| `checkAccess` | 20 s (the admin connection test passes its own 10 s signal, which decides first)                                     |
+
+A total deadline surfaces as `StorageTimeoutError` (its `operation` names the call); a
+caller's cancellation as an `AbortError`. Either aborts the request and the response
+stream and releases the socket. A timed-out write or delete has an **unknown outcome**:
+it may have reached storage.
+
+**Failed writes** (`putOrCleanUp` in `src/server/storage/storage.ts`). Media uploads and
+generated-video writes go through it: when the write fails or times out, the same key is
+deleted (bounded, 15 s) before the original error is rethrown. The key is the one just
+generated for that write (`buildWorkspaceKey`, a random name) and recorded nowhere, so no
+other object can be affected; nothing is deleted by prefix or by listing the bucket. A
+cleanup failure is logged by error name only and never replaces the write's error.
+
+Residual risk (accepted, not hidden): if the cleanup delete itself fails, or if storage
+completes a write that was still in flight **after** the cleanup delete, an object with no
+database row remains. It is never served (reads go through rows) and only costs storage.
+There is no bucket reconciliation job; removing such objects would need a listing of keys
+compared against `media_assets` and `generated_video_files`, which is an operator decision
+(not implemented). The log line "Could not remove … after a failed write" marks the first
+case.

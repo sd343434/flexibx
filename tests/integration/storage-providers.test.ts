@@ -20,6 +20,7 @@ import { createStorageRouter } from "@/server/storage/providers";
 import {
   buildWorkspaceKey,
   StorageAccessError,
+  StorageTimeoutError,
   type StorageAccessFailure,
   type StorageService,
   type StorageWriteTarget,
@@ -644,6 +645,79 @@ describe("concurrent settings changes and uploads", () => {
     expect(
       (await system.platformStorageSettings.findUniqueOrThrow({ where: { id: 1 } })).wasabiBucket,
     ).toBe(SETTINGS.bucket);
+  });
+});
+
+describe("failed media writes", () => {
+  const collect = () => {
+    const lines: { fields: unknown; message: string }[] = [];
+    const logger = {
+      error: (fields: unknown, message: string) => {
+        lines.push({ fields, message });
+      },
+    };
+    return { lines, logger: logger as never };
+  };
+
+  it("a write stored but timed out: only that key is deleted, the original error surfaces", async () => {
+    const ctx = await createTenant(system);
+    const kept = await uploadMedia(db, await router().writeTarget(), ctx, png());
+    const put = legacy.put.bind(legacy);
+    const timeout = new StorageTimeoutError("put");
+    legacy.put = async (...args) => {
+      await put(...args);
+      throw timeout;
+    };
+    const { lines, logger } = collect();
+    const error = await uploadMedia(db, await router().writeTarget(), ctx, png(), null, logger)
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(error).toBe(timeout);
+    // The earlier asset's object is untouched; the ambiguous one is gone; no row for it.
+    expect(legacy.objects.size).toBe(1);
+    const row = await system.mediaAsset.findUniqueOrThrow({ where: { id: kept.assetId } });
+    expect(legacy.objects.has(row.storageKey)).toBe(true);
+    expect(await system.mediaAsset.count()).toBe(1);
+    expect(lines).toEqual([]);
+  });
+
+  it("a cleanup that fails is logged by name only and never replaces the upload error", async () => {
+    const ctx = await createTenant(system);
+    const put = legacy.put.bind(legacy);
+    const timeout = new StorageTimeoutError("put");
+    legacy.put = async (...args) => {
+      await put(...args);
+      throw timeout;
+    };
+    legacy.delete = () =>
+      Promise.reject(
+        Object.assign(new Error(`denied for ${CREDENTIALS.accessKeyId}`), {
+          name: "AccessDenied",
+        }),
+      );
+    const { lines, logger } = collect();
+    const error = await uploadMedia(db, await router().writeTarget(), ctx, png(), null, logger)
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(error).toBe(timeout);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.fields).toEqual({ cleanupError: { name: "AccessDenied" } });
+    expect(JSON.stringify(lines)).not.toContain(CREDENTIALS.accessKeyId);
+    expect(await system.mediaAsset.count()).toBe(0);
+  });
+
+  it("reading an asset passes the recorded size, so the download deadline fits the object", async () => {
+    const ctx = await createTenant(system);
+    const { assetId } = await uploadMedia(db, await router().writeTarget(), ctx, png());
+    const seen: unknown[] = [];
+    const get = legacy.getObject.bind(legacy);
+    legacy.getObject = (key, options) => {
+      seen.push(options);
+      return get(key, options);
+    };
+    const media = await readMedia(db, router(), ctx, assetId);
+    expect(media.body).toHaveLength(40);
+    expect(seen).toEqual([{ expectedBytes: 40 }]);
   });
 });
 

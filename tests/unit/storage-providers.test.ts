@@ -248,11 +248,19 @@ describe("createWasabiStorage", () => {
       });
     });
     const storage = createWasabiStorage(SETTINGS, credentials, client);
-    const signal = AbortSignal.timeout(1_000);
-    const error = await storage.checkAccess({ signal }).catch((caught: unknown) => caught);
+    const controller = new AbortController();
+    const error = await storage
+      .checkAccess({ signal: controller.signal })
+      .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(StorageAccessError);
     expect((error as StorageAccessError).failure).toBe("access_denied");
     expect((error as Error).message).not.toContain(KEY_ID);
-    expect(sent[0]?.abortSignal).toBe(signal);
+    // The SDK gets the caller's signal combined with the check's own deadline: cancelling
+    // the caller cancels the request.
+    const passed = sent[0]?.abortSignal as AbortSignal | undefined;
+    expect(passed).toBeInstanceOf(AbortSignal);
+    expect(passed?.aborted).toBe(false);
+    controller.abort();
+    expect(passed?.aborted).toBe(true);
   });
 });

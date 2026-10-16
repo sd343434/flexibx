@@ -118,6 +118,96 @@ export async function queuePost(
   });
 }
 
+// ── The publications of one content item (content page) ──────────────────────
+
+/**
+ * Posts that still need a person or the scheduler: SCHEDULED and FAILED can be cancelled,
+ * UNCERTAIN must be checked on the Page, PUBLISHING is in flight. Always listed in full
+ * (never behind a history page). One row per content item and channel
+ * (@@unique([contentItemId, channelId])), so this is bounded by the workspace's Pages;
+ * OPEN_POSTS_LIMIT only guards the page size, and `openTotal` says when it applied.
+ */
+export const OPEN_POST_STATUSES = ["SCHEDULED", "PUBLISHING", "UNCERTAIN", "FAILED"] as const;
+/** Settled outcomes: history, shown a page at a time. */
+export const SETTLED_POST_STATUSES = ["PUBLISHED", "CANCELLED"] as const;
+export const OPEN_POSTS_LIMIT = 200;
+export const POST_HISTORY_PAGE = 20;
+
+const publicationFields = {
+  id: true,
+  status: true,
+  scheduledAt: true,
+  publishedAt: true,
+  errorCode: true,
+  externalPostId: true,
+  createdAt: true,
+  channel: { select: { name: true } },
+} as const;
+
+/** Newest first; the id breaks ties, so the order is total and pages never overlap. */
+const newestFirst = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+
+/**
+ * The content item's open posts (all of them) and one page of its settled history
+ * (content.view). `historyAfter` is the id of the last history row already shown; it is
+ * resolved inside this workspace, content item and history only (anything else starts at
+ * the newest). Keyset pagination on (createdAt, id): no row is repeated or skipped while
+ * rows stay where they are; a post that settles meanwhile appears in history at its own
+ * creation time.
+ */
+export async function listContentPublications(
+  db: SocialDeps["db"],
+  ctx: TenantContext,
+  contentId: string,
+  options: { readonly historyAfter?: string; readonly historyLimit?: number } = {},
+) {
+  assertCan(ctx, "content.view");
+  const empty = { open: [], openTotal: 0, history: [], nextHistoryAfter: null };
+  if (!isUuid(contentId)) return empty;
+  const scope = { workspaceId: ctx.workspaceId, contentItemId: contentId };
+  const openWhere = { ...scope, status: { in: [...OPEN_POST_STATUSES] } };
+  const settledWhere = { ...scope, status: { in: [...SETTLED_POST_STATUSES] } };
+  const after =
+    options.historyAfter !== undefined && isUuid(options.historyAfter)
+      ? await db.socialPost.findFirst({
+          where: { ...settledWhere, id: options.historyAfter },
+          select: { id: true, createdAt: true },
+        })
+      : null;
+  const take = Math.min(Math.max(options.historyLimit ?? POST_HISTORY_PAGE, 1), 100);
+  const [open, openTotal, rows] = await Promise.all([
+    db.socialPost.findMany({
+      where: openWhere,
+      orderBy: newestFirst,
+      take: OPEN_POSTS_LIMIT,
+      select: publicationFields,
+    }),
+    db.socialPost.count({ where: openWhere }),
+    db.socialPost.findMany({
+      where:
+        after === null
+          ? settledWhere
+          : {
+              ...settledWhere,
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, id: { lt: after.id } },
+              ],
+            },
+      orderBy: newestFirst,
+      take: take + 1,
+      select: publicationFields,
+    }),
+  ]);
+  const history = rows.slice(0, take);
+  return {
+    open,
+    openTotal,
+    history,
+    nextHistoryAfter: rows.length > take ? (history.at(-1)?.id ?? null) : null,
+  };
+}
+
 /** Cancels a post that has not been published (content.publish). */
 export async function cancelPost(
   deps: SocialDeps,

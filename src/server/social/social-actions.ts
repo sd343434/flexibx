@@ -33,7 +33,7 @@ import {
   subscribeChannel,
   syncChannels,
 } from "./social-service";
-import { cancelPost, queuePost, resolveUncertainPost } from "./publishing";
+import { cancelPost, listContentPublications, queuePost, resolveUncertainPost } from "./publishing";
 import { draftCreated, getSocialDeps } from "./social-runtime";
 
 // Server entry points for the AI Social Manager pages: session → membership → permission
@@ -352,32 +352,27 @@ export const addRuleAction = withAction({
 
 // ── Publishing approved content to a Facebook Page ─────────────────────────
 
-/** Pages this content can be published to, and its publications (content.view). */
-export async function getContentPublishing(workspaceSlug: string, contentId: string) {
+/**
+ * Pages this content can be published to, its open publications (all) and one page of its
+ * settled history (content.view); `historyAfter` continues the history.
+ */
+export async function getContentPublishing(
+  workspaceSlug: string,
+  contentId: string,
+  historyAfter?: string,
+) {
   const ctx = await requireWorkspaceAccess(workspaceSlug, "content.view");
   if (!isUuid(contentId)) return null;
   const db = getDb();
-  const [channels, posts] = await Promise.all([
+  const [channels, publications] = await Promise.all([
     db.socialChannel.findMany({
       where: { workspaceId: ctx.workspaceId, platform: "FACEBOOK", enabled: true },
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
-    db.socialPost.findMany({
-      where: { workspaceId: ctx.workspaceId, contentItemId: contentId },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        status: true,
-        scheduledAt: true,
-        publishedAt: true,
-        errorCode: true,
-        externalPostId: true,
-        channel: { select: { name: true } },
-      },
-    }),
+    listContentPublications(db, ctx, contentId, historyAfter === undefined ? {} : { historyAfter }),
   ]);
-  return { channels, posts, canPublish: can(ctx.role, "content.publish") };
+  return { channels, ...publications, canPublish: can(ctx.role, "content.publish") };
 }
 
 export const queuePostAction = withAction({

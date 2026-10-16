@@ -224,12 +224,15 @@ export async function readGeneratedVideoFile(
   if (video === null) throw notFound();
   const file = await db.generatedVideoFile.findFirst({
     where: { workspaceId: ctx.workspaceId, videoId, kind, deletedAt: null },
-    select: { storageKey: true, storageProvider: true, contentType: true },
+    select: { storageKey: true, storageProvider: true, contentType: true, byteSize: true },
   });
   if (file === null) throw notFound();
   assertKeyBelongsToWorkspace(file.storageKey, ctx.workspaceId);
-  // The provider the file was written to, whatever is configured for new objects.
-  const object = await (await storage.forProvider(file.storageProvider)).getObject(file.storageKey);
+  // The provider the file was written to, whatever is configured for new objects; the
+  // size recorded at write time bounds the download's deadline.
+  const object = await (
+    await storage.forProvider(file.storageProvider)
+  ).getObject(file.storageKey, { expectedBytes: file.byteSize });
   if (object === null) throw notFound();
   return {
     body: object.body,

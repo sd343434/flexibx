@@ -2256,7 +2256,10 @@
         "provider_error": "Meta did not confirm the post: check the Page.",
         "no_answer": "Meta did not answer: check on the Page before queuing it again.",
         "other": "Something went wrong."
-      }
+      },
+      "moreOpen": "{count, plural, one {# more post needs attention} other {# more posts need attention}} — handle the ones above first.",
+      "newest": "Newest",
+      "older": "Older publications"
     }
   }
 }
