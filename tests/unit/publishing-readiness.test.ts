@@ -1,10 +1,13 @@
 // The content page's publishing card turns hold reasons and post error codes into
 // messages: every reason and every error kind needs an Arabic and an English text, and
 // every error code the server can store on a post maps to a kind a person can act on.
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import ar from "../../messages/ar.json";
 import en from "../../messages/en.json";
+import { LtrText } from "@/components/common/ltr-text";
 import { AD_FAILURES } from "@/server/ads/adapter";
 import { hasImageSignature } from "@/server/social/publishing";
 import {
@@ -72,7 +75,8 @@ describe("publishing card messages", () => {
     for (const state of PUBLICATION_DISPLAY_STATES) {
       expect(messages.display[state], state).toEqual(expect.any(String));
     }
-    expect(messages.publishedRef).toContain("{id}");
+    // The post id is rendered separately, isolated left-to-right (LtrText).
+    expect(messages.publishedRef).not.toContain("{id}");
     expect(messages.onHold.scheduler_stale).toContain("{last}");
     // The old "publish now" label promised instant publishing.
     expect("publishNow" in messages).toBe(false);
@@ -136,5 +140,19 @@ describe("image signature check", () => {
     expect(hasImageSignature(png, "image/webp")).toBe(false);
     expect(hasImageSignature(new TextEncoder().encode("<svg/>"), "image/png")).toBe(false);
     expect(hasImageSignature(new Uint8Array(), "image/jpeg")).toBe(false);
+  });
+});
+
+describe("post ids in right-to-left text", () => {
+  it("are isolated left-to-right so their parts keep their order", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        "p",
+        { dir: "rtl" },
+        "منشور فيسبوك ",
+        createElement(LtrText, null, "777000_1029"),
+      ),
+    );
+    expect(html).toContain('<bdi dir="ltr">777000_1029</bdi>');
   });
 });

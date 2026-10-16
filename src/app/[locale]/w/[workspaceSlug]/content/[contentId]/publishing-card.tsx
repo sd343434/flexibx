@@ -1,6 +1,7 @@
 import { getFormatter, getTranslations } from "next-intl/server";
 
 import type { Locale } from "@/i18n/config";
+import { LtrText } from "@/components/common/ltr-text";
 import { ActionButton, EntityForm } from "@/components/marketing/entity-form";
 import { Badge, Card } from "@/components/marketing/page-parts";
 import { Link } from "@/i18n/navigation";
@@ -82,7 +83,7 @@ export async function PublishingCard({
           ) : null}
           {state === "published" && post.externalPostId !== null ? (
             <span className="text-muted-foreground" data-testid="content-post-ref">
-              {t("publishedRef", { id: post.externalPostId })}{" "}
+              {t("publishedRef")} <LtrText>{post.externalPostId}</LtrText>{" "}
               <a
                 href={`https://www.facebook.com/${encodeURIComponent(post.externalPostId)}`}
                 target="_blank"

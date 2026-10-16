@@ -2273,7 +2273,7 @@
         "cancelled": "Cancelled"
       },
       "withImage": "With image",
-      "publishedRef": "Facebook post {id}",
+      "publishedRef": "Facebook post",
       "viewOnFacebook": "View on Facebook",
       "uncertainHint": "We don't know whether this reached the Page. It is not retried automatically: check it on the Page first.",
       "dueNext": "Goes out at the next scheduler run",
