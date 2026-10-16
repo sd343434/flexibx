@@ -1,0 +1,6 @@
+# Historical findings that are known fakes. One exact fingerprint per line
+# (commit:file:rule:line), so nothing else — another commit, file, line or rule — is hidden.
+#
+# 48cce4c: the OpenAI provider test's fake key ("sk-test-" + the alphabet), never a real
+# credential; since e341cf5 the test assembles it from fragments (.gitleaks.toml).
+48cce4cda8d470948769c55071d02c1a9ed9ee91:tests/unit/openai-provider.test.ts:generic-api-key:16
