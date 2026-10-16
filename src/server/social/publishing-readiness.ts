@@ -90,6 +90,9 @@ export const PUBLICATION_ERROR_KINDS = [
   "rate_limited",
   "provider_error",
   "no_answer",
+  "image_missing",
+  "image_unavailable",
+  "image_invalid",
   "other",
 ] as const;
 export type PublicationErrorKind = (typeof PUBLICATION_ERROR_KINDS)[number];
@@ -119,9 +122,60 @@ const ERROR_KIND: Readonly<Record<string, PublicationErrorKind>> = {
   ads_operation_unavailable: "provider_error",
   no_answer: "no_answer",
   ads_outcome_unknown: "no_answer",
+  image_missing: "image_missing",
+  image_unavailable: "image_unavailable",
+  image_invalid: "image_invalid",
 };
 
 export function publicationErrorKind(code: string | null): PublicationErrorKind | null {
   if (code === null) return null;
   return ERROR_KIND[code] ?? "other";
+}
+
+// ── What a person sees for one post ──────────────────────────────────────────
+
+export const PUBLICATION_DISPLAY_STATES = [
+  /** Due, nothing holds it: the next scheduler run publishes it. */
+  "queued",
+  /** Waiting for its time. */
+  "scheduled",
+  /** Due, but the server holds it (see the readiness reasons). */
+  "on_hold",
+  /** Claimed by the scheduler, being sent now. */
+  "publishing",
+  /** Confirmed on the Page (provider id stored). */
+  "published",
+  /** Not published, for certain (actionable error). */
+  "failed",
+  /** Unknown whether it was published: never retried until checked on the Page. */
+  "uncertain",
+  /** Withdrawn (with the reason). */
+  "cancelled",
+] as const;
+export type PublicationDisplayState = (typeof PUBLICATION_DISPLAY_STATES)[number];
+
+/**
+ * The state shown for a post. Only a confirmed outcome reads as published: queuing never
+ * does, and an UNCERTAIN post stays uncertain until a person checks it on the Page.
+ */
+export function publicationDisplayState(
+  post: { readonly status: string; readonly scheduledAt: Date },
+  now: Date,
+  blockers: readonly PublishingBlocker[],
+): PublicationDisplayState {
+  switch (post.status) {
+    case "SCHEDULED":
+      if (post.scheduledAt.getTime() > now.getTime()) return "scheduled";
+      return blockers.length > 0 ? "on_hold" : "queued";
+    case "PUBLISHING":
+      return "publishing";
+    case "PUBLISHED":
+      return "published";
+    case "UNCERTAIN":
+      return "uncertain";
+    case "CANCELLED":
+      return "cancelled";
+    default:
+      return "failed";
+  }
 }

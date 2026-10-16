@@ -67,6 +67,7 @@ model User {
   accounts                  Account[]
   invitationsCreated        WorkspaceInvitation[]
   contentCreated            ContentItem[]
+  contentReviews            ContentReview[]
   mediaUploaded             MediaAsset[]
   aiGenerations             AiGeneration[]
   generatedVideos           GeneratedVideo[]
@@ -121,6 +122,7 @@ model Workspace {
   campaignGoals         CampaignGoal[]
   campaignPillars       CampaignPillar[]
   contentItems          ContentItem[]
+  contentReviews        ContentReview[]
   mediaAssets           MediaAsset[]
   contentItemAssets     ContentItemAsset[]
   aiGenerations         AiGeneration[]
@@ -425,6 +427,37 @@ enum ContentStatus {
   @@map("content_status")
 }
 
+enum ContentReviewDecision {
+  APPROVED
+  CHANGES_REQUESTED
+
+  @@map("content_review_decision")
+}
+
+/// One review decision on a content item, recorded with the status change it made (same
+/// transaction). Append-only: a decision is never edited; the reviewer's account being
+/// deleted only clears `reviewerUserId`. A change request always carries its reason
+/// (CHECK), which the author sees on the content page until the next decision.
+model ContentReview {
+  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String                @map("workspace_id") @db.Uuid
+  contentItemId  String                @map("content_item_id") @db.Uuid
+  decision       ContentReviewDecision
+  /// Required for CHANGES_REQUESTED (1–2000 characters after trimming); null otherwise.
+  reason         String?               @db.VarChar(2000)
+  reviewerUserId String?               @map("reviewer_user_id") @db.Uuid
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  reviewer    User?       @relation(fields: [reviewerUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, contentItemId, createdAt(sort: Desc)])
+  @@index([contentItemId])
+  @@index([reviewerUserId])
+  @@map("content_reviews")
+}
+
 /// One brand profile per workspace: the source the future AI Brand Brain will read.
 model Brand {
   id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -616,6 +649,8 @@ model ContentItem {
   aiApplied   AiGeneration[]     @relation("AiGenerationApplied")
   /// Publications of this item to the workspace's Facebook Pages.
   socialPosts SocialPost[]
+  /// Review decisions on this item (approvals and change requests), newest last.
+  reviews     ContentReview[]
 
   @@index([workspaceId, status, updatedAt(sort: Desc)])
   @@index([workspaceId, scheduledAt])
@@ -651,6 +686,8 @@ model MediaAsset {
   workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   uploadedBy   User?              @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
   contentLinks ContentItemAsset[]
+  /// Facebook posts that publish (or published) this image.
+  socialPosts  SocialPost[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([uploadedByUserId])
@@ -2074,6 +2111,12 @@ model SocialPost {
   publishedAt       DateTime? @map("published_at") @db.Timestamptz(3)
   errorCode         String?   @map("error_code") @db.VarChar(60)
   requestedByUserId String?   @map("requested_by_user_id") @db.Uuid
+  /// True when the post was queued with an image (the content's first attached image).
+  /// Stays true if that image is deleted afterwards, so the post fails (`image_missing`)
+  /// instead of quietly going out as text only.
+  withImage         Boolean   @default(false) @map("with_image")
+  /// The image uploaded with the post (Graph API /photos, sent as bytes — never a URL).
+  mediaAssetId      String?   @map("media_asset_id") @db.Uuid
   version           Int       @default(0)
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -2081,8 +2124,10 @@ model SocialPost {
   workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   contentItem ContentItem   @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
   channel     SocialChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  mediaAsset  MediaAsset?   @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
 
   @@unique([contentItemId, channelId])
+  @@index([mediaAssetId])
   @@index([status, scheduledAt])
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([channelId])

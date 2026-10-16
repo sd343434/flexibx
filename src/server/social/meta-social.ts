@@ -20,6 +20,15 @@ import { graphFailureKind } from "../meta/graph-errors";
 // - GET  /{page-id}/feed?fields=id,message,created_time (find a post after a lost answer)
 
 export const SOCIAL_REQUEST_TIMEOUT_MS = 15_000;
+/** A photo upload carries up to MAX_PAGE_PHOTO_BYTES: it gets longer than other calls. */
+export const SOCIAL_UPLOAD_TIMEOUT_MS = 60_000;
+
+/** An image published with a Page post: the bytes themselves (never a storage URL). */
+export interface PagePhoto {
+  readonly bytes: Uint8Array;
+  readonly contentType: string;
+  readonly filename: string;
+}
 
 export type SocialFailure =
   | "token_expired"
@@ -101,6 +110,12 @@ export interface MetaSocial {
   ): Promise<readonly RecentComment[]>;
   /** Publishes a text post (with an optional link) on the Page; returns the post id. */
   publishToPage(page: ManagedPage, message: string, link: string | null): Promise<string>;
+  /**
+   * Publishes a photo post on the Page: the image is uploaded as multipart `source` (Meta
+   * never fetches it from our storage) with the message as its caption. Returns the feed
+   * post id, which the same caption lookup (findPagePost) finds after a lost answer.
+   */
+  publishPhotoToPage(page: ManagedPage, message: string, photo: PagePhoto): Promise<string>;
   /** The id of the Page's own post with exactly this text since `since`, if any. */
   findPagePost(page: ManagedPage, message: string, since: Date): Promise<Lookup>;
 }
@@ -133,20 +148,29 @@ export function createMetaSocial(config: {
     path: string,
     token: string,
     params: Json = {},
+    file?: { readonly field: string; readonly photo: PagePhoto },
   ): Promise<Json> {
     const url = new URL(`${graph}${path}`);
     url.searchParams.set("access_token", token);
     url.searchParams.set("appsecret_proof", proof(token));
-    let body: URLSearchParams | undefined;
+    let body: URLSearchParams | FormData | undefined;
+    const text = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
     if (method === "GET") {
-      for (const [key, value] of Object.entries(params)) {
-        url.searchParams.set(key, typeof value === "string" ? value : JSON.stringify(value));
-      }
-    } else {
+      for (const [key, value] of Object.entries(params)) url.searchParams.set(key, text(value));
+    } else if (file === undefined) {
       body = new URLSearchParams();
-      for (const [key, value] of Object.entries(params)) {
-        body.set(key, typeof value === "string" ? value : JSON.stringify(value));
-      }
+      for (const [key, value] of Object.entries(params)) body.set(key, text(value));
+    } else {
+      // Multipart: the fields, then the file part (copied, so the caller's buffer is not
+      // shared with the request body).
+      const form = new FormData();
+      for (const [key, value] of Object.entries(params)) form.set(key, text(value));
+      form.set(
+        file.field,
+        new Blob([file.photo.bytes.slice()], { type: file.photo.contentType }),
+        file.photo.filename,
+      );
+      body = form;
     }
     let response: Response;
     try {
@@ -154,7 +178,9 @@ export function createMetaSocial(config: {
         method,
         headers: { accept: "application/json" },
         ...(body === undefined ? {} : { body }),
-        signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(
+          file === undefined ? SOCIAL_REQUEST_TIMEOUT_MS : SOCIAL_UPLOAD_TIMEOUT_MS,
+        ),
         cache: "no-store",
         redirect: "error",
       });
@@ -335,6 +361,22 @@ export function createMetaSocial(config: {
         ...(link === null ? {} : { link }),
       });
       const created = str(json.id);
+      if (created === null || !/^[0-9_]{1,128}$/.test(created)) {
+        throw new SocialPlatformError("provider_error", true);
+      }
+      return created;
+    },
+
+    async publishPhotoToPage(page, message, photo) {
+      const json = await request(
+        "POST",
+        `/${page.id}/photos`,
+        page.accessToken,
+        { caption: message, published: "true" },
+        { field: "source", photo },
+      );
+      // `post_id` is the feed post (what published_posts lists); `id` is the photo object.
+      const created = str(json.post_id) ?? str(json.id);
       if (created === null || !/^[0-9_]{1,128}$/.test(created)) {
         throw new SocialPlatformError("provider_error", true);
       }

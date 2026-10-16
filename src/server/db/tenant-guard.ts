@@ -65,6 +65,8 @@ export const TENANT_MODELS = {
   SocialLesson: { workspaceId: "required", appendOnly: false },
   SocialAutoReplyClaim: { workspaceId: "required", appendOnly: false },
   SocialPost: { workspaceId: "required", appendOnly: false },
+  // Review decisions on content (Pass 3.1): written with the status change, never edited.
+  ContentReview: { workspaceId: "required", appendOnly: true },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -123,6 +125,7 @@ export const TENANT_ROOT_RELATIONS = [
   "socialLessons",
   "socialAutoReplyClaims",
   "socialPosts",
+  "contentReviews",
 ] as const;
 
 /**
@@ -138,6 +141,7 @@ export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> 
   AgentTask: ["approvals", "approvedDecision"],
   AdAccount: ["whatsappEvents"],
   WhatsAppContact: ["consentEvents"],
+  ContentItem: ["reviews"],
 };
 
 /**
@@ -165,6 +169,7 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "accounts",
     "invitationsCreated",
     "contentCreated",
+    "contentReviews",
     "mediaUploaded",
     "aiGenerations",
     "generatedVideos",

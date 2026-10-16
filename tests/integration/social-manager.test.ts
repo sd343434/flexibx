@@ -58,6 +58,9 @@ import {
 } from "@/server/marketing/content-service";
 import { parseSocialWebhook } from "@/server/social/webhook";
 import { createTenantContext, type TenantContext } from "@/server/tenancy/context";
+import { MemoryStorageService } from "@/server/storage/memory-storage";
+import { buildWorkspaceKey, type StorageRouter } from "@/server/storage/storage";
+import { MAX_PAGE_PHOTO_BYTES } from "@/server/social/publishing";
 
 import { createTenant, createTestDb, resetDatabase } from "./helpers";
 
@@ -95,6 +98,8 @@ function fakeGraph() {
   const pageListed = { value: true };
   const ownReplies = new Map<string, { id: string; message: string }[]>();
   const pagePosts: { id: string; message: string; created_time: string }[] = [];
+  // Files received as multipart parts (photo uploads): the bytes Meta would get.
+  const uploads: { field: string; bytes: Uint8Array; type: string; name: string }[] = [];
   let sequence = 0;
   const fetchImpl = (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(
@@ -104,6 +109,24 @@ function fakeGraph() {
     const method = init?.method ?? "GET";
     const params: Record<string, string> = Object.fromEntries(url.searchParams);
     if (init?.body instanceof URLSearchParams) Object.assign(params, Object.fromEntries(init.body));
+    const files: Promise<void>[] = [];
+    if (init?.body instanceof FormData) {
+      for (const [field, value] of init.body.entries()) {
+        if (typeof value === "string") params[field] = value;
+        else {
+          files.push(
+            value.arrayBuffer().then((buffer) => {
+              uploads.push({
+                field,
+                bytes: new Uint8Array(buffer),
+                type: value.type,
+                name: value.name,
+              });
+            }),
+          );
+        }
+      }
+    }
     const token = params.access_token ?? null;
     delete params.access_token;
     delete params.appsecret_proof;
@@ -177,6 +200,25 @@ function fakeGraph() {
       return json({ recipient_id: "x", message_id: `m_${String(sequence)}` });
     }
     if (method === "POST" && path === `/${PAGE}/subscribed_apps`) return json({ success: true });
+    if (method === "POST" && path === `/${PAGE}/photos`) {
+      sequence += 1;
+      const postId = `${PAGE}_${String(1000 + sequence)}`;
+      // A photo post is listed among the Page's posts with its caption as the message.
+      pagePosts.push({
+        id: postId,
+        message: params.caption ?? "",
+        created_time: new Date().toISOString(),
+      });
+      if (fault === "500") return json({ error: { code: 2, message: "Unexpected" } }, 500);
+      if (fault === "refuse") {
+        pagePosts.pop();
+        return json({ error: { code: 100, message: "Invalid" } }, 400);
+      }
+      if (fault === "drop") return Promise.reject(new TypeError("fetch failed"));
+      return Promise.all(files).then(() =>
+        json({ id: `photo_${String(sequence)}`, post_id: postId }),
+      );
+    }
     if (method === "POST" && path === `/${PAGE}/feed`) {
       sequence += 1;
       const id = `${PAGE}_${String(1000 + sequence)}`;
@@ -225,6 +267,7 @@ function fakeGraph() {
     faults,
     posts,
     pagePosts,
+    uploads,
     otherReplies,
     paging,
     pageListed,
@@ -2044,5 +2087,228 @@ describe("why queued posts wait (publishing readiness)", () => {
     ]);
     // The other workspace's live grant is not this one's.
     expect((await publishingReadiness(s.deps, s.owner.workspaceId)).blockers).toEqual([]);
+  });
+});
+
+// ── Images on Page posts (uploaded as bytes; never a storage URL) ─────────────
+
+describe("publishing an image with a Page post", () => {
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 5, 6, 7]);
+
+  async function withImages(options: { storage?: boolean } = {}) {
+    const s = await setup();
+    const memory = new MemoryStorageService();
+    const router: StorageRouter = { forProvider: () => Promise.resolve(memory) };
+    const deps: SocialDeps = options.storage === false ? s.deps : { ...s.deps, storage: router };
+    return { ...s, deps, memory };
+  }
+
+  async function image(
+    s: Awaited<ReturnType<typeof withImages>>,
+    bytes: Uint8Array,
+    contentType: "image/png" | "image/jpeg" | "image/webp",
+    stored = true,
+  ) {
+    const key = buildWorkspaceKey(s.owner.workspaceId, "content-media", contentType);
+    if (stored) await s.memory.put(key, bytes, { contentType });
+    return system.mediaAsset.create({
+      data: {
+        workspaceId: s.owner.workspaceId,
+        filename: "../../secret/menu.png",
+        contentType,
+        sizeBytes: bytes.byteLength,
+        storageKey: key,
+        storageProvider: "LEGACY_S3",
+      },
+    });
+  }
+
+  async function approvedWith(
+    s: Awaited<ReturnType<typeof withImages>>,
+    assets: readonly { id: string }[],
+    link: string | null = "https://cafe.example/menu",
+  ) {
+    const item = await system.contentItem.create({
+      data: {
+        workspaceId: s.owner.workspaceId,
+        title: "Autumn menu",
+        body: "Pumpkin latte is back.",
+        status: "APPROVED",
+        metadata: link === null ? {} : { link },
+      },
+    });
+    for (const [position, asset] of assets.entries()) {
+      await system.contentItemAsset.create({
+        data: {
+          workspaceId: s.owner.workspaceId,
+          contentItemId: item.id,
+          mediaAssetId: asset.id,
+          position,
+        },
+      });
+    }
+    return item;
+  }
+
+  it("uploads the first image as bytes with the caption (link appended), once", async () => {
+    const s = await withImages();
+    const first = await image(s, PNG, "image/png");
+    const second = await image(s, JPEG, "image/jpeg");
+    const item = await approvedWith(s, [first, second]);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: postId } })).toMatchObject({
+      withImage: true,
+      mediaAssetId: first.id,
+      link: null,
+      message: "Pumpkin latte is back.\n\nhttps://cafe.example/menu",
+    });
+
+    expect(await socialSweep(s.deps, system)).toMatchObject({ published: 1 });
+    const [call] = s.graph.posts().filter((entry) => entry.path === `/${PAGE}/photos`);
+    expect(call?.params).toMatchObject({
+      caption: "Pumpkin latte is back.\n\nhttps://cafe.example/menu",
+      published: "true",
+    });
+    // No URL of ours reaches Meta; the bytes do, under a neutral file name.
+    expect(JSON.stringify(call?.params)).not.toMatch(/workspaces\/|https?:\/\/(?!cafe)/);
+    expect(s.graph.uploads).toHaveLength(1);
+    expect(s.graph.uploads[0]).toMatchObject({
+      field: "source",
+      type: "image/png",
+      name: "image.png",
+    });
+    expect(Array.from(s.graph.uploads[0]?.bytes ?? [])).toEqual(Array.from(PNG));
+    // Nothing went to /feed for this post, and nothing is posted twice.
+    expect(s.graph.posts().filter((entry) => entry.path === `/${PAGE}/feed`)).toHaveLength(0);
+    await socialSweep(s.deps, system, new Date(Date.now() + 60_000));
+    expect(s.graph.uploads).toHaveLength(1);
+    const published = await system.socialPost.findUniqueOrThrow({ where: { id: postId } });
+    expect(published).toMatchObject({ status: "PUBLISHED" });
+    expect(published.externalPostId).toMatch(new RegExp(`^${PAGE}_`));
+  });
+
+  it("refuses to queue an image Facebook cannot take, instead of dropping it", async () => {
+    const s = await withImages();
+    const webp = await image(s, Uint8Array.from([1, 2, 3]), "image/webp");
+    const big = await system.mediaAsset.create({
+      data: {
+        workspaceId: s.owner.workspaceId,
+        filename: "big.png",
+        contentType: "image/png",
+        sizeBytes: MAX_PAGE_PHOTO_BYTES + 1,
+        storageKey: buildWorkspaceKey(s.owner.workspaceId, "content-media", "image/png"),
+        storageProvider: "LEGACY_S3",
+      },
+    });
+    for (const asset of [webp, big]) {
+      const item = await approvedWith(s, [asset]);
+      expect(await rejection(queuePost(s.deps, s.owner, item.id, s.channel.id))).toMatchObject({
+        fields: [{ code: "social_image_unsupported" }],
+      });
+    }
+    expect(await system.socialPost.count({ where: { workspaceId: s.owner.workspaceId } })).toBe(0);
+  });
+
+  it("fails for certain, before any call to Meta, when the image is gone or not an image", async () => {
+    const s = await withImages();
+    // Deleted after queuing: never published as text only.
+    const deleted = await image(s, PNG, "image/png");
+    const one = await approvedWith(s, [deleted]);
+    const a = await queuePost(s.deps, s.owner, one.id, s.channel.id);
+    await system.mediaAsset.delete({ where: { id: deleted.id } });
+    // Row present, bytes missing from storage.
+    const missing = await image(s, PNG, "image/png", false);
+    const two = await approvedWith(s, [missing]);
+    const b = await queuePost(s.deps, s.owner, two.id, s.channel.id);
+    // Declared PNG, stored bytes are not one.
+    const fake = await image(s, new TextEncoder().encode("<svg onload=x>"), "image/png");
+    const three = await approvedWith(s, [fake]);
+    const c = await queuePost(s.deps, s.owner, three.id, s.channel.id);
+
+    await socialSweep(s.deps, system);
+    const status = async (id: string) =>
+      system.socialPost.findUniqueOrThrow({
+        where: { id },
+        select: { status: true, errorCode: true },
+      });
+    expect(await status(a.postId)).toEqual({ status: "FAILED", errorCode: "image_missing" });
+    expect(await status(b.postId)).toEqual({ status: "FAILED", errorCode: "image_missing" });
+    expect(await status(c.postId)).toEqual({ status: "FAILED", errorCode: "image_invalid" });
+    expect(s.graph.posts()).toHaveLength(0);
+    expect(s.graph.uploads).toHaveLength(0);
+  });
+
+  it("without storage configured, an image post fails instead of going out as text", async () => {
+    const s = await withImages({ storage: false });
+    const photo = await image(s, PNG, "image/png");
+    const item = await approvedWith(s, [photo]);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    await socialSweep(s.deps, system);
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: postId } })).toMatchObject({
+      status: "FAILED",
+      errorCode: "image_unavailable",
+    });
+    expect(s.graph.posts()).toHaveLength(0);
+  });
+
+  it("a lost answer is uncertain, found by its caption, and never uploaded twice", async () => {
+    const s = await withImages();
+    const photo = await image(s, JPEG, "image/jpeg");
+    const item = await approvedWith(s, [photo], null);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    s.graph.faults.set(`POST /${PAGE}/photos`, "drop");
+    await socialSweep(s.deps, system);
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: postId } })).toMatchObject({
+      status: "UNCERTAIN",
+    });
+    // The sweep does not retry an uncertain post.
+    await socialSweep(s.deps, system, new Date(Date.now() + 60_000));
+    expect(s.graph.posts().filter((entry) => entry.path === `/${PAGE}/photos`)).toHaveLength(1);
+    // A person checks: the photo post is on the Page with the same caption.
+    await resolveUncertainPost(s.deps, s.owner, postId);
+    const settled = await system.socialPost.findUniqueOrThrow({ where: { id: postId } });
+    expect(settled.status).toBe("PUBLISHED");
+    expect(settled.externalPostId).toBe(s.graph.pagePosts.at(-1)?.id);
+  });
+
+  it("a refused upload is a certain failure that can be queued again", async () => {
+    const s = await withImages();
+    const photo = await image(s, PNG, "image/png");
+    const item = await approvedWith(s, [photo]);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    s.graph.faults.set(`POST /${PAGE}/photos`, "refuse");
+    await socialSweep(s.deps, system);
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: postId } })).toMatchObject({
+      status: "FAILED",
+    });
+    await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    expect(await socialSweep(s.deps, system)).toMatchObject({ published: 1 });
+  });
+
+  it("only the workspace's own media can be attached to its post", async () => {
+    const s = await withImages();
+    const other = await withImages();
+    const theirs = await image(other, PNG, "image/png");
+    const item = await system.contentItem.create({
+      data: { workspaceId: s.owner.workspaceId, title: "X", body: "Y", status: "APPROVED" },
+    });
+    // The database refuses a cross-workspace attachment, and a post naming foreign media.
+    await expect(
+      system.contentItemAsset.create({
+        data: {
+          workspaceId: s.owner.workspaceId,
+          contentItemId: item.id,
+          mediaAssetId: theirs.id,
+        },
+      }),
+    ).rejects.toThrow();
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    await expect(
+      system.socialPost.update({
+        where: { id: postId },
+        data: { withImage: true, mediaAssetId: theirs.id },
+      }),
+    ).rejects.toThrow();
   });
 });

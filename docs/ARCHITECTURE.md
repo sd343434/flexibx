@@ -491,7 +491,13 @@ phases must keep are:
   reject cross-workspace references and any change of `workspace_id`.
 - **Workflow.** Clients send a content transition name, never a status; each transition
   has one permission (`workflow.ts`), runs as a status-conditional update (no lost
-  updates) and is audited with `from`/`to`. Only drafts are editable; `PUBLISHED` is final
+  updates) and is audited with `from`/`to`. `approve` and `request_changes` also record a
+  review decision in `content_reviews` (same transaction; append-only, database-enforced:
+  a change request must carry a non-blank reason of at most 2000 characters, decisions
+  cannot be edited, the reviewed item must be in the same workspace). The author sees the
+  latest change request on the content page until the next decision; the full history
+  stays listed. Two reviewers deciding at once: the status-conditional update fails the
+  second, and its review row rolls back with it. Only drafts are editable; `PUBLISHED` is final
   and records publication by hand; Facebook Page publishing (§ 16) runs separately and
   cancels its waiting posts when content is marked published by hand.
 - **Permissions.** No new roles or actions: brand/audiences/pillars use `brand.*`,
@@ -719,8 +725,16 @@ Code: `src/server/social/`. Migrations `20261012110000_social_manager` and
   guidance; a person applies or dismisses it (`guidanceVersion` increases). Nothing the
   agent learns changes its behaviour without that approval.
 - **Publishing**: approved or scheduled content can be queued to a Facebook Page from the
-  content page (`content.publish`). The sweep publishes due posts (text and link; images
-  and Instagram publishing are not supported yet), re-checks the approval first, claims
+  content page (`content.publish`). The sweep publishes due posts: text and link, or —
+  when the content has an attached image — a photo post with the first image (JPEG or
+  PNG, at most 4 MiB, checked when queuing; anything else is refused, never dropped). The
+  image is read from the workspace's storage on the server, its key, type, size and file
+  signature checked again, and uploaded to `/{page-id}/photos` as multipart bytes: no
+  storage URL is given to Meta, so private buckets keep working. A photo post has no link
+  field, so the link is appended to the caption (stored as the post's message, which the
+  lost-answer lookup matches). A missing or unreadable image fails the post before any
+  call (`image_missing`, `image_unavailable`, `image_invalid`). Verified only against a
+  stand-in Graph API; Instagram publishing is not supported. The sweep re-checks the approval first, claims
   each post once (the approval is part of the claim), and treats a lost answer as
   `UNCERTAIN` (looked up among the Page's own `published_posts`); a post stuck in
   `PUBLISHING` for 10 minutes also becomes `UNCERTAIN`. Publishing is never instant:

@@ -383,6 +383,10 @@ export async function updateContentIn(
  * (a person published it themselves). Queued Facebook posts follow the new status in the
  * same transaction (social/queued-posts.ts): they move with a new schedule and are
  * cancelled when the content is unscheduled, marked published or no longer approved.
+ * `approve` and `request_changes` also record a review decision (content_reviews) in the
+ * same transaction; `request_changes` needs a reason the author then sees. Two reviewers
+ * deciding at once cannot both succeed: the status-conditional update fails the second
+ * (`stale_status`) and its review is rolled back with it.
  */
 export async function transitionContent(
   db: GuardedPrismaClient,
@@ -391,12 +395,15 @@ export async function transitionContent(
     readonly contentId: string;
     readonly transition: ContentTransition;
     readonly scheduledAt: string | null;
+    /** Required for `request_changes`; ignored by every other transition. */
+    readonly reason?: string | null | undefined;
   },
   now: Date = new Date(),
 ): Promise<{ readonly contentId: string; readonly status: ContentStatus }> {
   const rule = contentTransitionRule(input.transition);
   assertCan(ctx, "content.view");
   assertCan(ctx, rule.permission);
+  const reason = input.transition === "request_changes" ? reviewReason(input.reason) : null;
   return db.$transaction(async (tx) => {
     const existing = await tx.contentItem.findFirst({
       where: { workspaceId: ctx.workspaceId, id: input.contentId },
@@ -436,9 +443,59 @@ export async function transitionContent(
       entityId: input.contentId,
       metadata: { transition: input.transition, from: existing.status, to: rule.to },
     });
+    if (input.transition === "approve" || input.transition === "request_changes") {
+      await tx.contentReview.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          contentItemId: input.contentId,
+          decision: input.transition === "approve" ? "APPROVED" : "CHANGES_REQUESTED",
+          reason,
+          reviewerUserId: ctx.userId,
+        },
+        select: { id: true },
+      });
+    }
     await followContentStatus(tx, ctx, input.contentId, existing.status, rule.to, scheduledFor);
     return { contentId: input.contentId, status: rule.to };
   });
+}
+
+/** Longest review reason kept (characters, after trimming). */
+export const REVIEW_REASON_MAX = 2000;
+
+/** A change request's reason: trimmed, not blank, bounded, no NUL characters. */
+export function reviewReason(value: string | null | undefined): string {
+  const reason = (value ?? "").trim();
+  if (reason === "") throw fieldError("reason", "review_reason_required");
+  if (reason.length > REVIEW_REASON_MAX) {
+    throw fieldError("reason", "too_big", { origin: "string", maximum: REVIEW_REASON_MAX });
+  }
+  if (reason.includes("\u0000")) throw fieldError("reason", "invalid_format");
+  return reason;
+}
+
+/** Most review decisions listed on the content page (newest first). */
+export const REVIEW_HISTORY_LIMIT = 20;
+
+/**
+ * The review history of one content item, newest first, with the reviewer's name. The
+ * item must belong to the workspace (else not found); `content.view` is enough to read it.
+ */
+export async function listContentReviews(db: Db, ctx: TenantContext, contentId: string) {
+  assertCan(ctx, "content.view");
+  const reviews = await db.contentReview.findMany({
+    where: { workspaceId: ctx.workspaceId, contentItemId: contentId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: REVIEW_HISTORY_LIMIT,
+    select: {
+      id: true,
+      decision: true,
+      reason: true,
+      createdAt: true,
+      reviewer: { select: { name: true } },
+    },
+  });
+  return reviews;
 }
 
 /**

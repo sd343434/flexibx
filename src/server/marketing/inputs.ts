@@ -340,6 +340,8 @@ export const transitionContentInputSchema = z.strictObject({
   transition: z.enum(CONTENT_TRANSITIONS),
   /** Required for `schedule` (workspace time zone). */
   scheduledAt: optionalLocalDateTime,
+  /** Required for `request_changes` (checked by the service, which knows the transition). */
+  reason: optionalText(2000),
 });
 
 export const rescheduleContentInputSchema = z.strictObject({

@@ -1,12 +1,14 @@
-import type { PrismaClient } from "@/generated/prisma/client";
+import type { PrismaClient, StorageProvider } from "@/generated/prisma/client";
 
 import { recordAudit } from "../audit/audit-log";
 import { isAppError } from "../errors/app-error";
 import { isUuid, type TenantContext } from "../tenancy/context";
 import { assertCan } from "../tenancy/permissions";
 
+import { assertKeyBelongsToWorkspace } from "../storage/storage";
+
 import { activeMetaGrant, hasActiveMetaGrant } from "./channel-access";
-import { SocialPlatformError, type ManagedPage } from "./meta-social";
+import { SocialPlatformError, type ManagedPage, type PagePhoto } from "./meta-social";
 import { pageAccessLost, pageFor, socialError, type SocialDeps } from "./social-service";
 
 // Publishing approved content to a Facebook Page at its time. Only APPROVED or SCHEDULED
@@ -19,6 +21,53 @@ import { pageAccessLost, pageFor, socialError, type SocialDeps } from "./social-
 const nowOf = (deps: { readonly now?: () => Date }) => (deps.now ?? (() => new Date()))();
 const notFound = (resource: string) =>
   socialError("NOT_FOUND", "social_reply_locked", { resource });
+
+// ── Images ───────────────────────────────────────────────────────────────────
+
+/** Image types Facebook Page photos accept that content media can hold. */
+export const PAGE_PHOTO_TYPES = ["image/jpeg", "image/png"] as const;
+/** The longest stored post text (social_posts.message). */
+export const MAX_POST_MESSAGE = 10_000;
+/** Largest image published with a post (Meta's recommended Page photo limit). */
+export const MAX_PAGE_PHOTO_BYTES = 4 * 1024 * 1024;
+
+/** Whether the bytes start with the signature of their declared type (JPEG or PNG). */
+export function hasImageSignature(bytes: Uint8Array, contentType: string): boolean {
+  const starts = (signature: readonly number[]) =>
+    bytes.length >= signature.length && signature.every((byte, i) => bytes[i] === byte);
+  if (contentType === "image/jpeg") return starts([0xff, 0xd8, 0xff]);
+  if (contentType === "image/png") return starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return false;
+}
+
+/**
+ * The image a post of this content carries: its first attached image (position order).
+ * null = no image (a text post). A first image Facebook cannot take (type or size) is
+ * refused when queuing — never silently dropped.
+ */
+async function postImage(
+  tx: Pick<SocialDeps["db"], "contentItemAsset">,
+  workspaceId: string,
+  contentId: string,
+): Promise<string | null> {
+  const first = await tx.contentItemAsset.findFirst({
+    where: { workspaceId, contentItemId: contentId },
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+    select: { mediaAsset: { select: { id: true, contentType: true, sizeBytes: true } } },
+  });
+  if (first === null) return null;
+  const image = first.mediaAsset;
+  if (!(PAGE_PHOTO_TYPES as readonly string[]).includes(image.contentType)) {
+    throw socialError("CONFLICT", "social_image_unsupported", { reason: "type" });
+  }
+  if (image.sizeBytes > MAX_PAGE_PHOTO_BYTES) {
+    throw socialError("CONFLICT", "social_image_unsupported", {
+      reason: "size",
+      maximum: MAX_PAGE_PHOTO_BYTES,
+    });
+  }
+  return image.id;
+}
 
 /** The text and link a content item publishes (its body, else its title; its link). */
 export function postOf(content: { title: string; body: string; metadata: unknown }): {
@@ -68,7 +117,23 @@ export async function queuePost(
       select: { id: true },
     });
     if (channel === null) throw notFound("social_channel");
-    const { message, link } = postOf(content);
+    const text = postOf(content);
+    const mediaAssetId = await postImage(tx, ctx.workspaceId, contentId);
+    const image = { withImage: mediaAssetId !== null, mediaAssetId };
+    // A photo post has no link field: the link goes at the end of the caption (stored as
+    // the message, so the caption lookup after a lost answer matches it exactly).
+    const { message, link } =
+      mediaAssetId === null || text.link === null
+        ? text
+        : {
+            message: text.message.includes(text.link)
+              ? text.message
+              : `${text.message}\n\n${text.link}`,
+            link: null,
+          };
+    if (message.length > MAX_POST_MESSAGE) {
+      throw socialError("CONFLICT", "social_image_unsupported", { reason: "caption" });
+    }
     // Only a committed schedule (SCHEDULED) holds the post back; an approved item's planned
     // date is a plan, so queuing it means the next scheduler run.
     const scheduledAt =
@@ -89,6 +154,7 @@ export async function queuePost(
           scheduledAt,
           message,
           link,
+          ...image,
           requestedByUserId: ctx.userId,
         },
         select: { id: true },
@@ -107,6 +173,7 @@ export async function queuePost(
           scheduledAt,
           message,
           link,
+          ...image,
           errorCode: null,
           requestedByUserId: ctx.userId,
           version: { increment: 1 },
@@ -119,7 +186,11 @@ export async function queuePost(
       action: "social.post_queued",
       entityType: "social_post",
       entityId: postId,
-      metadata: { contentId, scheduledAt: scheduledAt.toISOString() },
+      metadata: {
+        contentId,
+        scheduledAt: scheduledAt.toISOString(),
+        withImage: mediaAssetId !== null,
+      },
     });
     return { postId };
   });
@@ -147,6 +218,7 @@ const publicationFields = {
   publishedAt: true,
   errorCode: true,
   externalPostId: true,
+  withImage: true,
   createdAt: true,
   channel: { select: { name: true } },
 } as const;
@@ -252,6 +324,10 @@ export async function publishPost(
       contentItemId: true,
       requestedByUserId: true,
       scheduledAt: true,
+      withImage: true,
+      mediaAsset: {
+        select: { storageKey: true, storageProvider: true, contentType: true, sizeBytes: true },
+      },
       channel: { select: { pageId: true, enabled: true } },
       contentItem: { select: { status: true } },
     },
@@ -342,9 +418,23 @@ export async function publishPost(
     }
     return "failed";
   }
+  // The image is read here, before anything is sent: if it is gone or unreadable the post
+  // fails for certain (nothing reached Meta) instead of going out without it.
+  let photo: PagePhoto | null = null;
+  if (post.withImage) {
+    const read = await readPostImage(deps, workspaceId, post.mediaAsset);
+    if (typeof read === "string") {
+      await finish("FAILED", { errorCode: read });
+      return "failed";
+    }
+    photo = read;
+  }
   try {
     if (deps.meta === null) throw new SocialPlatformError("provider_error");
-    const externalPostId = await deps.meta.publishToPage(page, post.message, post.link);
+    const externalPostId =
+      photo === null
+        ? await deps.meta.publishToPage(page, post.message, post.link)
+        : await deps.meta.publishPhotoToPage(page, post.message, photo);
     await finish("PUBLISHED", { externalPostId });
     return "published";
   } catch (error) {
@@ -353,6 +443,44 @@ export async function publishPost(
       errorCode: error instanceof SocialPlatformError ? error.kind : "provider_error",
     });
     return uncertain ? "uncertain" : "failed";
+  }
+}
+
+/**
+ * The bytes of a post's image from the workspace's storage, checked again (workspace key,
+ * type, size, file signature), or why it cannot be published.
+ */
+async function readPostImage(
+  deps: SocialDeps,
+  workspaceId: string,
+  asset: {
+    readonly storageKey: string;
+    readonly storageProvider: StorageProvider;
+    readonly contentType: string;
+    readonly sizeBytes: number;
+  } | null,
+): Promise<PagePhoto | "image_missing" | "image_unavailable" | "image_invalid"> {
+  if (asset === null) return "image_missing";
+  if (
+    !(PAGE_PHOTO_TYPES as readonly string[]).includes(asset.contentType) ||
+    asset.sizeBytes > MAX_PAGE_PHOTO_BYTES
+  ) {
+    return "image_invalid";
+  }
+  if (deps.storage === undefined) return "image_unavailable";
+  try {
+    assertKeyBelongsToWorkspace(asset.storageKey, workspaceId);
+    const service = await deps.storage.forProvider(asset.storageProvider);
+    const object = await service.getObject(asset.storageKey, { expectedBytes: asset.sizeBytes });
+    if (object === null) return "image_missing";
+    const bytes = object.body;
+    if (bytes.byteLength > MAX_PAGE_PHOTO_BYTES || !hasImageSignature(bytes, asset.contentType)) {
+      return "image_invalid";
+    }
+    const extension = asset.contentType === "image/png" ? "png" : "jpg";
+    return { bytes, contentType: asset.contentType, filename: `image.${extension}` };
+  } catch {
+    return "image_unavailable";
   }
 }
 

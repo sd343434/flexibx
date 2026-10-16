@@ -17,6 +17,7 @@ import type { Db } from "../db/types";
 import { AppError, isAppError } from "../errors/app-error";
 import type { ErrorCode } from "../errors/codes";
 import { isUuid, type TenantContext } from "../tenancy/context";
+import type { StorageRouter } from "../storage/storage";
 import { assertCan, can, type Action } from "../tenancy/permissions";
 import { isRole } from "../tenancy/roles";
 import type { ValidationCode } from "../validation/field-errors";
@@ -50,6 +51,11 @@ export interface SocialDeps {
    * messages, publishing); reading, drafting and reviewing still work.
    */
   readonly sendingEnabled: boolean;
+  /**
+   * Object storage, for images published with Page posts (read server-side and uploaded
+   * as bytes). Absent: a post with an image fails as `image_unavailable`, never text-only.
+   */
+  readonly storage?: StorageRouter;
   readonly now?: () => Date;
 }
 

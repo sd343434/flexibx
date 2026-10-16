@@ -6,6 +6,7 @@ import { adTokenKey, getAdAdapters } from "../ads/registry";
 import { getDb, getSystemDb } from "../db/client";
 import { getAdsEnv } from "../env";
 import { logger } from "../logger";
+import { getStorageRouter } from "../storage/providers";
 import { getAiRuntimeForAutomation } from "../orchestration/runtime";
 import { verifyChallenge, verifySignature } from "../whatsapp/webhook";
 
@@ -61,6 +62,7 @@ export function getSocialDeps(): SocialDeps {
     meta: metaSocialFromEnv(),
     ai: getAiRuntimeForAutomation(),
     sendingEnabled: socialSendingEnabled(),
+    storage: getStorageRouter(),
   };
 }
 

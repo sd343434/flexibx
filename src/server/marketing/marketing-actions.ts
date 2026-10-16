@@ -186,10 +186,10 @@ export const deleteContentAction = withAction({
 export const transitionContentAction = withAction({
   name: "content.transition",
   input: transitionContentInputSchema,
-  handler: async ({ slug, contentId, transition, scheduledAt }) => {
+  handler: async ({ slug, contentId, transition, scheduledAt, reason }) => {
     // The transition's own permission is checked by the service (it depends on the rule).
     const ctx = await requireWorkspaceAccess(slug, "content.view");
-    return transitionContent(getDb(), ctx, { contentId, transition, scheduledAt });
+    return transitionContent(getDb(), ctx, { contentId, transition, scheduledAt, reason });
   },
 });
 

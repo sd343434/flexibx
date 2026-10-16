@@ -401,6 +401,8 @@
     "invalid_transition": "This step isn't available for the item's current status. Refresh and try again.",
     "content_locked": "Only drafts can be edited. Move this item back to draft first.",
     "publication_in_flight": "A Facebook post of this item is being published or waits for a check on the Page. Settle it on the content page first.",
+    "review_reason_required": "Say what needs to change so the author can act on it.",
+    "social_image_unsupported": "This content can't be published to Facebook as it is: use a JPEG or PNG image up to 4 MB as the first attachment, and keep the text and link under 10,000 characters.",
     "campaign_locked": "Archived campaigns can't be changed.",
     "schedule_required": "Choose the date and time to schedule.",
     "schedule_in_past": "The scheduled time must be in the future.",
@@ -815,6 +817,24 @@
         "link": "Link",
         "assetIds": "Images",
         "assetIdsEmpty": "No images in the media library yet."
+      },
+      "requestChanges": {
+        "reasonLabel": "What needs to change",
+        "reasonHint": "The author sees this on the content page. Up to 2000 characters.",
+        "submit": "Request changes"
+      },
+      "changesRequested": {
+        "title": "Changes requested",
+        "by": "{name} on {date}",
+        "unknownReviewer": "A former member",
+        "resubmitHint": "Edit the draft, then submit it for review again."
+      },
+      "reviews": {
+        "title": "Review history",
+        "empty": "No review decisions yet.",
+        "APPROVED": "Approved",
+        "CHANGES_REQUESTED": "Changes requested",
+        "entry": "{decision} by {name} on {date}"
       }
     },
     "calendar": {
@@ -2232,7 +2252,7 @@
     },
     "publishing": {
       "title": "Publish to a Facebook Page",
-      "hint": "Approved content is published on the Page by the scheduler, which runs every few minutes: at the content's scheduled time, or at the next run once you queue it. Text and link only; images and Instagram publishing are not available yet.",
+      "hint": "Approved content is published on the Page by the scheduler, which runs every few minutes: at the content's scheduled time, or at the next run once you queue it. The post carries the text, the link and the first attached image (JPEG or PNG up to 4 MB; the link then goes at the end of the caption). Instagram publishing is not available yet.",
       "needsApproval": "Approve this content first: only approved or scheduled content can be published.",
       "noPages": "No Facebook Page yet: refresh your Pages on the AI social manager page.",
       "page": "Page",
@@ -2242,16 +2262,21 @@
       "working": "Working…",
       "cancel": "Cancel",
       "check": "Check on the Page",
-      "status": {
-        "SCHEDULED": "Scheduled",
-        "PUBLISHING": "Publishing",
-        "PUBLISHED": "Published",
-        "UNCERTAIN": "Check needed",
-        "FAILED": "Failed",
-        "CANCELLED": "Cancelled"
+      "display": {
+        "queued": "Queued",
+        "scheduled": "Scheduled",
+        "on_hold": "On hold",
+        "publishing": "Publishing",
+        "published": "Published",
+        "failed": "Failed",
+        "uncertain": "Check needed",
+        "cancelled": "Cancelled"
       },
+      "withImage": "With image",
+      "publishedRef": "Facebook post {id}",
+      "viewOnFacebook": "View on Facebook",
+      "uncertainHint": "We don't know whether this reached the Page. It is not retried automatically: check it on the Page first.",
       "dueNext": "Goes out at the next scheduler run",
-      "waiting": "Waiting",
       "onHold": {
         "title": "Queued posts are on hold",
         "intro": "Nothing on this page is published while any of these remains:",
@@ -2280,6 +2305,9 @@
         "rate_limited": "Meta asked us to slow down. Queue it again in a while.",
         "provider_error": "Meta refused the post. Queue it again; if it repeats, check the Page.",
         "no_answer": "Meta did not answer: check on the Page before queuing it again.",
+        "image_missing": "Not published: its image was deleted. Attach an image again (or remove it) and queue it again.",
+        "image_unavailable": "Not published: its image could not be read from storage. Try again later.",
+        "image_invalid": "Not published: its image is not a valid JPEG or PNG up to 4 MB. Replace it and queue it again.",
         "other": "Something went wrong. Queue it again; if it repeats, contact support."
       },
       "moreOpen": "{count, plural, one {# more post needs attention} other {# more posts need attention}} — handle the ones above first.",

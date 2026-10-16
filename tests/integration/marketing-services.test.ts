@@ -25,6 +25,7 @@ import {
   createContent,
   deleteContent,
   getContent,
+  listContentReviews,
   listContent,
   rescheduleContent,
   transitionContent,
@@ -697,7 +698,12 @@ describe("role matrix", () => {
       });
       const ctx = await memberOf(owner, role);
       try {
-        await transitionContent(db, ctx, { contentId, transition, scheduledAt: FUTURE });
+        await transitionContent(db, ctx, {
+          contentId,
+          transition,
+          scheduledAt: FUTURE,
+          reason: "Make the offer clearer.",
+        });
         return "ok";
       } catch (error) {
         if (error instanceof AppError) return error.code;
@@ -791,7 +797,12 @@ describe("content workflow", () => {
     const ctx = await createTenant(system);
     const { contentId } = await createContent(db, ctx, contentFields({ plannedAt: FUTURE }));
     const run = (transition: ContentTransition, scheduledAt: string | null = null) =>
-      transitionContent(db, ctx, { contentId, transition, scheduledAt });
+      transitionContent(db, ctx, {
+        contentId,
+        transition,
+        scheduledAt,
+        reason: transition === "request_changes" ? "Shorter headline, please." : null,
+      });
 
     expect((await run("submit")).status).toBe("IN_REVIEW");
     expect((await run("request_changes")).status).toBe("DRAFT");
@@ -890,7 +901,12 @@ describe("content workflow", () => {
     await transitionContent(db, ctx, { contentId, transition: "submit", scheduledAt: null });
     const results = await Promise.allSettled([
       transitionContent(db, ctx, { contentId, transition: "approve", scheduledAt: null }),
-      transitionContent(db, ctx, { contentId, transition: "request_changes", scheduledAt: null }),
+      transitionContent(db, ctx, {
+        contentId,
+        transition: "request_changes",
+        scheduledAt: null,
+        reason: "Not yet.",
+      }),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
@@ -1138,5 +1154,186 @@ describe("media", () => {
     expect(s.storage.objects.size).toBe(0);
     await expectCode(readMedia(db, onProvider(s.storage), ctx, s.assetId), "NOT_FOUND");
     expect(await auditActions(ctx)).toContain("asset.deleted");
+  });
+});
+
+// ── review decisions: request changes with a reason, history, resubmission ───
+
+describe("review decisions", () => {
+  async function inReview(ctx: TenantContext) {
+    const { contentId } = await createContent(db, ctx, contentFields());
+    await transitionContent(db, ctx, { contentId, transition: "submit", scheduledAt: null });
+    return contentId;
+  }
+
+  it("records the reason with the reviewer; the author revises and resubmits", async () => {
+    const owner = await createTenant(system);
+    const author = await memberOf(owner, WorkspaceRole.EDITOR);
+    const reviewer = await memberOf(owner, WorkspaceRole.CLIENT);
+    const { contentId } = await createContent(db, author, contentFields());
+    await transitionContent(db, author, { contentId, transition: "submit", scheduledAt: null });
+
+    await transitionContent(db, reviewer, {
+      contentId,
+      transition: "request_changes",
+      scheduledAt: null,
+      reason: "  Use the new price (19 SAR) and a shorter headline.  ",
+    });
+    expect((await getContent(db, author, contentId)).status).toBe("DRAFT");
+    const [first] = await listContentReviews(db, author, contentId);
+    expect(first).toMatchObject({
+      decision: "CHANGES_REQUESTED",
+      // Trimmed, stored as written.
+      reason: "Use the new price (19 SAR) and a shorter headline.",
+      reviewer: { name: "CLIENT" },
+    });
+
+    // The author edits the draft and resubmits; the reviewer approves.
+    await updateContent(db, author, contentId, contentFields({ title: "Autumn menu, 19 SAR" }));
+    await transitionContent(db, author, { contentId, transition: "submit", scheduledAt: null });
+    await transitionContent(db, reviewer, { contentId, transition: "approve", scheduledAt: null });
+    const history = await listContentReviews(db, author, contentId);
+    // Newest first; the earlier reason stays.
+    expect(history.map((review) => [review.decision, review.reason])).toEqual([
+      ["APPROVED", null],
+      ["CHANGES_REQUESTED", "Use the new price (19 SAR) and a shorter headline."],
+    ]);
+    const statuses = await system.auditLog.findMany({
+      where: { workspaceId: owner.workspaceId, action: "content.status_changed" },
+      orderBy: { createdAt: "asc" },
+      select: { metadata: true },
+    });
+    expect(statuses.map((entry) => (entry.metadata as { transition: string }).transition)).toEqual([
+      "submit",
+      "request_changes",
+      "submit",
+      "approve",
+    ]);
+  });
+
+  it("rejects a missing, blank or too long reason and changes nothing", async () => {
+    const ctx = await createTenant(system);
+    const contentId = await inReview(ctx);
+    for (const reason of [undefined, null, "", "   \n\t "]) {
+      await expectCode(
+        transitionContent(db, ctx, {
+          contentId,
+          transition: "request_changes",
+          scheduledAt: null,
+          reason,
+        }),
+        "VALIDATION_FAILED",
+        "review_reason_required",
+      );
+    }
+    await expectCode(
+      transitionContent(db, ctx, {
+        contentId,
+        transition: "request_changes",
+        scheduledAt: null,
+        reason: "x".repeat(2001),
+      }),
+      "VALIDATION_FAILED",
+      "too_big",
+    );
+    // Exactly at the limit is fine.
+    await transitionContent(db, ctx, {
+      contentId,
+      transition: "request_changes",
+      scheduledAt: null,
+      reason: "x".repeat(2000),
+    });
+    expect(await system.contentReview.count({ where: { contentItemId: contentId } })).toBe(1);
+  });
+
+  it("only reviewers decide, and only on their own workspace's content", async () => {
+    const owner = await createTenant(system);
+    const other = await createTenant(system);
+    const editor = await memberOf(owner, WorkspaceRole.EDITOR);
+    const viewer = await memberOf(owner, WorkspaceRole.VIEWER);
+    const contentId = await inReview(owner);
+    const ask = (ctx: TenantContext, id = contentId) =>
+      transitionContent(db, ctx, {
+        contentId: id,
+        transition: "request_changes",
+        scheduledAt: null,
+        reason: "Please fix.",
+      });
+    await expectCode(ask(editor), "FORBIDDEN");
+    await expectCode(ask(viewer), "FORBIDDEN");
+    await expectCode(ask(other), "NOT_FOUND");
+    // A foreign item's history is not readable either (scoped to the caller's workspace).
+    expect(await listContentReviews(db, other, contentId)).toEqual([]);
+    expect(await system.contentReview.count()).toBe(0);
+  });
+
+  it("two reviewers at once: one decision applies, the other leaves no review behind", async () => {
+    const owner = await createTenant(system);
+    const second = await memberOf(owner, WorkspaceRole.MANAGER);
+    const contentId = await inReview(owner);
+    const results = await Promise.allSettled([
+      transitionContent(db, owner, {
+        contentId,
+        transition: "request_changes",
+        scheduledAt: null,
+        reason: "Wrong price.",
+      }),
+      transitionContent(db, second, { contentId, transition: "approve", scheduledAt: null }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const reviews = await system.contentReview.findMany({ where: { contentItemId: contentId } });
+    expect(reviews).toHaveLength(1);
+    const status = (await getContent(db, owner, contentId)).status;
+    expect(status).toBe(reviews[0]?.decision === "APPROVED" ? "APPROVED" : "DRAFT");
+  });
+
+  it("the database keeps decisions immutable, reasoned and in the item's workspace", async () => {
+    const owner = await createTenant(system);
+    const other = await createTenant(system);
+    const contentId = await inReview(owner);
+    await transitionContent(db, owner, {
+      contentId,
+      transition: "request_changes",
+      scheduledAt: null,
+      reason: "Fix the date.",
+    });
+    const review = await system.contentReview.findFirstOrThrow({
+      where: { contentItemId: contentId },
+    });
+    await expect(
+      system.contentReview.update({ where: { id: review.id }, data: { reason: "edited" } }),
+    ).rejects.toThrow(/immutable/);
+    await expect(
+      system.contentReview.create({
+        data: {
+          workspaceId: owner.workspaceId,
+          contentItemId: contentId,
+          decision: "CHANGES_REQUESTED",
+          reason: "   ",
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      system.contentReview.create({
+        data: { workspaceId: other.workspaceId, contentItemId: contentId, decision: "APPROVED" },
+      }),
+    ).rejects.toThrow();
+    // The application client cannot edit or delete a decision at all.
+    await expect(
+      db.contentReview.deleteMany({ where: { workspaceId: owner.workspaceId } }),
+    ).rejects.toThrow();
+    // The reviewer's account going away keeps the decision (reviewer cleared).
+    const reviewer = await memberOf(owner, WorkspaceRole.MANAGER);
+    const second = await inReview(owner);
+    await transitionContent(db, reviewer, {
+      contentId: second,
+      transition: "request_changes",
+      scheduledAt: null,
+      reason: "Add a link.",
+    });
+    await system.user.delete({ where: { id: reviewer.userId } });
+    expect(
+      await system.contentReview.findFirstOrThrow({ where: { contentItemId: second } }),
+    ).toMatchObject({ reviewerUserId: null, reason: "Add a link." });
   });
 });

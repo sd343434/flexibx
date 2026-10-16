@@ -45,7 +45,12 @@ export default async function ContentRoute({
   if (data === null) {
     return <ForbiddenNotice title={t("content.title")} message={t("common.forbidden")} />;
   }
-  const { content, timeZone } = data;
+  const { content, timeZone, reviews } = data;
+  // The latest decision, when it asked for changes: the author's to-do until the next one.
+  const changeRequest =
+    reviews[0]?.decision === "CHANGES_REQUESTED" && content.status === "DRAFT" ? reviews[0] : null;
+  const reviewer = (review: (typeof reviews)[number]) =>
+    review.reviewer?.name ?? t("content.changesRequested.unknownReviewer");
   const when = (value: Date) =>
     format.dateTime(value, { dateStyle: "medium", timeStyle: "short", timeZone });
   const metadata = contentMetadata(content.metadata);
@@ -91,40 +96,124 @@ export default async function ContentRoute({
 
       <Card title={t("content.workflowTitle")} testId="content-workflow">
         <p className="text-sm text-muted-foreground">{t("content.workflowHint")}</p>
+        {changeRequest === null ? null : (
+          <section
+            role="status"
+            aria-labelledby="change-request-title"
+            className="space-y-1 rounded-md border border-amber-500/50 p-3 text-sm"
+            data-testid="content-change-request"
+          >
+            <h3 id="change-request-title" className="font-medium">
+              {t("content.changesRequested.title")}
+            </h3>
+            <p
+              dir="auto"
+              className="whitespace-pre-line"
+              data-testid="content-change-request-reason"
+            >
+              {changeRequest.reason}
+            </p>
+            <p className="text-muted-foreground">
+              {t("content.changesRequested.by", {
+                name: reviewer(changeRequest),
+                date: when(changeRequest.createdAt),
+              })}
+            </p>
+            <p className="text-muted-foreground">{t("content.changesRequested.resubmitHint")}</p>
+          </section>
+        )}
         {content.transitions.length === 0 ? (
           <Notice testId="no-transitions">{t("content.noTransitions")}</Notice>
         ) : (
           <div className="flex flex-wrap items-end gap-3">
-            {content.transitions.map((transition) => (
-              <ActionButton
-                key={transition}
-                action={submitContentTransition.bind(null, slug, locale, content.id, transition)}
-                label={t(`enums.transition.${transition}`)}
-                variant={
-                  transition === "approve" || transition === "submit" ? "default" : "outline"
-                }
-                testId={`transition-${transition}`}
-              >
-                {transition === "schedule" ? (
-                  <label className="space-y-1 text-sm font-medium">
-                    <span className="block">{t("content.scheduleAt", { zone: timeZone })}</span>
-                    <input
-                      type="datetime-local"
-                      name="scheduledAt"
-                      dir="ltr"
-                      defaultValue={plannedLocal}
-                      className={cn(inputClass, "h-9")}
-                      data-testid="schedule-at"
-                    />
-                  </label>
-                ) : null}
-              </ActionButton>
-            ))}
+            {content.transitions.map((transition) =>
+              transition === "request_changes" ? (
+                <div key={transition} className="basis-full">
+                  <EntityForm
+                    action={submitContentTransition.bind(
+                      null,
+                      slug,
+                      locale,
+                      content.id,
+                      transition,
+                    )}
+                    fields={[
+                      {
+                        kind: "textarea",
+                        name: "reason",
+                        label: t("content.requestChanges.reasonLabel"),
+                        hint: t("content.requestChanges.reasonHint"),
+                        required: true,
+                        maxLength: 2000,
+                        rows: 3,
+                        wide: true,
+                      },
+                    ]}
+                    submitLabel={t("content.requestChanges.submit")}
+                    testId="transition-request_changes"
+                  />
+                </div>
+              ) : (
+                <ActionButton
+                  key={transition}
+                  action={submitContentTransition.bind(null, slug, locale, content.id, transition)}
+                  label={t(`enums.transition.${transition}`)}
+                  variant={
+                    transition === "approve" || transition === "submit" ? "default" : "outline"
+                  }
+                  testId={`transition-${transition}`}
+                >
+                  {transition === "schedule" ? (
+                    <label className="space-y-1 text-sm font-medium">
+                      <span className="block">{t("content.scheduleAt", { zone: timeZone })}</span>
+                      <input
+                        type="datetime-local"
+                        name="scheduledAt"
+                        dir="ltr"
+                        defaultValue={plannedLocal}
+                        className={cn(inputClass, "h-9")}
+                        data-testid="schedule-at"
+                      />
+                    </label>
+                  ) : null}
+                </ActionButton>
+              ),
+            )}
           </div>
         )}
         {content.transitions.includes("publish") ? (
           <p className="text-xs text-muted-foreground">{t("content.externalNotice")}</p>
         ) : null}
+      </Card>
+
+      <Card title={t("content.reviews.title")} testId="content-reviews">
+        {reviews.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("content.reviews.empty")}</p>
+        ) : (
+          <ol className="space-y-2 text-sm">
+            {reviews.map((review) => (
+              <li
+                key={review.id}
+                className="space-y-1 rounded-md border p-2"
+                data-testid="content-review"
+                data-decision={review.decision}
+              >
+                <p className="font-medium">
+                  {t("content.reviews.entry", {
+                    decision: t(`content.reviews.${review.decision}`),
+                    name: reviewer(review),
+                    date: when(review.createdAt),
+                  })}
+                </p>
+                {review.reason === null ? null : (
+                  <p dir="auto" className="whitespace-pre-line text-muted-foreground">
+                    {review.reason}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
       </Card>
 
       {content.canReschedule ? (

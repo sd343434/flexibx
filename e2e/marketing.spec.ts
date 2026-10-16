@@ -167,8 +167,30 @@ test("the marketing foundation, content workflow and calendar in /en", async ({ 
   await page.getByTestId("transition-submit").getByRole("button").click();
   await expect(page.getByTestId("content-status")).toHaveText("In review");
   await expect(page.getByTestId("content-form")).toHaveCount(0);
+
+  // Request changes: a blank reason is refused beside the field (text kept); a real one
+  // sends the item back to draft, and the author sees it until the next decision.
+  const requestChanges = page.getByTestId("transition-request_changes");
+  const reasonField = requestChanges.getByLabel("What needs to change");
+  await reasonField.fill("   ");
+  await requestChanges.getByRole("button", { name: "Request changes" }).click();
+  await expect(requestChanges).toContainText("Say what needs to change");
+  await expect(reasonField).toHaveValue("   ");
+  await expect(page.getByTestId("content-status")).toHaveText("In review");
+  await reasonField.fill("Use the new price in the headline.");
+  await requestChanges.getByRole("button", { name: "Request changes" }).click();
+  await expect(page.getByTestId("content-status")).toHaveText("Draft");
+  await expect(page.getByTestId("content-change-request-reason")).toHaveText(
+    "Use the new price in the headline.",
+  );
+  await expect(page.getByTestId("content-review")).toHaveCount(1);
+  // Revised and resubmitted; approved this time.
+  await page.getByTestId("transition-submit").getByRole("button").click();
+  await expect(page.getByTestId("content-status")).toHaveText("In review");
   await page.getByTestId("transition-approve").getByRole("button").click();
   await expect(page.getByTestId("content-status")).toHaveText("Approved");
+  await expect(page.getByTestId("content-change-request")).toHaveCount(0);
+  await expect(page.getByTestId("content-review")).toHaveCount(2);
   // No Meta connection in this workspace: the publishing card says posts would be held
   // (and why) instead of offering an instant "publish now".
   const onHold = page.getByTestId("content-publishing-on-hold");
@@ -217,9 +239,11 @@ test("the marketing foundation, content workflow and calendar in /en", async ({ 
   // Every setup step is done, so the checklist is gone.
   await expect(page.getByTestId("dashboard-setup")).toHaveCount(0);
   await page.getByTestId("nav-activity").click();
+  // submit, request changes, submit again, approve, schedule, publish.
   await expect(
     page.locator('[data-testid="activity-row"][data-action="content.status_changed"]'),
-  ).toHaveCount(4);
+  ).toHaveCount(6);
+  await expect(page.getByTestId("activity-list")).toContainText("In review → Draft");
   await expect(page.getByTestId("activity-list")).toContainText("Approved → Scheduled");
 });
 

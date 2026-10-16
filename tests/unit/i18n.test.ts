@@ -20,6 +20,7 @@ function leafKeys(value: unknown, prefix = ""): string[] {
 const SAMPLE_PARAMS = {
   language: "English",
   last: "Oct 16, 2026, 9:00 AM",
+  decision: "Approved",
   digest: "abc123",
   code: "0123456789abcdef0123",
   // Credits.

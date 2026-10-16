@@ -10,7 +10,12 @@ import { getAudience, listAudiences } from "./audience-service";
 import { getBrand } from "./brand-service";
 import { getCampaign, listCampaigns } from "./campaign-service";
 import { notFound, workspaceTimeZone, type MarketingResource } from "./common";
-import { getContent, listContent, type ContentListFilters } from "./content-service";
+import {
+  getContent,
+  listContent,
+  listContentReviews,
+  type ContentListFilters,
+} from "./content-service";
 import { getGoal, listGoals } from "./goal-service";
 import type { CalendarView } from "./inputs";
 import { listMedia, readMedia } from "./media-service";
@@ -197,11 +202,12 @@ export async function getContentPage(slug: string, contentId: string) {
   assertId(contentId, "content");
   const { ctx, db, can: abilities } = await access(slug);
   const content = await getContent(db, ctx, contentId);
-  const [options, timeZone] = await Promise.all([
+  const [options, timeZone, reviews] = await Promise.all([
     content.canEdit ? contentFormOptions(ctx) : Promise.resolve(null),
     workspaceTimeZone(db, ctx),
+    listContentReviews(db, ctx, content.id),
   ]);
-  return { content, options, timeZone, can: abilities };
+  return { content, options, timeZone, reviews, can: abilities };
 }
 
 export async function getCalendarPage(

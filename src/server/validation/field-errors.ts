@@ -33,6 +33,8 @@ export const VALIDATION_CODES = [
   "invalid_transition",
   "content_locked",
   "publication_in_flight",
+  "review_reason_required",
+  "social_image_unsupported",
   "campaign_locked",
   "schedule_required",
   "schedule_in_past",

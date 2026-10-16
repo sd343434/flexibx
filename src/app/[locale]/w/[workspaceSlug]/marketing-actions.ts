@@ -302,7 +302,7 @@ export async function submitContentTransition(
   _previous: MarketingFormState,
   formData: FormData,
 ): Promise<MarketingFormState> {
-  const values = collect(formData, ["scheduledAt"]);
+  const values = collect(formData, ["scheduledAt", "reason"]);
   return settle(
     await transitionContentAction({ slug, contentId, transition, ...values }),
     values,
