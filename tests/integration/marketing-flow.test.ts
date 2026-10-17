@@ -521,6 +521,7 @@ describe("page queries", () => {
       integrations: false,
       calendar: true,
       campaigns: true,
+      insights: true,
       brand: true,
       media: true,
       activity: false,

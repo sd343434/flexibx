@@ -69,11 +69,13 @@ model User {
   contentCreated            ContentItem[]
   contentReviews            ContentReview[]
   campaignPlansApproved     CampaignPlan[]
+  metricImports             MetricImport[]
+  recommendationsDecided    MarketingRecommendation[]
   mediaUploaded             MediaAsset[]
   aiGenerations             AiGeneration[]
   generatedVideos           GeneratedVideo[]
   videoJobs                 VideoGenerationJob[]
-  automationDelegate        AutomationPolicy[]     @relation("AutomationDelegate")
+  automationDelegate        AutomationPolicy[]        @relation("AutomationDelegate")
   agentRunsRequested        AgentRun[]
   agentTaskApprovals        AgentTaskApproval[]
   adOAuthStates             AdOAuthState[]
@@ -82,8 +84,8 @@ model User {
   adSpendLimitsSet          AdSpendLimit[]
   whatsappContactsAdded     WhatsAppContact[]
   whatsappMessagesRequested WhatsAppMessage[]
-  whatsappMessagesResolved  WhatsAppMessage[]      @relation("WhatsAppMessageResolvedBy")
-  whatsappConsentActions    WhatsAppConsentEvent[] @relation("WhatsAppConsentActor")
+  whatsappMessagesResolved  WhatsAppMessage[]         @relation("WhatsAppMessageResolvedBy")
+  whatsappConsentActions    WhatsAppConsentEvent[]    @relation("WhatsAppConsentActor")
 
   @@map("users")
 }
@@ -160,6 +162,9 @@ model Workspace {
   socialPosts           SocialPost[]
   campaignPlans         CampaignPlan[]
   campaignPlanItems     CampaignPlanItem[]
+  metricImports         MetricImport[]
+  metricObservations    MetricObservation[]
+  recommendations       MarketingRecommendation[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -515,18 +520,21 @@ model Audience {
 }
 
 model MarketingGoal {
-  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String              @map("workspace_id") @db.Uuid
-  type        MarketingGoalType
-  title       String              @db.VarChar(160)
-  description String?             @db.VarChar(2000)
-  kpi         String?             @db.VarChar(160)
-  target      Decimal?            @db.Decimal(14, 2)
-  startDate   DateTime?           @map("start_date") @db.Date
-  endDate     DateTime?           @map("end_date") @db.Date
-  status      MarketingGoalStatus @default(ACTIVE)
-  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String              @map("workspace_id") @db.Uuid
+  type         MarketingGoalType
+  title        String              @db.VarChar(160)
+  description  String?             @db.VarChar(2000)
+  kpi          String?             @db.VarChar(160)
+  target       Decimal?            @db.Decimal(14, 2)
+  /// What `target` counts, so results can be compared with it (Pass 5). Count metrics
+  /// only; null = the target is free text for people, never compared automatically.
+  targetMetric PerformanceMetric?  @map("target_metric")
+  startDate    DateTime?           @map("start_date") @db.Date
+  endDate      DateTime?           @map("end_date") @db.Date
+  status       MarketingGoalStatus @default(ACTIVE)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   campaignGoals CampaignGoal[]
@@ -575,13 +583,15 @@ model Campaign {
   createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  audience     Audience?        @relation(fields: [audienceId], references: [id], onDelete: SetNull)
-  goals        CampaignGoal[]
-  pillars      CampaignPillar[]
-  contentItems ContentItem[]
+  workspace       Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  audience        Audience?                 @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  goals           CampaignGoal[]
+  pillars         CampaignPillar[]
+  contentItems    ContentItem[]
   /// The campaign's content plan (one per campaign).
-  plan         CampaignPlan?
+  plan            CampaignPlan?
+  observations    MetricObservation[]
+  recommendations MarketingRecommendation[]
 
   @@index([workspaceId, status, startDate])
   @@index([audienceId])
@@ -726,23 +736,27 @@ model ContentItem {
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  campaign    Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  pillar      ContentPillar?     @relation(fields: [pillarId], references: [id], onDelete: SetNull)
-  audience    Audience?          @relation(fields: [audienceId], references: [id], onDelete: SetNull)
-  goal        MarketingGoal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
-  createdBy   User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  assets      ContentItemAsset[]
+  workspace              Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign               Campaign?                 @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  pillar                 ContentPillar?            @relation(fields: [pillarId], references: [id], onDelete: SetNull)
+  audience               Audience?                 @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  goal                   MarketingGoal?            @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  createdBy              User?                     @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  assets                 ContentItemAsset[]
   /// AI suggestions generated for this draft (Phase 4).
-  aiAssists   AiGeneration[]     @relation("AiGenerationTarget")
+  aiAssists              AiGeneration[]            @relation("AiGenerationTarget")
   /// AI suggestions that were used to create or change this item (Phase 4).
-  aiApplied   AiGeneration[]     @relation("AiGenerationApplied")
+  aiApplied              AiGeneration[]            @relation("AiGenerationApplied")
   /// Publications of this item to the workspace's Facebook Pages.
-  socialPosts SocialPost[]
+  socialPosts            SocialPost[]
   /// Review decisions on this item (approvals and change requests), newest last.
-  reviews     ContentReview[]
+  reviews                ContentReview[]
   /// The campaign plan item this draft was created from (Pass 4).
-  planItem    CampaignPlanItem?
+  planItem               CampaignPlanItem?
+  /// Performance observations of this item (Pass 5).
+  observations           MetricObservation[]
+  recommendationsAbout   MarketingRecommendation[] @relation("RecommendationContent")
+  recommendationsCreated MarketingRecommendation[] @relation("RecommendationDraft")
 
   @@index([workspaceId, status, updatedAt(sort: Desc)])
   @@index([workspaceId, scheduledAt])
@@ -2277,4 +2291,182 @@ model AlertThrottle {
   suppressedCount Int      @default(0) @map("suppressed_count")
 
   @@map("alert_throttles")
+}
+
+// ── Marketing intelligence (Pass 5) ──
+// Performance observations with provenance, imported in idempotent batches, and the
+// state of the evidence-based recommendations computed from them. No provider is
+// connected: observations come from a person's import (MANUAL) or, in tests only, from a
+// deterministic adapter (SIMULATED, refused in production). VERIFIED is reserved for a
+// future provider integration and is never written today.
+
+/// A performance metric. Counts are whole numbers; REVENUE and SPEND are money
+/// (minor units + ISO 4217 currency).
+enum PerformanceMetric {
+  IMPRESSIONS
+  REACH
+  ENGAGEMENTS
+  CLICKS
+  CONVERSIONS
+  REVENUE
+  SPEND
+
+  @@map("performance_metric")
+}
+
+/// Where a number comes from. Never mixed in one total.
+enum MetricSource {
+  /// Read from a provider by a verified integration (none exists yet).
+  VERIFIED
+  /// Entered or imported by a person; not checked against the provider.
+  MANUAL
+  /// Generated test data (deterministic test adapter); never a real result.
+  SIMULATED
+
+  @@map("metric_source")
+}
+
+enum MetricImportStatus {
+  /// Every row was stored, skipped as a duplicate, or reported as rejected.
+  SUCCEEDED
+  /// Nothing was stored (the source failed, or every row was invalid).
+  FAILED
+  /// Withdrawn by a person: its observations no longer count anywhere.
+  VOIDED
+
+  @@map("metric_import_status")
+}
+
+/// One import or synchronization attempt. `externalId` makes a repeated attempt of the
+/// same batch a no-op.
+model MetricImport {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String             @map("workspace_id") @db.Uuid
+  /// "manual" for a person's import; an adapter name otherwise (e.g. "test-fixture").
+  provider         String             @db.VarChar(40)
+  source           MetricSource
+  externalId       String             @map("external_id") @db.VarChar(120)
+  status           MetricImportStatus
+  rowsReceived     Int                @map("rows_received")
+  rowsAccepted     Int                @map("rows_accepted")
+  rowsDuplicate    Int                @map("rows_duplicate")
+  rowsRejected     Int                @map("rows_rejected")
+  /// Why the import failed (a code, never a provider response).
+  errorCode        String?            @map("error_code") @db.VarChar(60)
+  /// Row-level problems: [{ row, code }] (at most 50; codes only).
+  issues           Json               @default("[]")
+  importedByUserId String?            @map("imported_by_user_id") @db.Uuid
+  voidedAt         DateTime?          @map("voided_at") @db.Timestamptz(3)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importedBy   User?               @relation(fields: [importedByUserId], references: [id], onDelete: SetNull)
+  observations MetricObservation[]
+
+  @@unique([workspaceId, provider, externalId])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([importedByUserId])
+  @@map("metric_imports")
+}
+
+/// One metric of one campaign (optionally one content item) on one channel over one
+/// period, from one source. Never edited: a wrong import is voided as a whole, and a
+/// different value for the same key is refused as a conflict, not overwritten.
+model MetricObservation {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String            @map("workspace_id") @db.Uuid
+  importId      String            @map("import_id") @db.Uuid
+  campaignId    String            @map("campaign_id") @db.Uuid
+  contentItemId String?           @map("content_item_id") @db.Uuid
+  channel       MarketingChannel
+  provider      String            @db.VarChar(40)
+  source        MetricSource
+  metric        PerformanceMetric
+  periodStart   DateTime          @map("period_start") @db.Date
+  periodEnd     DateTime          @map("period_end") @db.Date
+  /// Whole count, or money in minor units of `currency`.
+  value         BigInt
+  currency      String?           @db.Char(3)
+  /// Identity of this observation at its source; with `provider`, unique in a workspace.
+  sourceRef     String            @map("source_ref") @db.VarChar(200)
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  import      MetricImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  campaign    Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contentItem ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+
+  /// Within one import a source identity appears once. Across imports, duplicates are
+  /// refused by the import service under a per-workspace lock (only observations of
+  /// imports that are not voided count), and summaries count each identity once.
+  @@unique([importId, sourceRef])
+  @@index([workspaceId, provider, sourceRef])
+  @@index([workspaceId, campaignId, metric, periodStart])
+  @@index([workspaceId, contentItemId])
+  @@index([importId])
+  @@index([campaignId])
+  @@index([contentItemId])
+  @@map("metric_observations")
+}
+
+enum RecommendationKind {
+  BELOW_TARGET
+  SPEND_OVER_BUDGET
+  STALE_DATA
+  MISSING_DATA
+  WEAK_CONTENT
+  STRONG_FORMAT
+  MORE_DATA_NEEDED
+
+  @@map("recommendation_kind")
+}
+
+enum RecommendationStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+  SNOOZED
+  /// A person turned it into a draft (content, with the normal approval workflow).
+  ACTED
+
+  @@map("recommendation_status")
+}
+
+/// The persisted state of one recommendation (computed by deterministic rules from the
+/// workspace's observations). `fingerprint` identifies the same finding across runs;
+/// `evidence` is the snapshot shown to people when it was last computed.
+model MarketingRecommendation {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String               @map("workspace_id") @db.Uuid
+  campaignId         String               @map("campaign_id") @db.Uuid
+  contentItemId      String?              @map("content_item_id") @db.Uuid
+  kind               RecommendationKind
+  fingerprint        String               @db.VarChar(200)
+  status             RecommendationStatus @default(OPEN)
+  evidence           Json
+  /// False once the rules no longer find it (kept for its history).
+  current            Boolean              @default(true)
+  dismissReason      String?              @map("dismiss_reason") @db.VarChar(500)
+  snoozedUntil       DateTime?            @map("snoozed_until") @db.Timestamptz(3)
+  decidedByUserId    String?              @map("decided_by_user_id") @db.Uuid
+  decidedAt          DateTime?            @map("decided_at") @db.Timestamptz(3)
+  draftContentItemId String?              @unique @map("draft_content_item_id") @db.Uuid
+  version            Int                  @default(1)
+  computedAt         DateTime             @map("computed_at") @db.Timestamptz(3)
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign     Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contentItem  ContentItem? @relation("RecommendationContent", fields: [contentItemId], references: [id], onDelete: Cascade)
+  draftContent ContentItem? @relation("RecommendationDraft", fields: [draftContentItemId], references: [id], onDelete: SetNull)
+  decidedBy    User?        @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, fingerprint])
+  @@index([workspaceId, status, current])
+  @@index([campaignId])
+  @@index([contentItemId])
+  @@index([decidedByUserId])
+  @@map("marketing_recommendations")
 }

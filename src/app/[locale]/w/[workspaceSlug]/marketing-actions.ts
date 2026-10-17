@@ -165,6 +165,7 @@ const GOAL_FIELDS = [
   "description",
   "kpi",
   "target",
+  "targetMetric",
   "startDate",
   "endDate",
   "status",

@@ -240,7 +240,8 @@
       "ads": "Advertising",
       "integrations": "Integrations",
       "social": "AI social manager",
-      "billing": "Credits"
+      "billing": "Credits",
+      "insights": "Insights"
     },
     "switcher": {
       "label": "Switch workspace",
@@ -481,7 +482,11 @@
     "plan_locked": "The plan is approved. Reopen it before changing it.",
     "plan_not_approved": "Approve the plan before creating drafts.",
     "plan_empty": "Include at least one post before approving the plan.",
-    "plan_item_converted": "A draft was already created from this post: change the content itself instead."
+    "plan_item_converted": "A draft was already created from this post: change the content itself instead.",
+    "metrics_csv_invalid": "The CSV needs the header line period_start,period_end,metric,value,currency,content_id (at most 500 rows, 200 KB).",
+    "metrics_import_not_voidable": "Only a successful import can be withdrawn.",
+    "recommendation_changed": "This recommendation changed or no longer applies. Refresh the page.",
+    "recommendation_not_actionable": "A draft can't be created from this recommendation."
   },
   "marketing": {
     "common": {
@@ -593,6 +598,20 @@
         "NONE": "Not started",
         "DRAFT": "Draft",
         "APPROVED": "Approved"
+      },
+      "metric": {
+        "IMPRESSIONS": "Impressions",
+        "REACH": "Reach",
+        "ENGAGEMENTS": "Engagements",
+        "CLICKS": "Clicks",
+        "CONVERSIONS": "Conversions",
+        "REVENUE": "Revenue",
+        "SPEND": "Spend"
+      },
+      "metricSource": {
+        "VERIFIED": "Verified by provider",
+        "MANUAL": "Entered by a person",
+        "SIMULATED": "Simulated (not real)"
       }
     },
     "sections": {
@@ -718,7 +737,10 @@
         "target": "Target value",
         "startDate": "Start date",
         "endDate": "End date",
-        "status": "Status"
+        "status": "Status",
+        "targetMetric": "Target metric",
+        "targetMetricHint": "What the target counts, so recorded results can be compared with it.",
+        "targetMetricNone": "Not compared automatically"
       }
     },
     "pillars": {
@@ -941,7 +963,14 @@
         "campaign_plan_generated": "proposed campaign posts with AI",
         "campaign_plan_approved": "approved a campaign's content plan",
         "campaign_plan_reopened": "reopened a campaign's content plan",
-        "campaign_plan_drafts_created": "created drafts from a content plan"
+        "campaign_plan_drafts_created": "created drafts from a content plan",
+        "metrics_imported": "imported campaign results",
+        "metrics_import_failed": "had a results import fail",
+        "metrics_import_voided": "withdrew a results import",
+        "recommendation_reviewed": "reviewed a recommendation",
+        "recommendation_dismissed": "dismissed a recommendation",
+        "recommendation_snoozed": "snoozed a recommendation",
+        "recommendation_acted": "created a draft from a recommendation"
       },
       "systemActor": "Flexibx"
     },
@@ -1050,12 +1079,213 @@
         "close_campaign": "The campaign's end date has passed. Review what was published and complete the campaign."
       },
       "resultsTitle": "Results",
-      "resultsNote": "Flexibx records what was published and, for Facebook, the post id. Reach, engagement, clicks, conversions and sales are not collected: no analytics provider is connected, so no such numbers are shown.",
+      "resultsNote": "Flexibx records what was published and, for Facebook, the post id. Results such as reach or clicks are not collected automatically; people can import them in Insights, where each number shows its source.",
       "publishedConfirmed": "Confirmed on Facebook",
       "publishedManually": "Marked as published by a person",
       "failed": "Failed",
       "uncertain": "Unconfirmed",
-      "limit": "Showing the latest {count} content items."
+      "limit": "Showing the latest {count} content items.",
+      "insightsLink": "Open results and recommendations"
+    },
+    "insights": {
+      "title": "Insights",
+      "description": "Recorded results of your campaigns, where each number came from, and evidence-based next steps.",
+      "provenanceTitle": "Where the numbers come from",
+      "provenance": "No analytics provider is connected yet. Numbers here were imported by people from their platforms' exports (marked “Entered by a person”). Simulated test data, if any, is shown apart and never added to real results. Flexibx does not estimate or invent results.",
+      "filtersTitle": "Filters",
+      "filter": {
+        "campaign": "Campaign",
+        "allCampaigns": "All campaigns",
+        "channel": "Channel",
+        "allChannels": "All channels",
+        "metric": "Trend metric",
+        "from": "From",
+        "to": "To",
+        "apply": "Apply",
+        "reset": "Reset"
+      },
+      "freshnessTitle": "Data freshness",
+      "lastImport": "Last successful import: {date}",
+      "lastImportNever": "No successful import yet.",
+      "lastFailure": "Last failed attempt: {date}",
+      "latestPeriod": "Latest recorded period ends {date}",
+      "staleWarning": "The latest recorded period ended more than {days} days ago. Treat these numbers as out of date.",
+      "truncated": "Showing the newest observations only; narrow the filters to see all.",
+      "empty": "No recorded results yet. Import results from your platform's export below; nothing is shown until there is real data.",
+      "campaignsTitle": "Campaign results",
+      "noRecorded": "No recorded results for this campaign.",
+      "recordedTitle": "Recorded results",
+      "simulatedTitle": "Simulated test data — not real results",
+      "observations": "{count, plural, one {# observation} other {# observations}}",
+      "periodRange": "{from} – {to}",
+      "budgetTitle": "Planned budget and recorded spend",
+      "budgetPlanned": "Planned budget (planning only): {amount}",
+      "budgetNone": "No planned budget on this campaign.",
+      "spendRecorded": "Recorded spend: {amount}",
+      "spendNone": "No spend recorded in the budget's currency.",
+      "spendOtherCurrency": "Spend recorded in other currencies is not converted or compared.",
+      "goalTitle": "Goal “{goal}”: {actual} of {target} {metric}",
+      "goalNoMetric": "Goal “{goal}” has no target metric: set one on the goal to compare results.",
+      "trendTitle": "Daily {metric}",
+      "trendEmpty": "No recorded daily values for this metric.",
+      "trendDay": "Day",
+      "trendValue": "Value",
+      "contentTitle": "Content comparison (recorded)",
+      "contentEmpty": "No content-level results recorded.",
+      "col": {
+        "content": "Content",
+        "type": "Type",
+        "impressions": "Impressions",
+        "engagements": "Engagements",
+        "rate": "Engagement rate",
+        "periods": "Periods"
+      },
+      "recsTitle": "Recommendations",
+      "recsEmpty": "No recommendations: either nothing needs attention, or there is not enough recorded data yet.",
+      "recsNote": "Recommendations come from fixed rules over recorded numbers (never simulated ones). They point at associations, not proven causes, and never promise results.",
+      "status": {
+        "OPEN": "Open",
+        "REVIEWED": "Reviewed",
+        "DISMISSED": "Dismissed",
+        "SNOOZED": "Snoozed",
+        "ACTED": "Draft created"
+      },
+      "sufficiency": {
+        "sufficient": "Enough evidence",
+        "limited": "Limited evidence"
+      },
+      "evidence": "Evidence: {from} – {to}, {count, plural, one {# observation} other {# observations}}",
+      "evidenceNoPeriod": "Evidence: {count, plural, one {# observation} other {# observations}}",
+      "kind": {
+        "BELOW_TARGET": {
+          "title": "Below the goal's pace",
+          "explain": "Recorded {metric}: {actual}. At this point of the campaign about {expected} were expected for the target of {target}.",
+          "action": "Look at what is published and planned for the rest of the campaign; consider a follow-up post.",
+          "limits": "Assumes an even pace across the campaign; early weeks are often slower. Only recorded numbers are counted."
+        },
+        "SPEND_OVER_BUDGET": {
+          "title": "Recorded spend is above the planned budget",
+          "explain": "Recorded spend {spend} against a planned budget of {budget}.",
+          "action": "Check the spend in the ad platform and decide whether the plan or budget should change. Flexibx changes nothing.",
+          "limits": "Compares only spend recorded in the budget's currency; no conversion."
+        },
+        "STALE_DATA": {
+          "title": "Results are out of date",
+          "explain": "The latest recorded period ended {days} days ago, or the last import attempt failed.",
+          "action": "Import the latest results from the platform.",
+          "limits": "Old numbers may not reflect what is happening now."
+        },
+        "MISSING_DATA": {
+          "title": "Published content has no recorded results",
+          "explain": "{count} published items, no recorded results.",
+          "action": "Import results from the platform's export so the campaign can be reviewed.",
+          "limits": "Without data, nothing can be judged."
+        },
+        "WEAK_CONTENT": {
+          "title": "Content engaging less than the rest",
+          "explain": "Engagement rate {rate} against the campaign median of {median}, over {periods} periods ({compared} items compared).",
+          "action": "Review the post; consider a revised version.",
+          "limits": "An association within this campaign, not a cause: timing, audience and format differ between posts."
+        },
+        "STRONG_FORMAT": {
+          "title": "A format engaging more than the rest",
+          "explain": "{type} posts have a median engagement rate of {rate} against {median} for the campaign ({items} of this format, {others} others).",
+          "action": "Consider another post in this format.",
+          "limits": "An association, not a cause; few items can mislead. No result is promised."
+        },
+        "MORE_DATA_NEEDED": {
+          "title": "Not enough recorded data to judge",
+          "explain": "The rules need more data before comparing (see the evidence).",
+          "action": "Keep importing results; no conclusion is drawn yet.",
+          "limits": "Nothing is judged on limited evidence."
+        }
+      },
+      "openCampaign": "Open the campaign",
+      "openContent": "Open the content",
+      "openDraft": "Open the draft",
+      "decidedBy": "{status} by {name} on {date}",
+      "dismissedBecause": "Reason: {reason}",
+      "snoozedUntil": "Snoozed until {date}",
+      "markReviewed": "Mark as reviewed",
+      "reopen": "Reopen",
+      "snooze": "Snooze",
+      "snoozeDays": "Days",
+      "dismiss": "Dismiss",
+      "dismissReason": "Why dismiss?",
+      "createDraft": "Create a draft",
+      "createDraftHint": "Creates a content draft in the campaign with this evidence in its notes. It still needs review and approval; nothing is scheduled or published.",
+      "historyTitle": "Earlier decisions",
+      "rulesTitle": "How recommendations are made",
+      "rules": {
+        "minImpressionsPerContent": "Content compared only with at least {value} impressions",
+        "minPeriodsPerContent": "…over at least {value} separate periods",
+        "minComparableContent": "At least {value} comparable items before any is judged",
+        "weakRatio": "Weak: engagement rate below {value}× the campaign median",
+        "strongRatio": "Strong format: median rate at least {value}× the campaign median",
+        "minPerFormat": "…with at least {value} items of that format and of the others",
+        "staleAfterDays": "Stale: latest period older than {value} days (active campaign)",
+        "minElapsedShare": "Targets judged after {value} of the campaign window",
+        "belowTargetRatio": "Below target: under {value}× the pro-rata expected value",
+        "spendBudgetRatio": "Spend flagged above {value}× the planned budget"
+      },
+      "definitionsTitle": "Metric definitions",
+      "definitions": {
+        "IMPRESSIONS": "Times the content was shown (count).",
+        "REACH": "Distinct people it was shown to in each period, as the platform reports it. Totals add periods together, so one person can be counted more than once.",
+        "ENGAGEMENTS": "Reactions, comments, shares and saves (count).",
+        "CLICKS": "Link clicks (count).",
+        "CONVERSIONS": "Actions you count as conversions on the platform (count).",
+        "REVENUE": "Revenue attributed by the platform (money; currency required).",
+        "SPEND": "Amount spent (money; currency required)."
+      },
+      "importTitle": "Import results",
+      "importHint": "Paste the CSV from your platform's export, one row per metric and period. Values: whole numbers for counts; money with up to two decimals and a currency code. content_id is optional (copy it from the content page). Re-importing the same rows changes nothing.",
+      "importExample": "Example",
+      "importCampaign": "Campaign",
+      "importChannel": "Channel",
+      "importCsv": "CSV",
+      "importSubmit": "Import",
+      "importing": "Importing…",
+      "importResult": "{accepted} stored, {duplicates} already recorded, {rejected} rejected.",
+      "importRepeated": "This submission was already imported; nothing changed.",
+      "importFailed": "Nothing was stored.",
+      "issueRow": "Row {row}: {problem}",
+      "importsTitle": "Import history",
+      "importsEmpty": "No imports yet.",
+      "importStatus": {
+        "SUCCEEDED": "Imported",
+        "FAILED": "Failed",
+        "VOIDED": "Withdrawn"
+      },
+      "importCounts": "{accepted} stored · {duplicates} duplicates · {rejected} rejected",
+      "voidImport": "Withdraw",
+      "voidConfirm": "Withdraw this import? Its numbers stop counting everywhere (kept as history).",
+      "issue": {
+        "columns": "wrong number of columns",
+        "date_invalid": "invalid date",
+        "period_order": "ends before it starts",
+        "period_too_long": "period longer than 92 days",
+        "period_future": "period in the future",
+        "metric_unknown": "unknown metric",
+        "value_invalid": "not a number",
+        "value_negative": "negative value",
+        "value_fraction": "fractional count",
+        "value_too_big": "value too large",
+        "currency_missing": "currency missing",
+        "currency_invalid": "invalid currency code",
+        "currency_unexpected": "counts have no currency",
+        "content_invalid": "invalid content id",
+        "content_not_in_campaign": "content not in this campaign",
+        "duplicate_in_batch": "same observation twice with different values",
+        "conflict": "already recorded with a different value",
+        "no_rows": "no rows",
+        "no_valid_rows": "no valid rows",
+        "provider_timeout": "the provider did not answer in time",
+        "provider_unavailable": "the provider was unavailable",
+        "provider_malformed": "the provider's answer was malformed"
+      },
+      "campaignLink": "Results and recommendations",
+      "viewOnly": "You can view insights; your role can't import or decide."
     }
   },
   "ai": {

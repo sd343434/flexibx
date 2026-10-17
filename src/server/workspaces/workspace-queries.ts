@@ -27,6 +27,7 @@ export interface ShellNavAccess {
   readonly billing: boolean;
   readonly calendar: boolean;
   readonly campaigns: boolean;
+  readonly insights: boolean;
   readonly brand: boolean;
   readonly media: boolean;
   readonly activity: boolean;
@@ -44,6 +45,7 @@ export function shellNavAccess(role: Role): ShellNavAccess {
     billing: can(role, "billing.view"),
     calendar: can(role, "content.view"),
     campaigns: can(role, "campaign.view"),
+    insights: can(role, "analytics.view"),
     brand: can(role, "brand.view"),
     media: can(role, "content.view"),
     activity: can(role, "audit.view"),

@@ -38,6 +38,7 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
     "integrations",
     "calendar",
     "campaigns",
+    "insights",
     "brand",
     "media",
     "activity",

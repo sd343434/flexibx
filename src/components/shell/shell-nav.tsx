@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChartLine,
   Bot,
   CalendarDays,
   Coins,
@@ -31,6 +32,7 @@ export interface ShellNavItem {
     | "billing"
     | "calendar"
     | "campaigns"
+    | "insights"
     | "brand"
     | "media"
     | "activity"
@@ -50,6 +52,7 @@ const ICONS = {
   billing: Coins,
   calendar: CalendarDays,
   campaigns: Megaphone,
+  insights: ChartLine,
   brand: Palette,
   media: Images,
   activity: History,

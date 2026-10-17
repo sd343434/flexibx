@@ -411,6 +411,7 @@ describe("rendered shell", () => {
       "autopilot",
       "calendar",
       "campaigns",
+      "insights",
       "brand",
       "media",
       "members",
@@ -420,10 +421,18 @@ describe("rendered shell", () => {
     expect(editor).toMatch(/data-testid="nav-content"[^>]*href="\/en\/w\/beta-team\/content"/);
 
     // CLIENT has no member.view, audit.view, content.create or automation.view: no Members,
-    // Activity, AI or Autopilot.
+    // Activity, AI or Autopilot. Insights (analytics.view) is read-only for every role.
     await resetDatabase(system);
     const client = navOf((await shellHtml("en", WorkspaceRole.CLIENT)).html);
-    expect(entries(client)).toEqual(["home", "content", "calendar", "campaigns", "brand", "media"]);
+    expect(entries(client)).toEqual([
+      "home",
+      "content",
+      "calendar",
+      "campaigns",
+      "insights",
+      "brand",
+      "media",
+    ]);
     expect(client).not.toContain("/members");
     expect(client).not.toContain("/activity");
 

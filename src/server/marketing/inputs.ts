@@ -209,6 +209,11 @@ export const goalFieldsSchema = z.strictObject({
   description: optionalText(2000),
   kpi: optionalText(160),
   target: nonNegativeDecimal(12),
+  /** What the target counts (count metrics only); empty = not compared automatically. */
+  targetMetric: z.preprocess(
+    (value) => (value === undefined || value === null || value === "" ? null : value),
+    z.enum(["IMPRESSIONS", "REACH", "ENGAGEMENTS", "CLICKS", "CONVERSIONS"]).nullable(),
+  ),
   startDate: optionalDate,
   endDate: optionalDate,
   status: z.enum(MarketingGoalStatus),

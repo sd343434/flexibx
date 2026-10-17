@@ -46,6 +46,10 @@ export const VALIDATION_CODES = [
   "plan_not_approved",
   "plan_empty",
   "plan_item_converted",
+  "metrics_csv_invalid",
+  "metrics_import_not_voidable",
+  "recommendation_changed",
+  "recommendation_not_actionable",
   // AI Marketing Engine (Phase 4).
   "ai_not_configured",
   "ai_timeout",

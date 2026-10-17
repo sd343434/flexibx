@@ -890,3 +890,109 @@ existing services rather than beside them.
   and `/{locale}/w/{slug}/campaigns/{id}/plan` (brief, AI proposal, item editing, add,
   remove, approve, reopen, create drafts). Arabic and English, right-to-left and
   left-to-right; provider post ids are isolated left-to-right.
+
+## 21. Marketing intelligence (Pass 5)
+
+Recorded campaign results, summaries and rule-based recommendations that a person reviews
+and acts on. Nothing here estimates, forecasts or claims a cause; nothing is fetched from
+a real analytics provider yet.
+
+- **Model** (migration `20261018090000_marketing_intelligence`):
+  - `metric_imports`: one per batch, with provider, source, `external_id` (unique per
+    workspace and provider), status (`SUCCEEDED`, `FAILED`, `VOIDED`), row counts, error
+    code and the first row issues.
+  - `metric_observations`: append-only, one per campaign or content item, channel,
+    metric, period (at most 92 days) and value. Counts are whole numbers; money is in
+    minor units, with an ISO currency required for money and refused otherwise.
+    `source_ref` is the identity of an observation within its provider.
+  - `marketing_recommendations`: the state a person gave a finding (`OPEN`, `REVIEWED`,
+    `DISMISSED` with a reason, `SNOOZED` until a date, `ACTED` with the draft it
+    created), plus `version`.
+  - `marketing_goals.target_metric`: an optional count metric that a goal's target is
+    measured in.
+  - Enums: `PerformanceMetric` (impressions, reach, engagements, clicks, conversions,
+    revenue, spend), `MetricSource` (`VERIFIED`, `MANUAL`, `SIMULATED`),
+    `RecommendationKind` and `RecommendationStatus`.
+  - Database rules:
+    - CHECK constraints for everything above, the counts of an import, and each
+      recommendation state;
+    - `VERIFIED` is refused until a real provider integration exists;
+    - same-workspace and workspace-immutable triggers;
+    - observations can never be updated or deleted except by their content item's
+      deletion;
+    - an import's identity never changes, and its only allowed change is voiding.
+  - All three models are in the tenant guard (observations append-only). The six
+    triggers are in the restore check list.
+- **Ingestion** (`src/server/intelligence/ingestion.ts`, validation in `metrics.ts`):
+  - **Entry points.** A person's CSV (`period_start,period_end,metric,value,currency,content_id`,
+    at most 500 rows and 200 KB) and the `MetricsProvider` interface. The interface is
+    provider-neutral and returns rows with a batch id; the only implementation is the
+    deterministic `test-fixture` provider (`SIMULATED`, refused in production).
+  - **Validation.** Every row is checked: dates, period order and length, no future
+    period, known metric, value format and limits, currency rules, and content in the
+    same campaign.
+  - **Workspace lock.** Each workspace's imports run one at a time on a transaction
+    advisory lock.
+  - **Repeats and duplicates.** A batch already imported (same provider and batch id)
+    returns the first result and stores nothing. A row whose identity was already
+    recorded by a non-voided import is a duplicate if the value is the same, and a
+    `conflict` if it differs; it is never overwritten. Two rows with the same identity
+    and different values in one batch are refused.
+  - **Failures.** A batch with no valid row, a provider failure, a timeout (15 s) or a
+    malformed answer is recorded as `FAILED` with its code. A corrected retry is still
+    possible.
+  - **Voiding.** Voiding an import removes its numbers everywhere and lets corrected
+    numbers in.
+  - **Audit and permissions.** Every import is audited: `metrics.imported`,
+    `metrics.import_failed` and `metrics.import_voided`. Importing and voiding need
+    `campaign.manage`.
+- **Summaries** (`analysis.ts`, pure and deterministic):
+  - Each observation identity counts once, and numbers are computed per evidence class.
+    Simulated numbers are shown apart and never added to recorded ones.
+  - A campaign total uses its campaign-level rows for a metric when there are any, and
+    otherwise adds up its content-level rows, so nothing is counted twice.
+  - Money is totalled per currency and is never converted.
+  - Reach is added across periods, which can count a person more than once. The metric
+    definition on the page says so.
+  - The page also shows a daily series of one count metric, per-content engagement
+    rates, import history, freshness (last success, last failure, latest period) and
+    filters (campaign, channel, metric, dates).
+- **Recommendations:**
+  - Findings are computed on every read, from recorded (not simulated) observations of
+    the whole campaign. Each one has evidence: period, sample size, sufficiency and the
+    numbers behind it. The page shows its explanation, suggested action and limits.
+  - Thresholds (`rulesSchema`, validated; `DEFAULT_RULES`, shown on the page):
+    - content is compared only with at least 500 impressions over at least 2 periods,
+      and only when at least 4 items qualify;
+    - weak means below 0.5× the campaign's median engagement rate;
+    - a strong format is a content type whose median is at least 1.5× the campaign's
+      median, with at least 2 items of that type and 2 others;
+    - stale means an active campaign whose latest period is more than 7 days old, or
+      whose last import failed;
+    - a goal is judged after 25% of the campaign window, and is below target under 0.8×
+      its pro-rata value;
+    - spend is flagged above 1× the budget, in the budget's currency only.
+  - Without enough evidence, the result is "more data needed" rather than a judgment.
+  - State is stored only when someone decides, keyed by a stable fingerprint:
+    - review, dismiss (with a reason), snooze (1–90 days; it reopens when it runs out),
+      or reopen;
+    - every decision is conditional on `version`, and refused as `recommendation_changed`
+      when stale or when the evidence no longer supports the finding;
+    - deciding needs `campaign.manage`.
+  - Acting on a finding (below target, weak content, strong format; also needs
+    `content.create`):
+    - creates one `DRAFT` content item in the campaign, through `createContentIn`, with
+      the evidence in its notes;
+    - marks the finding `ACTED`, after which it is settled;
+    - the draft then goes through the normal review and approval workflow. Nothing is
+      published or sent.
+  - Audit: `recommendation.reviewed|dismissed|snoozed|acted`.
+- **UI:**
+  - `/{locale}/w/{slug}/insights`, in the navigation for anyone with `analytics.view`.
+    It shows: a provenance notice, filters, freshness, recommendations with their
+    actions and decision history, campaign summaries (recorded with their source badge,
+    budget against recorded spend, goals, a separate simulated block), the trend (SVG
+    and table), the content comparison, the import form and history (for managers), and
+    the rules and metric definitions.
+  - The campaign page links to it.
+  - Arabic and English; CSV and provider ids are shown left-to-right.

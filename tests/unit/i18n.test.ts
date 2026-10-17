@@ -100,6 +100,25 @@ const SAMPLE_PARAMS = {
   // Execution and optimization.
   median: "2.4%",
   names: "Campaign A",
+  // Marketing intelligence (Pass 5).
+  metric: "Impressions",
+  goal: "Reach 10k people",
+  actual: "4,000",
+  expected: "5,000",
+  spend: "SAR 1,200.00",
+  budget: "SAR 1,000.00",
+  rate: "2.1%",
+  periods: 3,
+  compared: 5,
+  items: 2,
+  others: 4,
+  type: "Reel",
+  status: "Dismissed",
+  accepted: 10,
+  duplicates: 2,
+  rejected: 1,
+  row: 4,
+  problem: "Unknown metric",
 };
 
 describe("locale configuration", () => {

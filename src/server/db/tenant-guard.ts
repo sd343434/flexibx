@@ -70,6 +70,10 @@ export const TENANT_MODELS = {
   // Campaign content plans (Pass 4).
   CampaignPlan: { workspaceId: "required", appendOnly: false },
   CampaignPlanItem: { workspaceId: "required", appendOnly: false },
+  // Marketing intelligence (Pass 5): observations are history (a wrong import is voided).
+  MetricImport: { workspaceId: "required", appendOnly: false },
+  MetricObservation: { workspaceId: "required", appendOnly: true },
+  MarketingRecommendation: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -131,6 +135,9 @@ export const TENANT_ROOT_RELATIONS = [
   "contentReviews",
   "campaignPlans",
   "campaignPlanItems",
+  "metricImports",
+  "metricObservations",
+  "recommendations",
 ] as const;
 
 /**
@@ -146,7 +153,9 @@ export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> 
   AgentTask: ["approvals", "approvedDecision"],
   AdAccount: ["whatsappEvents"],
   WhatsAppContact: ["consentEvents"],
-  ContentItem: ["reviews"],
+  ContentItem: ["reviews", "observations"],
+  MetricImport: ["observations"],
+  Campaign: ["observations"],
 };
 
 /**
@@ -191,6 +200,8 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "whatsappMessagesResolved",
     "whatsappConsentActions",
     "campaignPlansApproved",
+    "metricImports",
+    "recommendationsDecided",
   ],
 };
 

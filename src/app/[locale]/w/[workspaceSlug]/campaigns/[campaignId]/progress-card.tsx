@@ -185,7 +185,16 @@ export async function CampaignProgressCard({
             </div>
           ))}
         </dl>
-        <Notice testId="campaign-results-note">{t("progress.resultsNote")}</Notice>
+        <Notice testId="campaign-results-note">
+          {t("progress.resultsNote")}{" "}
+          <Link
+            href={`/w/${slug}/insights?campaign=${campaignId}`}
+            className="font-medium underline"
+            data-testid="campaign-insights-link"
+          >
+            {t("progress.insightsLink")}
+          </Link>
+        </Notice>
       </Card>
     </>
   );

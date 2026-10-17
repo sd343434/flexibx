@@ -10,6 +10,7 @@ import type { CampaignDetail } from "@/server/marketing/campaign-service";
 import { fromMinorUnits } from "@/server/marketing/campaign-service";
 import { contentMetadata, type ContentDetail } from "@/server/marketing/content-service";
 import type { GoalRow } from "@/server/marketing/goal-service";
+import { TARGET_METRICS } from "@/server/intelligence/metrics";
 import { ENUM_VALUES } from "@/server/marketing/inputs";
 import type { ContentFormOptions, LinkOptions } from "@/server/marketing/marketing-queries";
 import type { PillarRow } from "@/server/marketing/pillar-service";
@@ -271,6 +272,15 @@ export function goalFields(t: MarketingT, goal: GoalRow | null): FieldSpec[] {
       label: t("goals.fields.target"),
       maxLength: 16,
       defaultValue: goal?.target === null || goal === null ? "" : String(goal.target),
+    },
+    {
+      kind: "select",
+      name: "targetMetric",
+      label: t("goals.fields.targetMetric"),
+      hint: t("goals.fields.targetMetricHint"),
+      options: TARGET_METRICS.map((value) => ({ value, label: t(`enums.metric.${value}`) })),
+      emptyLabel: t("goals.fields.targetMetricNone"),
+      defaultValue: goal?.targetMetric ?? "",
     },
     {
       kind: "date",
