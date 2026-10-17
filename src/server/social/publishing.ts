@@ -507,11 +507,29 @@ export async function resolveUncertainPost(
   if (deps.meta === null) throw socialError("SERVICE_UNAVAILABLE", "social_not_configured");
   const page = await pageFor(deps, ctx.workspaceId, post.channel.pageId);
   const since = post.scheduledAt < post.updatedAt ? post.scheduledAt : post.updatedAt;
-  const lookup = await deps.meta.findPagePost(page, post.message, since);
+  const lookup = await deps.meta.findPagePosts(page, post.message, since);
   // More posts than one lookup reads: still unknown, so it stays UNCERTAIN (never "not
   // published" on a partial look, which would allow publishing it twice).
   if (lookup === "unknown") throw socialError("CONFLICT", "social_cannot_verify");
-  const found = lookup === "not_found" ? null : lookup.id;
+  // Matches already recorded as another of this workspace's posts are accounted for.
+  const claimed =
+    lookup.ids.length === 0
+      ? []
+      : await deps.db.socialPost.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            externalPostId: { in: [...lookup.ids] },
+            id: { not: post.id },
+          },
+          select: { externalPostId: true },
+        });
+  const taken = new Set(claimed.map((row) => row.externalPostId));
+  const candidates = lookup.ids.filter((id) => !taken.has(id));
+  // Several posts with the same text in the window: which one (if any) is ours cannot be
+  // told apart, so it stays UNCERTAIN for a person to check on the Page — never a guessed
+  // success.
+  if (candidates.length > 1) throw socialError("CONFLICT", "social_cannot_verify");
+  const found = candidates[0] ?? null;
   const now = nowOf(deps);
   await deps.db.$transaction(async (tx) => {
     await tx.socialPost.updateMany({

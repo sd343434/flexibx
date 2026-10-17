@@ -736,7 +736,7 @@ Code: `src/server/social/`. Migrations `20261012110000_social_manager` and
   call (`image_missing`, `image_unavailable`, `image_invalid`). Verified only against a
   stand-in Graph API; Instagram publishing is not supported. The sweep re-checks the approval first, claims
   each post once (the approval is part of the claim), and treats a lost answer as
-  `UNCERTAIN` (looked up among the Page's own `published_posts`); a post stuck in
+  `UNCERTAIN` (looked up among the Page's own `published_posts`: exactly one unaccounted post with its text settles it; several stay `UNCERTAIN` for a person); a post stuck in
   `PUBLISHING` for 10 minutes also becomes `UNCERTAIN`. Publishing is never instant:
   queuing approved content means the next scheduler tick (an approved item's planned date
   does not hold it back), scheduled content goes out at its time. Waiting posts follow

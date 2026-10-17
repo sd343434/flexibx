@@ -113,11 +113,15 @@ export interface MetaSocial {
   /**
    * Publishes a photo post on the Page: the image is uploaded as multipart `source` (Meta
    * never fetches it from our storage) with the message as its caption. Returns the feed
-   * post id, which the same caption lookup (findPagePost) finds after a lost answer.
+   * post id, which the same caption lookup (findPagePosts) finds after a lost answer.
    */
   publishPhotoToPage(page: ManagedPage, message: string, photo: PagePhoto): Promise<string>;
-  /** The id of the Page's own post with exactly this text since `since`, if any. */
-  findPagePost(page: ManagedPage, message: string, since: Date): Promise<Lookup>;
+  /**
+   * Every one of the Page's own posts with exactly this text since `since` (newest first),
+   * or "unknown" when more posts than one lookup reads remain. All matches are returned so
+   * the caller can tell one candidate from an ambiguous several (never guess).
+   */
+  findPagePosts(page: ManagedPage, message: string, since: Date): Promise<PostMatches>;
 }
 
 /**
@@ -126,6 +130,9 @@ export interface MetaSocial {
  * never treated as "not sent", so nothing is sent twice on a partial look.
  */
 export type Lookup = { readonly id: string } | "not_found" | "unknown";
+
+/** The Page posts matching a text in a window, or "unknown" (not every candidate read). */
+export type PostMatches = { readonly ids: readonly string[] } | "unknown";
 
 /** Pages of 100 replies (or 25 posts) read by one lookup before it answers "unknown". */
 export const MAX_LOOKUP_REQUESTS = 10;
@@ -383,9 +390,10 @@ export function createMetaSocial(config: {
       return created;
     },
 
-    async findPagePost(page, message, since) {
+    async findPagePosts(page, message, since) {
       // Newest first: reading stops (conclusively) at the first post older than `since`.
       const from = since.getTime() - 5 * 60_000;
+      const ids: string[] = [];
       let after: string | null = null;
       for (let call = 0; call < MAX_LOOKUP_REQUESTS; call += 1) {
         const json = await request("GET", `/${page.id}/published_posts`, page.accessToken, {
@@ -397,11 +405,11 @@ export function createMetaSocial(config: {
           const created = new Date(str(item.created_time) ?? "");
           const id = str(item.id);
           if (id === null || Number.isNaN(created.getTime())) continue;
-          if (created.getTime() < from) return "not_found";
-          if (str(item.message)?.trim() === message.trim()) return { id: id.slice(0, 128) };
+          if (created.getTime() < from) return { ids };
+          if (str(item.message)?.trim() === message.trim()) ids.push(id.slice(0, 128));
         }
         const next = nextCursor(json);
-        if (next === null || next === after) return "not_found";
+        if (next === null || next === after) return { ids };
         after = next;
       }
       return "unknown";

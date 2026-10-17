@@ -1,6 +1,7 @@
 # Production-readiness gap register
 
-Status at HEAD `7f0f169` plus the Pass 2.5 changes (2026-10-16); first written in Pass 2.4. This register lists what still stands
+Status reviewed in Pass 3.2 (2026-10-17) at HEAD `8820d9e` plus the Pass 3.2 fix; first
+written in Pass 2.4. This register lists what still stands
 between the current code and a production launch, with the evidence for each item. It
 does not mark anything complete on the strength of documentation: an item closes only
 with the verification named in its row. Infrastructure decisions are kept in
@@ -19,6 +20,33 @@ decision), **requires approval** (a paid, real-provider or production action).
 Severity: **Blocker** = launch must not happen while open; **High** = must be closed or
 explicitly accepted before launch; **Medium** = accept with monitoring or close before
 scale; **Low** = tracked.
+
+## 0. Launch blockers by stage (Pass 3.2)
+
+Stages: **private pilot** = internal team only, synthetic data, test Facebook Pages, no
+customer data; **supervised pilot** = a few named customers, real data, every outbound
+action supervised; **GA** = general availability. "Mocked" means exercised only against
+local stand-ins (stand-in Graph API, fake AI/video providers, in-memory storage, test
+mail outbox) — never evidence that the real provider works.
+
+| Blocker                                              | Status and evidence                                                                                                                                             | External action or decision                                                      | Safe verification                                                                                                    | Blocks                                                    |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Hosting, region, staging environment (A2, A4)        | **Blocked** on decision; nothing provisioned                                                                                                                    | Choose provider and region; name the account owner and reviewer                  | Staging stack per D.3 § 5                                                                                            | Private pilot                                             |
+| Managed PostgreSQL with PITR                         | **Blocked**; migrations validated only on disposable local databases (32 migrations, no drift, Pass 3.2)                                                        | Provision staging and production instances                                       | `migrate deploy` on staging; restore drill (§ 5.1)                                                                   | Private pilot (staging), supervised pilot (restore drill) |
+| Secrets manager, key custody (D.3 § 2.6)             | **Blocked**; no secrets created                                                                                                                                 | Create per-task secrets; name two custodians per key                             | Task starts with secrets injected, none in images (ops image check in CI)                                            | Private pilot                                             |
+| Object storage (S3/Wasabi)                           | **Mocked only** (in-memory and local HTTP stand-ins)                                                                                                            | Create a bucket and a restricted key                                             | `STORAGE_PROVIDERS.md` § 8 round trip on staging                                                                     | Private pilot                                             |
+| Scheduler (automation tick)                          | **Implemented and locally tested** (lock, budget, alerts); external trigger not configured                                                                      | Configure the 5-minute trigger and its timeout                                   | One tick, then two concurrent ticks on staging; read the alerts                                                      | Private pilot                                             |
+| Email delivery (Resend)                              | **Mocked only** (test outbox; refused in production)                                                                                                            | Verify a sending domain (SPF/DKIM/DMARC)                                         | Send to test inboxes from staging                                                                                    | Private pilot (sign-up recovery), supervised pilot        |
+| Meta: Page publishing (text and photo), replies, ads | **Mocked only** (stand-in Graph API); photo caption reconciliation assumes Meta lists photo posts in `published_posts` with the caption as message (unverified) | Meta app in development mode with test Pages; then App Review for customer Pages | Supervised publish of a text and a photo post to a test Page; lose an answer on purpose (network cut) and resolve it | Private pilot (test Pages), supervised pilot (App Review) |
+| AI and video providers                               | **Mocked only** (fake providers refused in production)                                                                                                          | Choose providers; set spend caps                                                 | Supervised calls on staging with caps                                                                                | Supervised pilot                                          |
+| Monitoring and alert destination, on-call (A6)       | **Implemented** (alert sink, ops status); destination not connected; payload review open (D.3 R9)                                                               | Choose the destination and on-call names                                         | Trigger a test alert from staging                                                                                    | Supervised pilot                                          |
+| Restore drill on managed database                    | **Documented, not exercised** (scripts tested with fakes and local throwaway databases)                                                                         | Staging database and custodians                                                  | Drill per `BACKUP_RESTORE.md` §§ 4–5, timed and recorded                                                             | Supervised pilot                                          |
+| Data residency and legal review (A1)                 | **Blocked** on legal advice                                                                                                                                     | Legal review of residency, terms, privacy notice                                 | Signed-off decision record                                                                                           | Supervised pilot                                          |
+| Pilot go/no-go (A8)                                  | **Blocked** on owner decision                                                                                                                                   | Named approver                                                                   | Decision record                                                                                                      | Supervised pilot                                          |
+| Payments and subscriptions                           | **Not implemented** (credits are provisional; no payment provider)                                                                                              | Choose a payment provider and pricing                                            | —                                                                                                                    | GA (pilots use admin credit grants)                       |
+| Instagram publishing                                 | **Not implemented**                                                                                                                                             | Public media hosting decision; `instagram_content_publish` and App Review        | —                                                                                                                    | GA (feature gap only)                                     |
+| Orphaned storage objects                             | **Designed, not implemented** (§ 3.1)                                                                                                                           | Approve `s3:ListBucket` and the procedure                                        | Dry-run report on staging bucket                                                                                     | GA                                                        |
+| Prisma tooling advisories                            | Dev and migration tooling only (§ 2)                                                                                                                            | —                                                                                | Re-check on 2026-10-22                                                                                               | GA hygiene                                                |
 
 ## 1. CI verification
 
@@ -148,6 +176,25 @@ real Meta call):
 | Publication timing                                                                                                                             | **Depends on infrastructure**                               | The external scheduler's interval (every 5 minutes by design); unchanged                                                                                                                                                                                                                                                                                         |
 
 Still open from 3.0: publishing is only as timely as the external scheduler.
+
+### 5.4 Pass 3.2 audit
+
+- **Fixed:** reconciling an `UNCERTAIN` Page post took the first Page post with the same
+  text in the lookup window. With two such posts (two items with the same body, or a
+  manual post) it could mark the wrong one as ours — a false success. The lookup now
+  returns every match; matches already recorded on another of the workspace's posts are
+  set aside; exactly one remaining candidate → published, none → confirmed not published,
+  several → stays `UNCERTAIN` (`social_cannot_verify`) for a person to check on the Page.
+  Regression tests in `social-manager.test.ts`; two mutants (no ambiguity guard, no
+  exclusion of recorded ids) fail them.
+- Residual: a post by someone else with the same text within ±5 minutes, while ours was
+  never published, is indistinguishable by text and would be taken as ours. Meta gives no
+  stronger key for a lost answer; accepted for the pilot, checked in the supervised test.
+- Checked without finding defects: review decisions are written only by
+  `transitionContent` (one path; append-only in the tenant guard, including the nested
+  `ContentItem.reviews` relation; immutable by trigger); content status changes only there
+  and in the publisher after a confirmed outcome; provider ids are rendered
+  left-to-right-isolated everywhere they appear (publishing card, ads, WhatsApp).
 
 ## 6. Decisions that block staging (none assumed)
 

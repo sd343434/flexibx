@@ -2312,3 +2312,64 @@ describe("publishing an image with a Page post", () => {
     ).rejects.toThrow();
   });
 });
+
+// ── Reconciling an uncertain post when several Page posts share its text ─────
+
+describe("reconciling an uncertain post with duplicate text on the Page", () => {
+  async function approvedWith(ctx: TenantContext, body: string) {
+    return system.contentItem.create({
+      data: { workspaceId: ctx.workspaceId, title: "Menu", body, status: "APPROVED" },
+    });
+  }
+  const TEXT = "Our autumn menu is here.";
+
+  it("a duplicate already recorded as another of our posts is set aside", async () => {
+    const s = await setup();
+    // First item published normally: its id is recorded.
+    const first = await approvedWith(s.owner, TEXT);
+    const a = await queuePost(s.deps, s.owner, first.id, s.channel.id);
+    await socialSweep(s.deps, system);
+    const recorded = await system.socialPost.findUniqueOrThrow({ where: { id: a.postId } });
+    expect(recorded.status).toBe("PUBLISHED");
+    // Second item with the same text: Meta stores it but the answer is lost.
+    const second = await approvedWith(s.owner, TEXT);
+    const b = await queuePost(s.deps, s.owner, second.id, s.channel.id);
+    s.graph.faults.set(`POST /${PAGE}/feed`, "500");
+    await socialSweep(s.deps, system);
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: b.postId } })).toMatchObject({
+      status: "UNCERTAIN",
+    });
+    expect(await resolveUncertainPost(s.deps, s.owner, b.postId)).toBe("published");
+    const settled = await system.socialPost.findUniqueOrThrow({ where: { id: b.postId } });
+    // The other match, never the first item's id.
+    expect(settled.externalPostId).not.toBe(recorded.externalPostId);
+    expect(settled.externalPostId).toBe(s.graph.pagePosts.at(-1)?.id);
+  });
+
+  it("two unaccounted posts with the same text: stays uncertain, no guessed success", async () => {
+    const s = await setup();
+    const item = await approvedWith(s.owner, TEXT);
+    const { postId } = await queuePost(s.deps, s.owner, item.id, s.channel.id);
+    s.graph.faults.set(`POST /${PAGE}/feed`, "500");
+    await socialSweep(s.deps, system);
+    // Someone also posted the same text on the Page by hand, at about the same time.
+    s.graph.pagePosts.push({
+      id: `${PAGE}_9999`,
+      message: TEXT,
+      created_time: new Date().toISOString(),
+    });
+    expect(await rejection(resolveUncertainPost(s.deps, s.owner, postId))).toMatchObject({
+      fields: [{ code: "social_cannot_verify" }],
+    });
+    expect(await system.socialPost.findUniqueOrThrow({ where: { id: postId } })).toMatchObject({
+      status: "UNCERTAIN",
+      externalPostId: null,
+    });
+    expect(await system.contentItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({
+      status: "APPROVED",
+    });
+    // Never retried automatically either.
+    await socialSweep(s.deps, system, new Date(Date.now() + 60_000));
+    expect(s.graph.posts().filter((call) => call.path === `/${PAGE}/feed`)).toHaveLength(1);
+  });
+});
