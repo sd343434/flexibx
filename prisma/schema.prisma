@@ -68,6 +68,7 @@ model User {
   invitationsCreated        WorkspaceInvitation[]
   contentCreated            ContentItem[]
   contentReviews            ContentReview[]
+  campaignPlansApproved     CampaignPlan[]
   mediaUploaded             MediaAsset[]
   aiGenerations             AiGeneration[]
   generatedVideos           GeneratedVideo[]
@@ -157,6 +158,8 @@ model Workspace {
   socialLessons         SocialLesson[]
   socialAutoReplyClaims SocialAutoReplyClaim[]
   socialPosts           SocialPost[]
+  campaignPlans         CampaignPlan[]
+  campaignPlanItems     CampaignPlanItem[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -577,6 +580,8 @@ model Campaign {
   goals        CampaignGoal[]
   pillars      CampaignPillar[]
   contentItems ContentItem[]
+  /// The campaign's content plan (one per campaign).
+  plan         CampaignPlan?
 
   @@index([workspaceId, status, startDate])
   @@index([audienceId])
@@ -615,6 +620,91 @@ model CampaignPillar {
   @@map("campaign_pillars")
 }
 
+/// Where a planned piece of content is meant to go. Only FACEBOOK_PAGE is published by
+/// Flexibx (src/server/social/publishing.ts); the others are planning labels: their
+/// content is published outside Flexibx and marked as published by a person.
+enum MarketingChannel {
+  FACEBOOK_PAGE
+  INSTAGRAM
+  WHATSAPP
+  EMAIL
+  OTHER
+
+  @@map("marketing_channel")
+}
+
+enum CampaignPlanStatus {
+  /// Being written or generated; items can be edited, added and removed.
+  DRAFT
+  /// Accepted by a manager; its included items can become content drafts.
+  APPROVED
+
+  @@map("campaign_plan_status")
+}
+
+/// A campaign's content plan (Pass 4): the brief a person sets (offer, channels, budget
+/// assumptions) and the dated items that become content drafts once a manager approves
+/// it. AI may propose the items (IDEAS generation, linked here); a person edits them.
+model CampaignPlan {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String             @map("workspace_id") @db.Uuid
+  campaignId       String             @unique @map("campaign_id") @db.Uuid
+  status           CampaignPlanStatus @default(DRAFT)
+  /// What the campaign offers (a person's words; never generated).
+  offer            String?            @db.VarChar(1000)
+  channels         MarketingChannel[] @default([])
+  /// Budget assumptions in words (the campaign's own budget amount stays on the campaign).
+  budgetNotes      String?            @map("budget_notes") @db.VarChar(1000)
+  /// The last AI generation whose ideas became this plan's items (null: written by hand).
+  generationId     String?            @map("generation_id") @db.Uuid
+  approvedByUserId String?            @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime?          @map("approved_at") @db.Timestamptz(3)
+  /// Optimistic concurrency: every change increments it and is conditional on it.
+  version          Int                @default(0)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign   Campaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  generation AiGeneration?      @relation(fields: [generationId], references: [id], onDelete: SetNull)
+  approvedBy User?              @relation(fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  items      CampaignPlanItem[]
+
+  @@index([workspaceId])
+  @@index([generationId])
+  @@index([approvedByUserId])
+  @@map("campaign_plans")
+}
+
+/// One planned piece of content. `contentItemId` is set once, when the draft is created
+/// from it (never twice: unique); deleting that content clears it again.
+model CampaignPlanItem {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String           @map("workspace_id") @db.Uuid
+  planId        String           @map("plan_id") @db.Uuid
+  position      Int
+  title         String           @db.VarChar(200)
+  brief         String           @default("") @db.VarChar(2000)
+  contentType   ContentType      @map("content_type")
+  channel       MarketingChannel
+  plannedDate   DateTime?        @map("planned_date") @db.Date
+  /// Excluded items stay in the plan but never become content.
+  included      Boolean          @default(true)
+  /// Proposed by AI (true) or written by a person (false); editing keeps the origin.
+  aiGenerated   Boolean          @default(false) @map("ai_generated")
+  contentItemId String?          @unique @map("content_item_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan        CampaignPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  contentItem ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, planId, position])
+  @@index([planId])
+  @@map("campaign_plan_items")
+}
+
 /// A platform-independent piece of marketing content and its workflow state.
 model ContentItem {
   id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -651,6 +741,8 @@ model ContentItem {
   socialPosts SocialPost[]
   /// Review decisions on this item (approvals and change requests), newest last.
   reviews     ContentReview[]
+  /// The campaign plan item this draft was created from (Pass 4).
+  planItem    CampaignPlanItem?
 
   @@index([workspaceId, status, updatedAt(sort: Desc)])
   @@index([workspaceId, scheduledAt])
@@ -770,11 +862,12 @@ model AiGeneration {
   createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace          Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user               User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
-  contentItem        ContentItem? @relation("AiGenerationTarget", fields: [contentItemId], references: [id], onDelete: SetNull)
-  appliedContentItem ContentItem? @relation("AiGenerationApplied", fields: [appliedContentItemId], references: [id], onDelete: SetNull)
+  workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user               User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  contentItem        ContentItem?   @relation("AiGenerationTarget", fields: [contentItemId], references: [id], onDelete: SetNull)
+  appliedContentItem ContentItem?   @relation("AiGenerationApplied", fields: [appliedContentItemId], references: [id], onDelete: SetNull)
   adPlans            AdPlan[]
+  campaignPlans      CampaignPlan[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, userId, createdAt(sort: Desc)])

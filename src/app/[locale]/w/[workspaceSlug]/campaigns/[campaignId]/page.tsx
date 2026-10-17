@@ -16,11 +16,15 @@ import { Button } from "@/components/ui/button";
 import { Link } from "@/i18n/navigation";
 import { fromMinorUnits } from "@/server/marketing/campaign-service";
 import { getCampaignPage } from "@/server/marketing/marketing-queries";
+import { getCampaignProgress } from "@/server/marketing/plan-queries";
 
 import { campaignFields } from "../../form-fields";
 import { submitCampaign, submitCampaignStatus } from "../../marketing-actions";
 import { guardPage, openWorkspacePage, type WorkspaceRouteParams } from "../../page-data";
 import { CampaignTabs } from "../../section-tabs";
+
+import { CampaignDetailTabs } from "./detail-tabs";
+import { CampaignProgressCard } from "./progress-card";
 
 export default async function CampaignRoute({
   params,
@@ -36,6 +40,7 @@ export default async function CampaignRoute({
     return <ForbiddenNotice title={t("campaigns.title")} message={t("common.forbidden")} />;
   }
   const { campaign } = data;
+  const progress = await guardPage(getCampaignProgress(workspace.slug, campaignId));
   const date = (value: Date | null) =>
     value === null
       ? t("common.notSet")
@@ -52,6 +57,21 @@ export default async function CampaignRoute({
         }
       />
       <CampaignTabs locale={locale} slug={workspace.slug} active="campaigns" />
+      <CampaignDetailTabs
+        locale={locale}
+        slug={workspace.slug}
+        campaignId={campaign.id}
+        active="overview"
+      />
+
+      {progress === null ? null : (
+        <CampaignProgressCard
+          locale={locale}
+          slug={workspace.slug}
+          campaignId={campaign.id}
+          data={progress}
+        />
+      )}
 
       <Card
         title={t("campaigns.statusTitle")}
@@ -131,7 +151,7 @@ export default async function CampaignRoute({
         </Card>
       )}
 
-      {data.content === null ? null : (
+      {data.content === null || progress !== null ? null : (
         <Card title={t("campaigns.contentTitle")}>
           {data.content.items.length === 0 ? (
             <EmptyState message={t("campaigns.contentEmpty")} />

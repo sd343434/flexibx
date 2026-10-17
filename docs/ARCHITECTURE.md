@@ -847,3 +847,46 @@ backup_codes_regenerated|reset_by_operator` (method only, never secrets).
   `migrate status`). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
   `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`, `ADMIN_PROVISIONING.md`, `DATABASE_ROLES.md` (Phase C.1 record:
   `PHASE_C_1_AUDIT.md`).
+
+## 20. Campaign content plans and progress (Pass 4)
+
+The journey campaign → plan → content → review → publication → progress, built on the
+existing services rather than beside them.
+
+- **Model** (`campaign_plans`, `campaign_plan_items`, migration `20261017120000`): one
+  plan per campaign with the person's brief (offer, channels, budget assumptions in
+  words) and dated items (title, brief, content type, channel, included). Enums
+  `MarketingChannel` (only `FACEBOOK_PAGE` is published by Flexibx; the others are
+  planning labels published outside Flexibx and then marked as published) and
+  `CampaignPlanStatus` (`DRAFT`, `APPROVED`). Database rules: same-workspace and
+  workspace-immutable triggers, a plan never changes campaign, an item never changes plan,
+  an item's draft link is set once (cleared only when that content is deleted), an
+  approved plan records `approved_at`, a drafted item is an included one. Both models are
+  in the tenant guard (not append-only); the six triggers are in the restore check list.
+- **Service** (`src/server/marketing/plan-service.ts`; pure parts in `campaign-plan.ts`):
+  read `campaign.view`; write, approve, reopen `campaign.manage`; AI proposals also
+  `content.create` and the AI engine's admission (configured provider, rate limits, daily
+  cap, credits, schema validation, forbidden words, audit). Proposals reuse the `IDEAS`
+  operation focused on the campaign; the suggestion is marked used once. Dates (spread
+  over the campaign window) and channels (rotated in the person's order) are assigned by
+  the server, never by the model; offer and budget are never generated. Every change is
+  conditional on the plan's `version` and refused as `plan_changed` when stale (a new plan
+  starts at version 1; 0 means "no plan"). Approval needs one included item. Creating
+  drafts runs `createContentIn` for each included, undrafted item of an approved plan in
+  one transaction (DRAFT, linked to the campaign, its audience and first active goal; the
+  brief goes to notes), then links each item under a condition — repeating it creates
+  nothing. Nothing here submits, approves, schedules or publishes content. Audit:
+  `campaign.plan_updated|plan_generated|plan_approved|plan_reopened|plan_drafts_created`.
+- **Progress** (`campaign-progress.ts`, pure; facts from `campaignProgressFacts`): each
+  item's stage from its content status, latest review decision and Facebook Page posts —
+  `planned`, `draft`, `changes_requested`, `in_review`, `approved`, `scheduled`, `queued`
+  (waiting, never "published"), `uncertain`, `failed`, `published` (confirmed post id),
+  `published_manually`. Next steps, most urgent first: check unconfirmed posts, fix failed
+  ones, publishing held (with the readiness reasons), revise change requests, pending
+  reviews, overdue items, create drafts, approve the plan, queue approved Facebook items,
+  publish elsewhere, write the plan, close an ended campaign. No engagement, reach,
+  conversion or revenue figure exists in Flexibx; the page says so instead of showing one.
+- **UI**: `/{locale}/w/{slug}/campaigns/{id}` (next steps, progress, recorded results)
+  and `/{locale}/w/{slug}/campaigns/{id}/plan` (brief, AI proposal, item editing, add,
+  remove, approve, reopen, create drafts). Arabic and English, right-to-left and
+  left-to-right; provider post ids are isolated left-to-right.

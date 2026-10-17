@@ -43,6 +43,9 @@ const SAMPLE_PARAMS = {
   keys: "extra",
   role: "Owner",
   count: 2,
+  // Campaign plans (included posts) and progress (published of total).
+  included: 1,
+  published: 1,
   // Integrations (accounts per connection).
   total: 3,
   selected: 1,

@@ -43,7 +43,8 @@ export function getAiRuntime(): AiRuntime {
   };
 }
 
-async function admitGeneration(ctx: TenantContext): Promise<AiRuntime> {
+/** The AI runtime for one generation request, after the per-user and per-workspace rate limits. */
+export async function admitGeneration(ctx: TenantContext): Promise<AiRuntime> {
   const runtime = getAiRuntime();
   if (runtime.provider === null) throw aiNotConfigured();
   const limit = getRateLimiter();

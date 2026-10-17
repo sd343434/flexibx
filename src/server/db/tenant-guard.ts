@@ -67,6 +67,9 @@ export const TENANT_MODELS = {
   SocialPost: { workspaceId: "required", appendOnly: false },
   // Review decisions on content (Pass 3.1): written with the status change, never edited.
   ContentReview: { workspaceId: "required", appendOnly: true },
+  // Campaign content plans (Pass 4).
+  CampaignPlan: { workspaceId: "required", appendOnly: false },
+  CampaignPlanItem: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -126,6 +129,8 @@ export const TENANT_ROOT_RELATIONS = [
   "socialAutoReplyClaims",
   "socialPosts",
   "contentReviews",
+  "campaignPlans",
+  "campaignPlanItems",
 ] as const;
 
 /**
@@ -185,6 +190,7 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "whatsappMessagesRequested",
     "whatsappMessagesResolved",
     "whatsappConsentActions",
+    "campaignPlansApproved",
   ],
 };
 
