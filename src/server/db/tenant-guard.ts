@@ -77,6 +77,17 @@ export const TENANT_MODELS = {
   // Meta Insights (Pass 6): the accounts read and the record of each sync.
   InsightsSource: { workspaceId: "required", appendOnly: false },
   InsightsSyncRun: { workspaceId: "required", appendOnly: false },
+  // AI Creator Studio (Pass 8): projects, sources, jobs and what they produce; the
+  // project event log is history.
+  CreatorProject: { workspaceId: "required", appendOnly: false },
+  CreatorSource: { workspaceId: "required", appendOnly: false },
+  CreatorJob: { workspaceId: "required", appendOnly: false },
+  CreatorJobStep: { workspaceId: "required", appendOnly: false },
+  CreatorTranscript: { workspaceId: "required", appendOnly: false },
+  CreatorTranscriptSegment: { workspaceId: "required", appendOnly: false },
+  CreatorClip: { workspaceId: "required", appendOnly: false },
+  CreatorExport: { workspaceId: "required", appendOnly: false },
+  CreatorProjectEvent: { workspaceId: "required", appendOnly: true },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -143,6 +154,15 @@ export const TENANT_ROOT_RELATIONS = [
   "recommendations",
   "insightsSources",
   "insightsSyncRuns",
+  "creatorProjects",
+  "creatorSources",
+  "creatorJobs",
+  "creatorJobSteps",
+  "creatorTranscripts",
+  "creatorSegments",
+  "creatorClips",
+  "creatorExports",
+  "creatorEvents",
 ] as const;
 
 /**
@@ -162,6 +182,7 @@ export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> 
   MetricImport: ["observations"],
   Campaign: ["observations"],
   InsightsSource: ["observations"],
+  CreatorProject: ["events"],
 };
 
 /**
@@ -210,6 +231,12 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "recommendationsDecided",
     "insightsSourcesCreated",
     "insightsRunsRequested",
+    "creatorProjectsCreated",
+    "creatorSourcesCreated",
+    "creatorJobsRequested",
+    "creatorClipsReviewed",
+    "creatorExportsRequested",
+    "creatorEventsActed",
   ],
 };
 

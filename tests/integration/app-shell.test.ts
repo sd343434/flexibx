@@ -402,12 +402,13 @@ describe("rendered shell", () => {
     const entries = (html: string) =>
       [...html.matchAll(/data-testid="nav-([a-z]+)"/g)].map((match) => match[1]);
     const editor = navOf((await shellHtml("en")).html);
-    // EDITOR: every Marketing Core section, AI Studio (content.create), Autopilot
-    // (automation.view) and Members; no Activity (audit.view).
+    // EDITOR: every Marketing Core section, AI Studio (content.create), the Creator
+    // Studio (content.view), Autopilot (automation.view) and Members; no Activity (audit.view).
     expect(entries(editor)).toEqual([
       "home",
       "content",
       "ai",
+      "studio",
       "autopilot",
       "calendar",
       "campaigns",
@@ -421,12 +422,14 @@ describe("rendered shell", () => {
     expect(editor).toMatch(/data-testid="nav-content"[^>]*href="\/en\/w\/beta-team\/content"/);
 
     // CLIENT has no member.view, audit.view, content.create or automation.view: no Members,
-    // Activity, AI or Autopilot. Insights (analytics.view) is read-only for every role.
+    // Activity, AI or Autopilot. Insights (analytics.view) is read-only for every role, and
+    // so is the Creator Studio (content.view; creating needs content.create).
     await resetDatabase(system);
     const client = navOf((await shellHtml("en", WorkspaceRole.CLIENT)).html);
     expect(entries(client)).toEqual([
       "home",
       "content",
+      "studio",
       "calendar",
       "campaigns",
       "insights",

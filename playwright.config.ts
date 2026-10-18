@@ -51,7 +51,9 @@ export default defineConfig({
       STORAGE_DRIVER: "test-memory",
       // The deterministic local AI adapter (no external service, no key).
       AI_PROVIDER: "fake",
-      // The three settings above are test-only and refused in production; this allows them
+      // Creator Studio: the declared simulator (labelled as such on every page).
+      CREATOR_AI_PROVIDER: "simulated",
+      // The settings above are test-only and refused in production; this allows them
       // for this local run (honoured only while APP_URL is localhost / 127.0.0.1).
       FLEXIBX_TEST_PROVIDERS: "allow",
     },

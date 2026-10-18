@@ -3,6 +3,7 @@
 import {
   ChartLine,
   Bot,
+  Clapperboard,
   CalendarDays,
   Coins,
   MessagesSquare,
@@ -25,6 +26,7 @@ export interface ShellNavItem {
     | "home"
     | "content"
     | "ai"
+    | "studio"
     | "autopilot"
     | "ads"
     | "integrations"
@@ -45,6 +47,7 @@ const ICONS = {
   home: House,
   content: FileText,
   ai: Sparkles,
+  studio: Clapperboard,
   autopilot: Bot,
   ads: Target,
   integrations: PlugZap,

@@ -231,6 +231,7 @@
       "members": "Members",
       "content": "Content",
       "ai": "AI Studio",
+      "studio": "Creator Studio",
       "autopilot": "Autopilot",
       "calendar": "Calendar",
       "campaigns": "Campaigns",
@@ -492,7 +493,26 @@
     "insights_permission_missing": "Your Meta connection lacks the insights permissions for this account. Reconnect Meta and grant them.",
     "insights_not_connected": "Connect Meta first.",
     "insights_not_configured": "Meta Insights is not enabled on this server.",
-    "insights_channel_unavailable": "This Page or account is no longer in your Meta connection. Sync your Pages again."
+    "insights_channel_unavailable": "This Page or account is no longer in your Meta connection. Sync your Pages again.",
+    "creator_provider_disabled": "Transcription and translation are not enabled on this server.",
+    "creator_upload_expired": "This upload link expired. Start the upload again.",
+    "creator_upload_not_pending": "This upload was already finished or cancelled.",
+    "creator_upload_too_large": "The file is larger than the {maximum} MB allowed.",
+    "creator_upload_size_mismatch": "The uploaded file is not the size that was announced. Upload it again.",
+    "creator_type_unsupported": "Upload an MP4, MOV or WebM video, or an MP3, M4A or WAV audio file.",
+    "creator_source_not_ready": "The file has not been checked yet. Wait for the analysis to finish.",
+    "creator_already_transcribed": "This file already has a transcript.",
+    "creator_no_audio": "This file has no audio track to transcribe.",
+    "creator_no_video": "Clips can only be exported from a video file.",
+    "creator_job_active": "This work is already in progress.",
+    "creator_job_not_active": "This job is no longer running.",
+    "creator_job_not_retryable": "Only a failed or cancelled job can be retried.",
+    "creator_clip_not_approved": "Approve the clip before exporting it.",
+    "creator_clip_out_of_bounds": "A clip must last between 1 second and 10 minutes and stay inside the media.",
+    "creator_language_unsupported": "This language is not supported by the configured provider.",
+    "creator_translation_exists": "A translation to this language already exists.",
+    "creator_segment_out_of_bounds": "A subtitle must end after it starts and stay inside the media.",
+    "creator_stale": "Someone changed this in the meantime. Reload and try again."
   },
   "marketing": {
     "common": {
@@ -2446,7 +2466,10 @@
       "ai_text": "AI ideas, briefs and copy",
       "ad_plan": "AI ad campaign plan",
       "social_reply": "AI social reply draft",
-      "social_learning": "AI agent self-review"
+      "social_learning": "AI agent self-review",
+      "creator_transcription": "Creator Studio transcription (per minute)",
+      "creator_translation": "Creator Studio translation (per minute)",
+      "creator_export": "Creator Studio clip export (per minute)"
     },
     "prices": {
       "title": "What each task costs",
@@ -2777,6 +2800,257 @@
       "moreOpen": "{count, plural, one {# more post needs attention} other {# more posts need attention}} — handle the ones above first.",
       "newest": "Newest",
       "older": "Older publications"
+    }
+  },
+  "studio": {
+    "title": "Creator Studio",
+    "description": "Turn a long video into short clips: upload, transcribe, review suggested clips and export them.",
+    "forbidden": "Your role can't open the Creator Studio.",
+    "notFound": "This project was not found.",
+    "back": "← All projects",
+    "create": {
+      "title": "New project",
+      "name": "Project name",
+      "descriptionField": "Description (optional)",
+      "submit": "Create project",
+      "pending": "Creating…"
+    },
+    "list": {
+      "title": "Projects",
+      "empty": "No projects yet. Create one to upload a video.",
+      "counts": "{clips, plural, =0 {No clips} one {# clip} other {# clips}} · {exports, plural, =0 {no exports} one {# export} other {# exports}}"
+    },
+    "projectStatus": {
+      "DRAFT": "Draft",
+      "UPLOADING": "Uploading",
+      "READY": "Ready to process",
+      "PROCESSING": "Processing",
+      "NEEDS_REVIEW": "Needs review",
+      "COMPLETED": "Completed",
+      "FAILED": "Failed"
+    },
+    "sourceStatus": {
+      "PENDING_UPLOAD": "Upload started",
+      "UPLOADED": "Checking",
+      "VERIFIED": "Verified",
+      "REJECTED": "Rejected",
+      "EXPIRED": "Upload expired"
+    },
+    "jobKind": {
+      "ANALYZE": "File check",
+      "TRANSCRIBE": "Transcription and clip suggestions",
+      "TRANSLATE": "Translation",
+      "EXPORT": "Clip export"
+    },
+    "jobState": {
+      "QUEUED": "Queued",
+      "RUNNING": "Running",
+      "SUCCEEDED": "Done",
+      "FAILED": "Failed",
+      "CANCELLED": "Cancelled"
+    },
+    "stepState": {
+      "PENDING": "Waiting",
+      "RUNNING": "Running",
+      "SUCCEEDED": "Done",
+      "FAILED": "Failed"
+    },
+    "stage": {
+      "VERIFY": "Check file",
+      "TRANSCRIBE": "Transcribe",
+      "SUGGEST": "Suggest clips",
+      "TRANSLATE": "Translate",
+      "RENDER": "Render"
+    },
+    "transcriptKind": {
+      "ORIGINAL": "Transcript",
+      "TRANSLATION": "Translation"
+    },
+    "clipStatus": {
+      "SUGGESTED": "Awaiting review",
+      "APPROVED": "Approved",
+      "REJECTED": "Rejected"
+    },
+    "clipOrigin": {
+      "SUGGESTED": "Suggested by rules",
+      "MANUAL": "Added by a person"
+    },
+    "exportStatus": {
+      "QUEUED": "Queued",
+      "RENDERING": "Rendering",
+      "READY": "Ready",
+      "FAILED": "Failed",
+      "CANCELLED": "Cancelled"
+    },
+    "aspect": {
+      "PORTRAIT_9_16": "Vertical 9:16",
+      "LANDSCAPE_16_9": "Landscape 16:9",
+      "SQUARE_1_1": "Square 1:1"
+    },
+    "languages": {
+      "ar": "Arabic",
+      "en": "English",
+      "fr": "French",
+      "es": "Spanish",
+      "tr": "Turkish",
+      "ur": "Urdu"
+    },
+    "reasons": {
+      "question": "Asks a question",
+      "number": "Mentions a number",
+      "exclamation": "Emphatic",
+      "hook_word": "Hook words",
+      "fits_length": "Good length for short video"
+    },
+    "events": {
+      "project_created": "Project created",
+      "upload_started": "Upload started",
+      "upload_completed": "Upload completed",
+      "upload_expired": "Unfinished upload expired",
+      "job_queued": "Job queued",
+      "job_retrying": "Will retry",
+      "job_failed": "Job failed",
+      "job_succeeded": "Job finished",
+      "job_cancelled": "Job cancelled",
+      "job_resumed": "Job resumed",
+      "source_verified": "File verified",
+      "transcribed": "Transcribed",
+      "clips_suggested": "Clips suggested",
+      "translated": "Translated",
+      "export_ready": "Export ready",
+      "clip_reviewed": "Clip reviewed"
+    },
+    "failures": {
+      "upload_missing": "The uploaded file was not found. Upload it again.",
+      "size_mismatch": "The uploaded file's size does not match what was announced.",
+      "too_large": "The file is larger than the allowed size.",
+      "unsupported_format": "This file is not a supported video or audio format.",
+      "type_mismatch": "The file's contents do not match its declared type.",
+      "unreadable_media": "The file could not be read as video or audio.",
+      "too_long": "The media is longer than the allowed duration.",
+      "no_audio": "This media has no audio track to transcribe.",
+      "no_video": "This media has no video track, so clips cannot be exported.",
+      "provider_disabled": "AI processing is not enabled in this environment.",
+      "unsupported_language": "This language is not supported.",
+      "provider_unavailable": "The processing service is unavailable. It will be retried.",
+      "provider_quota": "The processing service's quota was reached.",
+      "provider_invalid_output": "The processing service returned invalid results.",
+      "provider_timeout": "The processing service took too long.",
+      "credits_insufficient": "Not enough credits. No charge was made.",
+      "credits_cap": "The daily credit limit was reached. No charge was made.",
+      "step_timeout": "A step took too long and was stopped.",
+      "ffmpeg_failed": "The media could not be processed.",
+      "render_invalid": "The rendered file failed verification and was discarded.",
+      "storage_unavailable": "Storage is unavailable. It will be retried.",
+      "deadline_reached": "The job ran past its time limit.",
+      "max_attempts": "The job failed after all retries.",
+      "cancelled": "Cancelled.",
+      "internal_error": "An unexpected error occurred."
+    },
+    "provider": {
+      "disabled": "AI processing is not enabled here. You can upload and check files, but transcription and translation are unavailable.",
+      "simulated": "Simulation mode: transcripts and translations here are generated placeholder text, not a real transcription of your media. They are never charged."
+    },
+    "simulated": {
+      "badge": "Simulated",
+      "transcript": "This text was generated by the simulator. It is not what was said in your media."
+    },
+    "source": {
+      "title": "Source media",
+      "pending": "An upload was started and not finished. It expires automatically.",
+      "checking": "Checking the uploaded file…",
+      "limits": "Up to {minutes} minutes. MP4, MOV, WebM, MP3, M4A or WAV.",
+      "file": "File",
+      "duration": "Duration",
+      "dimensions": "Dimensions",
+      "audioOnly": "Audio only",
+      "tracks": "Tracks",
+      "video": "Video",
+      "audio": "Audio"
+    },
+    "upload": {
+      "choose": "Choose a video or audio file",
+      "limits": "Up to {mb} MB",
+      "progress": "Upload progress",
+      "percent": "Uploading… {percent}%",
+      "cancel": "Cancel upload",
+      "finishing": "Finishing upload…",
+      "done": "Uploaded. The file is being checked.",
+      "tooLarge": "The file is larger than the allowed size.",
+      "unsupported": "This file type is not supported.",
+      "transferFailed": "The upload failed. Check your connection and try again."
+    },
+    "transcript": {
+      "title": "Transcript",
+      "needsSource": "Upload a file first.",
+      "running": "Transcribing… this page updates on its own.",
+      "none": "No transcript yet.",
+      "start": "Transcribe and suggest clips",
+      "language": "Spoken language",
+      "autoDetect": "Detect automatically",
+      "languageUnknown": "language unknown",
+      "segments": "{count, plural, one {# line} other {# lines}}",
+      "edit": "Edit",
+      "edited": "edited",
+      "text": "Line text"
+    },
+    "translate": {
+      "title": "Translate",
+      "target": "Target language",
+      "submit": "Request translation"
+    },
+    "estimate": {
+      "free": "About {minutes} min of media. No credits will be charged.",
+      "transcription": "About {minutes} min of media. Estimated cost: {credits} credits, held when work starts and refunded if it fails.",
+      "translation": "Estimated cost per language: {credits} credits ({minutes} min).",
+      "export": "Estimated export cost: {credits} credits, charged only when a verified file is ready."
+    },
+    "clips": {
+      "title": "Clips",
+      "explain": "Suggestions come from simple rules on the transcript text and timing. Review each one before exporting.",
+      "empty": "No clips yet.",
+      "needsTranscript": "Clips are suggested after transcription.",
+      "score": "score {score}",
+      "edit": "Edit bounds and framing",
+      "titleField": "Title",
+      "cropX": "Horizontal framing (0–100)",
+      "cropHint": "0 = left edge, 50 = centre, 100 = right edge.",
+      "editResetsReview": "Changing the bounds or framing of an approved clip returns it to review.",
+      "approve": "Approve",
+      "reject": "Reject",
+      "add": "Add a clip manually",
+      "addSubmit": "Add clip"
+    },
+    "export": {
+      "needsApproval": "Export is available after the clip is approved.",
+      "aspect": "Aspect ratio",
+      "subtitles": "Burn in subtitles",
+      "noSubtitles": "No subtitles",
+      "submit": "Export clip",
+      "withSubtitles": "with subtitles",
+      "download": "Download"
+    },
+    "jobs": {
+      "title": "Processing",
+      "empty": "Nothing has been processed yet.",
+      "attempts": "attempt {attempts} of {max}",
+      "retryAt": "Next attempt: {at}",
+      "cancel": "Cancel",
+      "cancelConfirm": "Cancel this job? Held credits are released.",
+      "retry": "Retry",
+      "log": "Activity log"
+    },
+    "time": {
+      "start": "Start (s)",
+      "end": "End (s)",
+      "startSeconds": "Start (seconds)",
+      "endSeconds": "End (seconds)"
+    },
+    "common": {
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "requesting": "Requesting…"
     }
   }
 }

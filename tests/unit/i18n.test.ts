@@ -66,6 +66,13 @@ const SAMPLE_PARAMS = {
   end: "31 January 2027",
   // Workspace dashboard.
   percent: "40%",
+  // Creator Studio (Pass 8).
+  score: 45,
+  mb: 500,
+  clips: 3,
+  exports: 1,
+  attempts: 1,
+  at: "Oct 18, 2026, 9:00 PM",
   // AI Marketing Engine (Phase 4).
   words: "cheap",
   number: 2,

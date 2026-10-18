@@ -33,6 +33,7 @@ export function AppShell({ workspace, workspaces, user, nav, signOut, children }
     "content",
     "social",
     "ai",
+    "studio",
     "autopilot",
     "ads",
     "integrations",

@@ -87,6 +87,11 @@ export const AUDIT_ACTIONS = [
   "video.job_finished",
   "video.attempt_failed",
   "video.job_reviewed",
+  // AI Creator Studio (Pass 8). Metadata: kinds, codes and flags only.
+  "creator.project_created",
+  "creator.processing_requested",
+  "creator.export_requested",
+  "creator.job_cancelled",
   // Orchestration (AI Marketing Manager). Metadata: run/task ids and keys, workflow,
   // states, failure codes, policy field names, counts and content ids — never prompts or
   // generated text.

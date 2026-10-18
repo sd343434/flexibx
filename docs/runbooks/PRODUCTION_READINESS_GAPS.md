@@ -432,3 +432,20 @@ test; **F** not implemented.
 | Data residency and legal         | D         | Region, DPA, privacy policy and retention periods need an owner's legal decision (§ 6).                                                                                                                                          |
 | Dependency advisories            | B         | Prisma 7.10.1 upgrade verified in isolation, deferred to the 2026-10-22 gate (§ 2); `braces` has no fix upstream.                                                                                                                |
 | Planning task retry overlap      | F (low)   | A timed-out planning task may start its retry while its AI call (bounded by `AI_TIMEOUT_MS`) is finishing; the abort signal is not passed into the AI call.                                                                      |
+
+## 13. Pass 8: Creator Studio — status by evidence
+
+Pass 8 (2026-10-18) added the Creator Studio pipeline ([`CREATOR_STUDIO.md`](CREATOR_STUDIO.md)).
+States as in § 12.
+
+| Area                                     | State     | Evidence / what is missing                                                                                                                                                            |
+| ---------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Upload, checking, limits, expiry         | A, then B | Integration-tested with the in-memory store; E2E through the in-app test route. Never run against a real bucket (CORS rule in the runbook, § 4).                                      |
+| FFmpeg analysis, cut, reframe, subtitles | A         | Real FFmpeg 6.1 in the integration suite on small synthetic files; output verified by ffprobe. CI now installs FFmpeg (unproven while CI is blocked, § 12).                           |
+| Worker, leases, timeouts, cancel         | A         | Lease loss, takeover, step timeout with SIGKILL, cancel and resume: integration-tested. Never run as a hosted process.                                                                |
+| Credits (hold / capture / release)       | A         | No double charge on lease loss or retry, release on failure and cancel, insufficient credits: integration-tested. Prices are provisional (`pricing.ts`) and need an owner's approval. |
+| Transcription and translation            | C, D      | **Simulator only** (labelled; refused in production). A real provider needs a choice, a DPA, a data region and explicit authorization to send user media. Default `disabled`.         |
+| Clip suggestions                         | A         | Rule-based (`rules-v1`) on transcript text and timing; no AI. Quality on real speech unmeasured until a real transcript exists.                                                       |
+| Large files                              | F         | Single signed PUT, at most 500 MB; no multipart or resumable upload; the worker holds the source in memory once.                                                                      |
+| Retention of sources and exports         | F         | Kept until the project is deleted; deletion is not exposed yet. Needs a retention decision.                                                                                           |
+| Monitoring of creator jobs               | F         | No `ops-status` check for queued jobs without a worker.                                                                                                                               |

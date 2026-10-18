@@ -180,6 +180,11 @@ export const CONTENT_TYPE_EXTENSIONS = {
   "image/svg+xml": "svg",
   "video/mp4": "mp4",
   "video/webm": "webm",
+  // Creator Studio sources (Pass 8): checked against the file's own header before use.
+  "video/quicktime": "mov",
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/wav": "wav",
 } as const;
 
 export type AllowedContentType = keyof typeof CONTENT_TYPE_EXTENSIONS;
@@ -204,6 +209,21 @@ export const STORAGE_CATEGORIES = {
   "generated-videos": { maxBytes: 500 * MiB, contentTypes: ["video/mp4", "video/webm"] },
   // Marketing Core media library (Phase 3): raster images only (no SVG: it can carry script).
   "content-media": { maxBytes: 10 * MiB, contentTypes: ["image/png", "image/jpeg", "image/webp"] },
+  // Creator Studio (Pass 8): uploaded sources (private; the per-deployment limit is
+  // CREATOR_MAX_UPLOAD_MB, at most this — the worker holds a source in memory while it
+  // copies it to its scratch directory) and rendered clips.
+  "creator-sources": {
+    maxBytes: 500 * MiB,
+    contentTypes: [
+      "video/mp4",
+      "video/quicktime",
+      "video/webm",
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/wav",
+    ],
+  },
+  "creator-exports": { maxBytes: 500 * MiB, contentTypes: ["video/mp4"] },
 } as const satisfies Record<
   string,
   { maxBytes: number; contentTypes: readonly AllowedContentType[] }

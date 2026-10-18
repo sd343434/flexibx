@@ -71,6 +71,12 @@ model User {
   campaignPlansApproved     CampaignPlan[]
   metricImports             MetricImport[]
   insightsSourcesCreated    InsightsSource[]          @relation("InsightsSourceCreator")
+  creatorProjectsCreated    CreatorProject[]          @relation("CreatorProjectCreator")
+  creatorSourcesCreated     CreatorSource[]           @relation("CreatorSourceCreator")
+  creatorJobsRequested      CreatorJob[]              @relation("CreatorJobRequester")
+  creatorClipsReviewed      CreatorClip[]             @relation("CreatorClipReviewer")
+  creatorExportsRequested   CreatorExport[]           @relation("CreatorExportRequester")
+  creatorEventsActed        CreatorProjectEvent[]     @relation("CreatorEventActor")
   insightsRunsRequested     InsightsSyncRun[]         @relation("InsightsRunRequester")
   recommendationsDecided    MarketingRecommendation[]
   mediaUploaded             MediaAsset[]
@@ -169,6 +175,15 @@ model Workspace {
   recommendations       MarketingRecommendation[]
   insightsSources       InsightsSource[]
   insightsSyncRuns      InsightsSyncRun[]
+  creatorProjects       CreatorProject[]
+  creatorSources        CreatorSource[]
+  creatorJobs           CreatorJob[]
+  creatorJobSteps       CreatorJobStep[]
+  creatorTranscripts    CreatorTranscript[]
+  creatorSegments       CreatorTranscriptSegment[]
+  creatorClips          CreatorClip[]
+  creatorExports        CreatorExport[]
+  creatorEvents         CreatorProjectEvent[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -2612,4 +2627,403 @@ model InsightsSyncRun {
   @@index([requestedByUserId])
   @@index([importId])
   @@map("insights_sync_runs")
+}
+
+// ── AI Creator Studio (Pass 8): video repurposing ─────────────────────────────
+
+enum CreatorProjectStatus {
+  DRAFT
+  /// A source upload was started and not finished yet.
+  UPLOADING
+  /// A verified source is ready; processing waits for the person to confirm its cost.
+  READY
+  PROCESSING
+  NEEDS_REVIEW
+  COMPLETED
+  /// The last job failed; the project can be retried (nothing is lost).
+  FAILED
+
+  @@map("creator_project_status")
+}
+
+enum CreatorSourceStatus {
+  PENDING_UPLOAD
+  UPLOADED
+  VERIFIED
+  REJECTED
+  EXPIRED
+
+  @@map("creator_source_status")
+}
+
+enum CreatorJobKind {
+  /// Verify the uploaded bytes and read the media's properties (ffprobe). Free.
+  ANALYZE
+  /// Extract the audio, transcribe it, suggest clips.
+  TRANSCRIBE
+  TRANSLATE
+  /// Cut, reframe and render one reviewed clip, then store it.
+  EXPORT
+
+  @@map("creator_job_kind")
+}
+
+enum CreatorJobState {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@map("creator_job_state")
+}
+
+enum CreatorStepState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("creator_step_state")
+}
+
+enum CreatorTranscriptKind {
+  ORIGINAL
+  TRANSLATION
+
+  @@map("creator_transcript_kind")
+}
+
+enum CreatorClipStatus {
+  SUGGESTED
+  APPROVED
+  REJECTED
+
+  @@map("creator_clip_status")
+}
+
+enum CreatorAspectRatio {
+  PORTRAIT_9_16
+  LANDSCAPE_16_9
+  SQUARE_1_1
+
+  @@map("creator_aspect_ratio")
+}
+
+enum CreatorExportStatus {
+  QUEUED
+  RENDERING
+  READY
+  FAILED
+  CANCELLED
+
+  @@map("creator_export_status")
+}
+
+/// A content project: one source video or audio and everything made from it.
+model CreatorProject {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  name            String               @db.VarChar(200)
+  description     String?              @db.VarChar(2000)
+  status          CreatorProjectStatus @default(DRAFT)
+  createdByUserId String?              @map("created_by_user_id") @db.Uuid
+  version         Int                  @default(1)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User?                 @relation("CreatorProjectCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  sources     CreatorSource[]
+  jobs        CreatorJob[]
+  transcripts CreatorTranscript[]
+  clips       CreatorClip[]
+  exports     CreatorExport[]
+  events      CreatorProjectEvent[]
+
+  @@index([workspaceId, updatedAt(sort: Desc)])
+  @@index([createdByUserId])
+  @@map("creator_projects")
+}
+
+/// An uploaded source file. Bytes live in private storage (`creator-sources`); every
+/// property below is read from the file itself (sniffed header, ffprobe), never trusted
+/// from the browser.
+model CreatorSource {
+  id                  String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String              @map("workspace_id") @db.Uuid
+  projectId           String              @map("project_id") @db.Uuid
+  status              CreatorSourceStatus @default(PENDING_UPLOAD)
+  storageProvider     StorageProvider     @map("storage_provider")
+  storageKey          String              @unique @map("storage_key") @db.VarChar(300)
+  /// The browser's file name, shown only (never part of a key or a path).
+  originalName        String              @map("original_name") @db.VarChar(200)
+  declaredContentType String              @map("declared_content_type") @db.VarChar(100)
+  declaredBytes       Int                 @map("declared_bytes")
+  uploadExpiresAt     DateTime            @map("upload_expires_at") @db.Timestamptz(3)
+  uploadedAt          DateTime?           @map("uploaded_at") @db.Timestamptz(3)
+  verifiedAt          DateTime?           @map("verified_at") @db.Timestamptz(3)
+  /// Container recognised from the file's first bytes (mp4, mov, webm, mp3, wav, m4a).
+  container           String?             @db.VarChar(20)
+  byteSize            Int?                @map("byte_size")
+  sha256              String?             @db.VarChar(64)
+  durationMs          Int?                @map("duration_ms")
+  width               Int?
+  height              Int?
+  /// Frames per second × 1000 (integer, no float rounding in comparisons).
+  fpsMilli            Int?                @map("fps_milli")
+  hasAudio            Boolean?            @map("has_audio")
+  hasVideo            Boolean?            @map("has_video")
+  videoCodec          String?             @map("video_codec") @db.VarChar(40)
+  audioCodec          String?             @map("audio_codec") @db.VarChar(40)
+  rejectionCode       String?             @map("rejection_code") @db.VarChar(60)
+  createdByUserId     String?             @map("created_by_user_id") @db.Uuid
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     CreatorProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User?               @relation("CreatorSourceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  jobs        CreatorJob[]
+  transcripts CreatorTranscript[]
+  clips       CreatorClip[]
+
+  @@index([workspaceId, projectId, createdAt(sort: Desc)])
+  @@index([status, uploadExpiresAt])
+  @@index([createdByUserId])
+  @@map("creator_sources")
+}
+
+/// One unit of background work, claimed by a worker with a lease. Every write a worker
+/// makes is conditional on its lease token, so a worker that lost the job writes nothing.
+model CreatorJob {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  projectId         String          @map("project_id") @db.Uuid
+  sourceId          String          @map("source_id") @db.Uuid
+  exportId          String?         @unique @map("export_id") @db.Uuid
+  kind              CreatorJobKind
+  state             CreatorJobState @default(QUEUED)
+  /// The step being worked on (codes of creator_job_steps.stage).
+  stage             String?         @db.VarChar(40)
+  attempts          Int             @default(0)
+  maxAttempts       Int             @default(3) @map("max_attempts")
+  leaseToken        String?         @map("lease_token") @db.Uuid
+  leaseExpiresAt    DateTime?       @map("lease_expires_at") @db.Timestamptz(3)
+  runAfter          DateTime        @default(now()) @map("run_after") @db.Timestamptz(3)
+  deadlineAt        DateTime        @map("deadline_at") @db.Timestamptz(3)
+  failureCode       String?         @map("failure_code") @db.VarChar(60)
+  /// Options chosen by the person (e.g. the translation's target language). Codes only.
+  options           Json            @default("{}")
+  idempotencyKey    String          @map("idempotency_key") @db.VarChar(120)
+  requestedByUserId String?         @map("requested_by_user_id") @db.Uuid
+  startedAt         DateTime?       @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime?       @map("finished_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     CreatorProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source      CreatorSource       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  export      CreatorExport?      @relation(fields: [exportId], references: [id], onDelete: Cascade)
+  requestedBy User?               @relation("CreatorJobRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  steps       CreatorJobStep[]
+  transcripts CreatorTranscript[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([state, runAfter])
+  @@index([state, leaseExpiresAt])
+  @@index([workspaceId, projectId, createdAt(sort: Desc)])
+  @@index([sourceId])
+  @@index([requestedByUserId])
+  @@map("creator_jobs")
+}
+
+/// One step of a job. A succeeded step is never run again; its credit hold (if any) is
+/// recorded here so a retried attempt never holds twice.
+model CreatorJobStep {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String           @map("workspace_id") @db.Uuid
+  jobId       String           @map("job_id") @db.Uuid
+  stage       String           @db.VarChar(40)
+  position    Int
+  state       CreatorStepState @default(PENDING)
+  attempts    Int              @default(0)
+  holdId      String?          @map("hold_id") @db.Uuid
+  provider    String?          @db.VarChar(40)
+  model       String?          @db.VarChar(120)
+  simulated   Boolean          @default(false)
+  /// What the step measured (durations, counts, codes) — never user content.
+  output      Json             @default("{}")
+  errorCode   String?          @map("error_code") @db.VarChar(60)
+  startedAt   DateTime?        @map("started_at") @db.Timestamptz(3)
+  finishedAt  DateTime?        @map("finished_at") @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  job       CreatorJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, stage])
+  @@index([workspaceId, jobId])
+  @@map("creator_job_steps")
+}
+
+/// A transcript (or a translation of one), with the provider that made it. `simulated`
+/// marks text produced by the built-in simulator: it never comes from the media.
+model CreatorTranscript {
+  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String                @map("workspace_id") @db.Uuid
+  projectId        String                @map("project_id") @db.Uuid
+  sourceId         String                @map("source_id") @db.Uuid
+  jobId            String?               @map("job_id") @db.Uuid
+  kind             CreatorTranscriptKind
+  language         String                @db.VarChar(16)
+  translatedFromId String?               @map("translated_from_id") @db.Uuid
+  provider         String                @db.VarChar(40)
+  model            String?               @db.VarChar(120)
+  simulated        Boolean
+  segmentCount     Int                   @map("segment_count")
+  editedAt         DateTime?             @map("edited_at") @db.Timestamptz(3)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace      Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project        CreatorProject             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source         CreatorSource              @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  job            CreatorJob?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  translatedFrom CreatorTranscript?         @relation("CreatorTranslation", fields: [translatedFromId], references: [id], onDelete: Cascade)
+  translations   CreatorTranscript[]        @relation("CreatorTranslation")
+  segments       CreatorTranscriptSegment[]
+  clips          CreatorClip[]
+  exports        CreatorExport[]
+
+  @@unique([jobId])
+  @@unique([translatedFromId, language])
+  @@index([workspaceId, projectId])
+  @@index([sourceId])
+  @@map("creator_transcripts")
+}
+
+model CreatorTranscriptSegment {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String   @map("workspace_id") @db.Uuid
+  transcriptId String   @map("transcript_id") @db.Uuid
+  position     Int
+  startMs      Int      @map("start_ms")
+  endMs        Int      @map("end_ms")
+  text         String   @db.VarChar(2000)
+  edited       Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  transcript CreatorTranscript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  @@unique([transcriptId, position])
+  @@index([workspaceId])
+  @@map("creator_transcript_segments")
+}
+
+/// A clip suggested from the transcript (rule-based, from text and timestamps only) or
+/// made by a person; reviewed before it can be exported.
+model CreatorClip {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String            @map("workspace_id") @db.Uuid
+  projectId        String            @map("project_id") @db.Uuid
+  sourceId         String            @map("source_id") @db.Uuid
+  transcriptId     String?           @map("transcript_id") @db.Uuid
+  title            String            @db.VarChar(200)
+  startMs          Int               @map("start_ms")
+  endMs            Int               @map("end_ms")
+  suggestedStartMs Int?              @map("suggested_start_ms")
+  suggestedEndMs   Int?              @map("suggested_end_ms")
+  text             String            @db.VarChar(4000)
+  /// Signal codes behind a suggestion (e.g. `question`, `number`, `fits_length`).
+  reasons          String[]          @default([])
+  /// Internal ranking 0–100 from those signals — not a probability of success.
+  score            Int               @default(0)
+  status           CreatorClipStatus @default(SUGGESTED)
+  origin           String            @db.VarChar(20)
+  simulated        Boolean           @default(false)
+  /// Horizontal focus of the reframe crop, 0 (left) – 100 (right); 50 = centre.
+  cropX            Int               @default(50) @map("crop_x")
+  version          Int               @default(1)
+  reviewedByUserId String?           @map("reviewed_by_user_id") @db.Uuid
+  reviewedAt       DateTime?         @map("reviewed_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project    CreatorProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source     CreatorSource      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  transcript CreatorTranscript? @relation(fields: [transcriptId], references: [id], onDelete: SetNull)
+  reviewedBy User?              @relation("CreatorClipReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  exports    CreatorExport[]
+
+  @@index([workspaceId, projectId, startMs])
+  @@index([sourceId])
+  @@index([reviewedByUserId])
+  @@map("creator_clips")
+}
+
+/// A rendered clip. The clip's bounds and crop are copied when it is requested, so the
+/// file always matches what was asked for. READY only once the file was verified and
+/// stored (private `creator-exports`, downloaded through short-lived links).
+model CreatorExport {
+  id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String              @map("workspace_id") @db.Uuid
+  projectId            String              @map("project_id") @db.Uuid
+  clipId               String              @map("clip_id") @db.Uuid
+  status               CreatorExportStatus @default(QUEUED)
+  aspectRatio          CreatorAspectRatio  @map("aspect_ratio")
+  burnSubtitles        Boolean             @default(false) @map("burn_subtitles")
+  subtitleTranscriptId String?             @map("subtitle_transcript_id") @db.Uuid
+  format               String              @default("mp4") @db.VarChar(10)
+  startMs              Int                 @map("start_ms")
+  endMs                Int                 @map("end_ms")
+  cropX                Int                 @map("crop_x")
+  storageProvider      StorageProvider?    @map("storage_provider")
+  storageKey           String?             @unique @map("storage_key") @db.VarChar(300)
+  byteSize             Int?                @map("byte_size")
+  sha256               String?             @db.VarChar(64)
+  durationMs           Int?                @map("duration_ms")
+  width                Int?
+  height               Int?
+  failureCode          String?             @map("failure_code") @db.VarChar(60)
+  requestedByUserId    String?             @map("requested_by_user_id") @db.Uuid
+  readyAt              DateTime?           @map("ready_at") @db.Timestamptz(3)
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace          Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project            CreatorProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clip               CreatorClip        @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  subtitleTranscript CreatorTranscript? @relation(fields: [subtitleTranscriptId], references: [id], onDelete: SetNull)
+  requestedBy        User?              @relation("CreatorExportRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  job                CreatorJob?
+
+  @@index([workspaceId, projectId, createdAt(sort: Desc)])
+  @@index([clipId])
+  @@index([requestedByUserId])
+  @@map("creator_exports")
+}
+
+/// What happened in a project, in order (append-only; codes, counts and ids only).
+model CreatorProjectEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  type        String   @db.VarChar(60)
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   CreatorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor     User?          @relation("CreatorEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, projectId, createdAt(sort: Desc)])
+  @@index([actorUserId])
+  @@map("creator_project_events")
 }

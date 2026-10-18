@@ -8,6 +8,7 @@ import {
   parseServerEnv,
   parseStorageEnv,
   parseVideoEnv,
+  parseCreatorEnv,
   type AdsEnv,
   type BillingEnv,
   type AiEnv,
@@ -15,6 +16,7 @@ import {
   type ServerEnv,
   type StorageEnv,
   type VideoEnv,
+  type CreatorEnv,
 } from "./env-schema";
 
 // Validated lazily (on first use) rather than at import time, so `next build` and
@@ -25,6 +27,7 @@ let storageEnv: StorageEnv | undefined;
 let authEnv: AuthEnv | undefined;
 let aiEnv: AiEnv | undefined;
 let videoEnv: VideoEnv | undefined;
+let creatorEnv: CreatorEnv | undefined;
 let adsEnv: AdsEnv | undefined;
 let billingEnv: BillingEnv | undefined;
 
@@ -55,6 +58,12 @@ export function getAiEnv(): AiEnv {
 export function getVideoEnv(): VideoEnv {
   videoEnv ??= parseVideoEnv(process.env);
   return videoEnv;
+}
+
+/** Creator Studio settings are validated only when the studio is first used. */
+export function getCreatorEnv(): CreatorEnv {
+  creatorEnv ??= parseCreatorEnv(process.env);
+  return creatorEnv;
 }
 
 /** Advertising platform settings are validated only when the advertising area is used. */

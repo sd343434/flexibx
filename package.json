@@ -31,6 +31,7 @@
     "phase:validate": "tsx scripts/phase-status/validate.ts",
     "video:retention": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/video-retention/run.ts",
     "automation:tick": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/automation/tick.ts",
+    "creator:worker": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/creator/worker.ts",
     "admin:mfa-reset": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/admin/mfa-reset.ts",
     "admin:grant": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/admin/grant.ts",
     "ai:review-input": "tsx scripts/ai-review/review-input.ts",

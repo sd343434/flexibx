@@ -271,6 +271,11 @@ export interface HoldRequest {
   readonly feature: CreditFeature;
   /** One hold per task attempt; reusing a key returns the existing hold. */
   readonly idempotencyKey: string;
+  /**
+   * How many units of the feature (e.g. started minutes of media); the hold is the
+   * feature's price times this. Default 1.
+   */
+  readonly units?: number;
   readonly reference: string | null;
   readonly userId: string | null;
   readonly timeZone: string;
@@ -301,7 +306,11 @@ export async function holdCredits(
   if (existing !== null)
     return { holdId: existing.id, amount: existing.amount, status: existing.status };
 
-  const price = FEATURE_PRICES[feature];
+  const units = request.units ?? 1;
+  if (!Number.isInteger(units) || units < 1 || units > 10_000) {
+    throw new AppError("VALIDATION_FAILED", { message: "Invalid credit units" });
+  }
+  const price = FEATURE_PRICES[feature] * units;
   // The workspace's own caps first (they apply whatever the balance).
   if (account.dailyCap !== null) {
     const today = await committedSince(tx, workspaceId, startOfDay(now, request.timeZone));

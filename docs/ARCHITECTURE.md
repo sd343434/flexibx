@@ -1121,3 +1121,86 @@ nothing is written to Meta, published, sent or spent.
   - Recorded numbers carry their source badges ("Read from Meta", "Entered by a
     person").
   - Arabic and English; permission names and ids are shown left to right.
+
+## 23. Creator Studio (Pass 8)
+
+The Creator Studio is a video repurposing pipeline: one source file becomes reviewed,
+reframed short clips. Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md).
+
+- **Data (migration `20261020090000_creator_studio`):**
+  - Tables:
+    - `creator_projects`;
+    - `creator_sources` (the declared and the detected type, size and duration; probe
+      fields);
+    - `creator_jobs` (kind, state, stage, lease, deadline, attempts, idempotency key) and
+      `creator_job_steps` (one per stage, with the credit hold, provider and `simulated`);
+    - `creator_transcripts` and `creator_transcript_segments` (originals and
+      translations);
+    - `creator_clips` (bounds, suggested bounds, reasons, score, framing, review status,
+      version);
+    - `creator_exports` (a snapshot of the clip's bounds and framing at request time,
+      plus the stored file);
+    - `creator_project_events` (append-only log).
+  - Every table has workspace triggers (same workspace, immutable `workspace_id`) and the
+    tenant guard. A same-project trigger links jobs, transcripts, clips and exports.
+  - CHECK constraints cover storage-key prefixes, state consistency, lease and clip
+    ranges.
+  - A partial unique index allows one active job per source, kind and target language.
+- **Flow:**
+  - **Upload:** `startUpload` validates the declared type and size, reserves a
+    server-generated key and returns a 15-minute signed PUT. `completeUpload` checks
+    that the object exists and has the declared size, then queues **ANALYZE** (free).
+  - **ANALYZE** compares the magic bytes with the declared type, runs ffprobe, enforces
+    the duration limit and stores the media properties. A rejected file's object is
+    deleted.
+  - **TRANSCRIBE** (requested by a person after the estimate is shown) extracts 16 kHz
+    mono audio, calls the `TranscriptionProvider`, validates the timed text (ordered,
+    inside the duration, bounded) and then runs **SUGGEST**: `ruleBasedClipSuggester`,
+    at most 5 non-overlapping 15–60 s windows, each with reasons and a score.
+  - **TRANSLATE** calls the `TranslationProvider` segment by segment and keeps the
+    timing.
+  - **EXPORT** needs an approved clip. It takes a snapshot of the bounds, then cuts, crops
+    and scales to 720×1280, 1280×720 or 720×720, optionally burns in SRT subtitles,
+    checks the output with ffprobe (H.264 MP4, exact size, duration within 0.5 s),
+    stores it and charges.
+- **Jobs:**
+  - **Claiming:** a worker claims a job with a compare-and-set (`leaseToken`, 2-minute
+    lease, 30 s heartbeat). Every write after that runs in `lease.write`, which locks the
+    job row and refuses the write unless the token matches and the state is RUNNING. A
+    worker that loses its lease therefore cannot commit or charge.
+  - **Steps resume:** succeeded steps are skipped on a retry or a takeover.
+  - **Timeouts:** each step has its own timeout (via `AbortSignal.any`) and FFmpeg is
+    killed with SIGKILL. Jobs also have a 60-minute deadline and 3 attempts with
+    backoff.
+  - **Retry:** a failed or cancelled job is resumed in place.
+- **Credits:**
+  - **Hold per step attempt.** Each paid step attempt takes a hold
+    (`creator:<job>:<stage>:<attempt>`, priced as feature × started minutes).
+  - **Capture with the result.** The hold is captured in the same fenced transaction
+    that stores the step's result. A failure, a cancel or a lost lease releases it (or
+    the stale-hold sweep does).
+  - **Simulated work takes no hold.**
+  - `HoldRequest.units` was added for per-minute pricing.
+- **Providers (`providers/types.ts`):** `TranscriptionProvider`, `TranslationProvider`
+  and `ClipSuggestionProvider`.
+  - The only transcription and translation implementation is the declared simulator.
+    It is test-only, refused in production, and its output is labelled in the text, in
+    the `simulated` columns and in the UI.
+  - No external service is called.
+- **Media tools (`media/tools.ts`):**
+  - spawned without a shell, as an argument array, with a minimal environment
+    (`PATH`, `LC_ALL`);
+  - inputs read only through the `file:` protocol;
+  - output size and stdout capped, with a stderr tail kept for the logs only.
+- **Web:**
+  - Pages: the studio list and the project page.
+  - Server actions use `withAction` with strict zod input, then
+    `requireWorkspaceAccess`, then the service.
+  - Routes:
+    - the export download (a 2-minute signed redirect);
+    - SRT and VTT subtitles;
+    - the test-only in-app upload route.
+  - The page refreshes itself while work is active. Arabic is the default (RTL), with
+    English (LTR).
+- **Worker:** `pnpm creator:worker` (`scripts/creator/worker.ts`) is a separate process
+  and the only place FFmpeg runs.

@@ -19,6 +19,12 @@ export const CREDIT_FEATURES = [
   "social_reply",
   // An AI social agent reviewing its feedback to improve its own guidance.
   "social_learning",
+  // Creator Studio (Pass 8), per started minute of media: transcription and translation
+  // (charged only when a real provider did the work — never for simulated text).
+  "creator_transcription",
+  "creator_translation",
+  // Creator Studio: one rendered clip (FFmpeg on our worker), per started minute.
+  "creator_export",
 ] as const;
 
 export type CreditFeature = (typeof CREDIT_FEATURES)[number];
@@ -28,6 +34,9 @@ export const FEATURE_PRICES: Readonly<Record<CreditFeature, number>> = {
   ad_plan: 3,
   social_reply: 1,
   social_learning: 2,
+  creator_transcription: 2,
+  creator_translation: 1,
+  creator_export: 1,
 };
 
 export function isCreditFeature(value: unknown): value is CreditFeature {

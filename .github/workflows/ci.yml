@@ -71,6 +71,10 @@ jobs:
         run: pnpm exec prisma migrate deploy
       - name: Verify migration status
         run: pnpm exec prisma migrate status
+      # Creator Studio integration tests cut and render real media with FFmpeg (libx264,
+      # libass for burned-in subtitles) and a font for the subtitles.
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
       - run: pnpm test:integration
       - run: pnpm build
       - name: Install Playwright Chromium

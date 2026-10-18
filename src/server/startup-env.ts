@@ -10,6 +10,7 @@ import {
   parseServerEnv,
   parseStorageDriver,
   parseVideoEnv,
+  parseCreatorEnv,
   parseVideoRetentionEnv,
   testProvidersAllowed,
 } from "./env-schema";
@@ -35,6 +36,7 @@ const GROUPS: readonly (readonly [string, (source: EnvSource) => unknown])[] = [
   ["mail", parseMailEnv],
   ["storage", parseStorageDriver],
   ["video", parseVideoEnv],
+  ["creator", parseCreatorEnv],
   ["video retention", parseVideoRetentionEnv],
   ["ads", parseAdsEnv],
   ["billing", parseBillingEnv],

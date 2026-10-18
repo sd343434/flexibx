@@ -197,6 +197,60 @@ export function parseVideoEnv(source: EnvSource): VideoEnv {
 }
 
 /**
+ * AI Creator Studio (Pass 8).
+ * - CREATOR_AI_PROVIDER: who transcribes and translates. `disabled` (default): projects
+ *   can be created, uploaded and analysed (FFmpeg), but transcription and translation
+ *   are refused. `simulated`: the built-in simulator — no external call, no cost; its
+ *   text is labelled everywhere as simulated and never presented as the media's words;
+ *   refused when NODE_ENV=production. No commercial provider is integrated yet, so no
+ *   key is read and no file ever leaves the deployment.
+ * - CREATOR_MAX_UPLOAD_MB (1–500, default 500) and CREATOR_MAX_DURATION_SECONDS
+ *   (10–14400, default 3600): limits checked when an upload starts and after analysis.
+ * - CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH: the binaries the worker runs (default
+ *   `ffmpeg` / `ffprobe` on PATH). CREATOR_FFMPEG_THREADS (1–16, default 2) caps the
+ *   threads of one FFmpeg run. CREATOR_WORK_DIR: scratch space for the worker (default
+ *   the OS temporary directory).
+ */
+export const creatorEnvSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  CREATOR_AI_PROVIDER: z.preprocess(
+    emptyToUndefined,
+    z.enum(["disabled", "simulated"]).default("disabled"),
+  ),
+  CREATOR_MAX_UPLOAD_MB: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(1).max(500).default(500),
+  ),
+  CREATOR_MAX_DURATION_SECONDS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(10).max(14_400).default(3600),
+  ),
+  CREATOR_FFMPEG_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffmpeg")),
+  CREATOR_FFPROBE_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffprobe")),
+  CREATOR_FFMPEG_THREADS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(1).max(16).default(2),
+  ),
+  CREATOR_WORK_DIR: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+});
+
+export type CreatorEnv = z.infer<typeof creatorEnvSchema>;
+
+/** The simulated provider is test-only: refused in production like the other test providers. */
+export function parseCreatorEnv(source: EnvSource): CreatorEnv {
+  refuseTestProvider(
+    "creator",
+    source,
+    "CREATOR_AI_PROVIDER",
+    source.CREATOR_AI_PROVIDER,
+    "simulated",
+  );
+  const result = creatorEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("creator", result.error.issues);
+  return result.data;
+}
+
+/**
  * Generated video retention job.
  * - VIDEO_RETENTION_CRON_SECRET: bearer secret for POST /api/internal/video-retention,
  *   the endpoint a scheduler calls (≥ 32 characters). Unset = the endpoint is disabled

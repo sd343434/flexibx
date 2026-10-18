@@ -184,6 +184,9 @@ describe("legacy objects and required provider", () => {
       SELECT table_name, column_default, is_nullable FROM information_schema.columns
       WHERE column_name = 'storage_provider' AND table_schema = 'public' ORDER BY table_name`;
     expect(columns).toEqual([
+      // An export has no file until it is READY; a CHECK requires the provider then.
+      { table_name: "creator_exports", column_default: null, is_nullable: "YES" },
+      { table_name: "creator_sources", column_default: null, is_nullable: "NO" },
       { table_name: "generated_video_files", column_default: null, is_nullable: "NO" },
       { table_name: "media_assets", column_default: null, is_nullable: "NO" },
     ]);
