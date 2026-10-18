@@ -595,6 +595,10 @@ Code: `src/server/orchestration/`. Migration `20261010120000_orchestration_core`
   `*/2 * * * * curl -fsS --max-time 300 -X POST -H "Authorization: Bearer $AUTOMATION_CRON_SECRET" https://<app>/api/internal/automation-tick`;
   `pnpm automation:tick` does the same from a full source tree. Approved launches and
   sends start immediately after approval; the tick is what recovers them after a crash. Event-driven triggers are not implemented yet.
+  The tick's 4-minute budget is checked before every item of every phase (a long phase
+  stops early: `cutShortPhases`, status `partial`), and a video job renews its lease on
+  every poll with writes fenced on the state it read, so a runner that lost its lease
+  never charges or stores twice (`docs/runbooks/OPERATIONAL_RELIABILITY.md` § 1).
 - **First workflow: content planning** — observe (brand, goals, campaigns, pillars, the
   next 7 days in the workspace time zone) → AI ideas through the AI engine → drafts only if
   the policy allows (at most `max_drafts_per_run`, status DRAFT, never scheduled or
@@ -841,10 +845,14 @@ backup_codes_regenerated|reset_by_operator` (method only, never secrets).
   and the open holds every `LEDGER_INTEGRITY_INTERVAL_MINUTES` (read-only transaction,
   statement timeout, one run across processes via `ops_check_results`); ops-status
   reports the stored counts (critical), a failed run (critical) and a stale result
-  (warning) — never computed per request.
+  (warning) — never computed per request. It also reports a hung or partial tick, a
+  missed retention run, stuck leases (agent tasks, Insights sources), overdue or
+  unreconciled video jobs and Meta Insights / video provider failures; a failed alert
+  delivery gives its throttle slot back (`OPERATIONAL_RELIABILITY.md` § 2).
 - **Backups**: `scripts/ops/db-backup.sh`, `db-restore.sh` (empty target only, checksum
-  and name confirmation), `db-verify.sh` (row counts, ledger/hold invariants, triggers,
-  `migrate status`). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
+  and name confirmation), `db-verify.sh` (row counts against a checksummed manifest,
+  ledger/hold invariants, video usage ledger, invalid indexes, every expected index and
+  constraint, triggers, migrations; `OPERATIONAL_RELIABILITY.md` § 3). Runbooks: `docs/runbooks/BACKUP_RESTORE.md`,
   `INCIDENT_RESPONSE.md`, `DEPLOYMENT.md`, `ADMIN_PROVISIONING.md`, `DATABASE_ROLES.md` (Phase C.1 record:
   `PHASE_C_1_AUDIT.md`).
 

@@ -22,11 +22,14 @@ export async function recordJobFinished(
   name: HeartbeatJob,
   failedPhases: readonly string[],
   now: Date,
+  options: { readonly partial?: boolean } = {},
 ): Promise<void> {
   const ok = failedPhases.length === 0;
+  // partial: nothing failed, but the run stopped at its time budget with work left over
+  // (it still counts as a successful run; ops-status warns on it).
   const data = {
     lastFinishedAt: now,
-    lastStatus: ok ? "ok" : "failed",
+    lastStatus: ok ? (options.partial === true ? "partial" : "ok") : "failed",
     failedPhases: [...failedPhases],
     ...(ok ? { lastSucceededAt: now } : {}),
   };

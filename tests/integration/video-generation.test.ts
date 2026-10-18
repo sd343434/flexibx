@@ -577,6 +577,97 @@ describe("crash recovery", () => {
     });
     expect(await runVideoJob(h.deps, ctx.workspaceId, jobId)).toMatchObject({ status: "finished" });
   });
+
+  it("a runner whose lease was taken over while it waited on the provider never charges twice", async () => {
+    const ctx = await createTenant(system);
+    const h = harness({ maxPolls: 1 });
+    const { jobId } = await requestVideoGeneration(h.deps, ctx, REQUEST);
+    expect(await runVideoJob(h.deps, ctx.workspaceId, jobId)).toMatchObject({ status: "waiting" });
+
+    // Runner A is still alive but slow: its status call hangs until released.
+    let releaseA: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let aWaiting: () => void = () => undefined;
+    const aStarted = new Promise<void>((resolve) => {
+      aWaiting = resolve;
+    });
+    const slow = Object.create(h.provider) as FakeVideoProvider;
+    slow.status = async (id: string) => {
+      aWaiting();
+      await gate;
+      return h.provider.status(id);
+    };
+    const runnerA = runVideoJob({ ...h.deps, provider: slow }, ctx.workspaceId, jobId);
+    await aStarted;
+    // A's lease runs out (a slow provider). Runner B takes the job over, captures the
+    // clip and leaves it OUTPUT_READY because storage is down.
+    await system.videoGenerationJob.update({
+      where: { id: jobId },
+      data: { leaseExpiresAt: new Date(Date.now() - 1000) },
+    });
+    const storageDown = { ...h.deps, writeTarget: () => Promise.reject(new Error("down")) };
+    expect(await runVideoJob(storageDown, ctx.workspaceId, jobId)).toEqual({
+      status: "waiting",
+      reason: "storage_unavailable",
+    });
+    // A wakes up with the same SUCCEEDED answer: it must not capture the clip again.
+    releaseA();
+    expect(await runnerA).toEqual({ status: "waiting", reason: "lease_lost" });
+    expect(await ledger(jobId)).toEqual(["RESERVE:800000", "CAPTURE:400000"]);
+    expect(await runVideoJob(h.deps, ctx.workspaceId, jobId)).toEqual({
+      status: "finished",
+      state: "READY_FOR_REVIEW",
+    });
+    expect(await ledger(jobId)).toEqual(["RESERVE:800000", "CAPTURE:400000", "RELEASE:400000"]);
+    expect(await getVideoJob(db, ctx, jobId)).toMatchObject({
+      state: "READY_FOR_REVIEW",
+      capturedMicros: PER_ATTEMPT,
+      releasedMicros: RESERVED - PER_ATTEMPT,
+    });
+    expect(h.storage.objects.size).toBe(1);
+  });
+
+  it("recovery stops before the next job once the scheduler's budget runs out", async () => {
+    const ctx = await createTenant(system);
+    const h = harness({ pollsBeforeDone: 3, maxPolls: 1 });
+    for (let i = 0; i < 3; i += 1) {
+      const { jobId } = await requestVideoGeneration(h.deps, ctx, REQUEST);
+      await runVideoJob(h.deps, ctx.workspaceId, jobId);
+    }
+    let started = 0;
+    const result = await recoverVideoJobs(
+      { ...h.deps, system },
+      { shouldStop: () => started++ >= 1 },
+    );
+    expect(result.resumed).toBe(1);
+    expect(result.outcomes).toHaveLength(1);
+    // The others are still due for the next tick.
+    expect((await recoverVideoJobs({ ...h.deps, system })).resumed).toBe(3);
+  });
+
+  it("renews its lease while it polls, so a long poll is not taken over", async () => {
+    const ctx = await createTenant(system);
+    const h = harness({ pollsBeforeDone: 3, maxPolls: 10, sleepMs: 15 });
+    const { jobId } = await requestVideoGeneration(h.deps, ctx, REQUEST);
+    const seen: (Date | null)[] = [];
+    const watch = Object.create(h.provider) as FakeVideoProvider;
+    watch.status = async (id: string) => {
+      const job = await system.videoGenerationJob.findUniqueOrThrow({ where: { id: jobId } });
+      seen.push(job.leaseExpiresAt);
+      return h.provider.status(id);
+    };
+    expect(await runVideoJob({ ...h.deps, provider: watch }, ctx.workspaceId, jobId)).toMatchObject(
+      { status: "finished" },
+    );
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    // Pushed forward on every poll, not only set once when the job was claimed.
+    const times = seen.map((at) => at?.getTime() ?? 0);
+    for (let i = 1; i < times.length; i += 1) {
+      expect(times[i]).toBeGreaterThan(times[i - 1] ?? Infinity);
+    }
+  });
 });
 
 describe("database rules", () => {

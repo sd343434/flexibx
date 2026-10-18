@@ -121,56 +121,98 @@ export interface ScheduledTickSummary {
   /** Phases that failed on this tick (logged); the others still ran. */
   readonly failedPhases: readonly string[];
   /**
-   * completed: every phase was started. partial: the tick ran out of its time budget
-   * (TICK_TIME_BUDGET_MS) and did not start `skippedPhases` (the next tick runs them).
+   * completed: every phase ran to its end. partial: the tick ran out of its time budget
+   * (TICK_TIME_BUDGET_MS): it stopped `cutShortPhases` before their last item and did not
+   * start `skippedPhases` (the next tick runs what is left).
    * skipped: another tick held the single-flight lock; nothing ran.
    */
   readonly status: "completed" | "partial" | "skipped";
   /** Phases not started because the time budget had run out (partial only). */
   readonly skippedPhases: readonly string[];
+  /**
+   * Phases that stopped before their last item because the time budget ran out while
+   * they were running (partial only; the remaining items run on the next tick).
+   */
+  readonly cutShortPhases: readonly string[];
 }
 
 const EMPTY_SOCIAL = { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 } as const;
 
+/**
+ * True once the tick's time budget has run out. Phases check it before each item and stop
+ * there (the item in progress finishes); what is left runs on the next tick.
+ */
+export type ShouldStop = () => boolean;
+
 /** The work of one tick, phase by phase (injectable so a failing phase can be tested). */
 export interface TickPhases {
-  orchestration(): Promise<{
+  orchestration(shouldStop?: ShouldStop): Promise<{
     readonly recovered: number;
     readonly scheduled: number;
     readonly skippedNoDelegate: number;
     readonly executed: readonly { readonly status: string; readonly state?: string }[];
   }>;
-  social(now: Date): Promise<ScheduledTickSummary["social"]>;
+  /** `failedPhases`: social sub-phases that failed as a whole (reported as `social.<name>`). */
+  social(
+    now: Date,
+    shouldStop?: ShouldStop,
+  ): Promise<ScheduledTickSummary["social"] & { readonly failedPhases?: readonly string[] }>;
   credits(now: Date): Promise<number>;
-  video(): Promise<number>;
+  video(shouldStop?: ShouldStop): Promise<number>;
   /** Due Meta Insights sources (absent: nothing to read on this tick). */
-  insights?(): Promise<{ readonly started: number; readonly failed: number }>;
+  insights?(
+    shouldStop?: ShouldStop,
+  ): Promise<{ readonly started: number; readonly failed: number }>;
 }
 
+/**
+ * Status polls of one video job within a tick (one run per job stays well under a minute
+ * with the default 10 s interval, and far under the job's lease, which is renewed on each
+ * poll anyway); a job still rendering is resumed on the next tick.
+ */
+export const TICK_VIDEO_MAX_POLLS = 5;
+
 export const DEFAULT_TICK_PHASES: TickPhases = {
-  orchestration: () => automationTick({ ...getOrchestrationDeps(), system: getSystemDb() }),
+  orchestration: (shouldStop) =>
+    automationTick(
+      { ...getOrchestrationDeps(), system: getSystemDb() },
+      shouldStop === undefined ? {} : { shouldStop },
+    ),
   // The AI Social Manager's own sweep (publishing, drafts, unsent replies, stuck sends,
   // self-review).
-  social: async (now) => {
+  social: async (now, shouldStop) => {
     const { getSocialDeps, socialSweep } = await import("../social/social-runtime");
-    return socialSweep(getSocialDeps(), getSystemDb(), now);
+    return socialSweep(getSocialDeps(), getSystemDb(), now, undefined, shouldStop);
   },
   credits: (now) =>
     releaseStaleHolds(getSystemDb(), getDb(), now, creditsSettingsFromEnv(), 50, logger),
   // Video jobs whose runner stopped: resumed with the configured provider only (never
   // started when VIDEO_PROVIDER is disabled — nothing can be in flight then).
-  video: async () => {
+  video: async (shouldStop) => {
     if (getVideoEnv().VIDEO_PROVIDER === "disabled") return 0;
     const { getVideoGenerationDeps } = await import("../videos/generation/runtime");
     const { recoverVideoJobs } = await import("../videos/generation/video-generation-service");
-    return (await recoverVideoJobs({ ...getVideoGenerationDeps(), system: getSystemDb() })).resumed;
+    const deps = { ...getVideoGenerationDeps(), system: getSystemDb() };
+    return (
+      await recoverVideoJobs(
+        {
+          ...deps,
+          maxPolls: Math.min(deps.maxPolls ?? TICK_VIDEO_MAX_POLLS, TICK_VIDEO_MAX_POLLS),
+        },
+        shouldStop === undefined ? {} : { shouldStop },
+      )
+    ).resumed;
   },
   // Meta Insights: due sources of workspaces with a usable Meta grant (nothing when
   // META_INSIGHTS_ENABLED is off — the client does not exist then).
-  insights: async () => {
+  insights: async (shouldStop) => {
     const { getInsightsDeps } = await import("../intelligence/insights-runtime");
     const { runDueInsightsSyncs } = await import("../intelligence/insights-sync");
-    return runDueInsightsSyncs(getInsightsDeps(), getSystemDb());
+    return runDueInsightsSyncs(
+      getInsightsDeps(),
+      getSystemDb(),
+      shouldStop === undefined ? {} : { shouldStop },
+    );
   },
 };
 
@@ -201,6 +243,7 @@ async function bestEffort(name: string, work: () => Promise<unknown>): Promise<v
 async function reportTick(
   failedPhases: readonly string[],
   skippedPhases: readonly string[],
+  cutShortPhases: readonly string[],
   at: Date,
 ): Promise<void> {
   const intervalMs = ledgerIntegrityIntervalMs();
@@ -208,15 +251,17 @@ async function reportTick(
     runLedgerIntegrityCheck(getSystemDb(), at, { intervalMs }),
   );
   await bestEffort("heartbeat_finish", () =>
-    recordJobFinished(getSystemDb(), "automation-tick", failedPhases, at),
+    recordJobFinished(getSystemDb(), "automation-tick", failedPhases, at, {
+      partial: skippedPhases.length > 0 || cutShortPhases.length > 0,
+    }),
   );
   const alerts: Alert[] = [];
-  if (skippedPhases.length > 0) {
+  if (skippedPhases.length > 0 || cutShortPhases.length > 0) {
     alerts.push({
       key: "automation_tick_over_budget",
       severity: "warning",
       title: "Scheduled tick ran out of its time budget",
-      details: { skippedPhases: [...skippedPhases] },
+      details: { skippedPhases: [...skippedPhases], cutShortPhases: [...cutShortPhases] },
     });
   }
   if (failedPhases.length > 0) {
@@ -295,14 +340,16 @@ export async function runScheduledAutomationTick(
     failedPhases: [],
     status: "skipped",
     skippedPhases: [],
+    cutShortPhases: [],
   };
 }
 
 /**
- * A tick stops starting phases this long after it began (checked between phases; a phase
- * already running is not interrupted — each one bounds its own items with leases,
- * per-step timeouts and batch limits). Shorter than the 5-minute schedule, so a slow tick
- * normally finishes before the next slot; phases not started run on the next tick.
+ * A tick stops this long after it began: no phase is started after it, and a running
+ * phase stops before its next item (the item in progress finishes — each one is bounded
+ * by leases, per-step timeouts and, for video, TICK_VIDEO_MAX_POLLS). Shorter than the
+ * 5-minute schedule, so a slow tick normally finishes before the next slot; what is left
+ * runs on the next tick.
  */
 export const TICK_TIME_BUDGET_MS = 4 * 60 * 1000;
 
@@ -377,16 +424,29 @@ async function runTickPhases(
   const startedAt = elapsed();
   const failedPhases: string[] = [];
   const skippedPhases: string[] = [];
+  const cutShortPhases: string[] = [];
   await bestEffort("heartbeat_start", () =>
     recordJobStarted(getSystemDb(), "automation-tick", now()),
   );
-  async function phase<T>(name: string, fallback: T, work: () => Promise<T>): Promise<T> {
-    if (elapsed() - startedAt >= budgetMs) {
+  const overBudget = () => elapsed() - startedAt >= budgetMs;
+  async function phase<T>(
+    name: string,
+    fallback: T,
+    work: (shouldStop: ShouldStop) => Promise<T>,
+  ): Promise<T> {
+    if (overBudget()) {
       skippedPhases.push(name);
       return fallback;
     }
+    // Checked by the phase before each item: a phase never keeps the tick going long
+    // after its budget (which is what lets a slow tick overlap the next one).
+    const shouldStop = () => {
+      const stop = overBudget();
+      if (stop && !cutShortPhases.includes(name)) cutShortPhases.push(name);
+      return stop;
+    };
     try {
-      return await work();
+      return await work(shouldStop);
     } catch (error) {
       failedPhases.push(name);
       logger.error({ err: error, phase: name }, "Scheduled tick phase failed");
@@ -397,16 +457,28 @@ async function runTickPhases(
   const summary = await phase(
     "orchestration",
     { recovered: 0, scheduled: 0, skippedNoDelegate: 0, executed: [] },
-    () => phases.orchestration(),
+    (shouldStop) => phases.orchestration(shouldStop),
   );
-  const social = await phase("social", EMPTY_SOCIAL, () => phases.social(now()));
+  const sweep = await phase<Awaited<ReturnType<TickPhases["social"]>>>(
+    "social",
+    EMPTY_SOCIAL,
+    (shouldStop) => phases.social(now(), shouldStop),
+  );
+  // A social step that failed as a whole (publishing, sending…) is a failed phase too:
+  // the sweep keeps going, but the tick is not reported as healthy.
+  const { failedPhases: socialFailed = [], ...social } = sweep;
+  for (const name of socialFailed) failedPhases.push(`social.${name}`);
   const creditHoldsReleased = await phase("credits", 0, () => phases.credits(now()));
-  const videoJobsResumed = await phase("video", 0, () => phases.video());
+  const videoJobsResumed = await phase("video", 0, (shouldStop) => phases.video(shouldStop));
   const noSyncs = { started: 0, failed: 0 };
   const insightsSyncs =
     phases.insights === undefined
       ? noSyncs
-      : await phase("insights", noSyncs, () => phases.insights?.() ?? Promise.resolve(noSyncs));
+      : await phase(
+          "insights",
+          noSyncs,
+          (shouldStop) => phases.insights?.(shouldStop) ?? Promise.resolve(noSyncs),
+        );
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
     const key =
@@ -415,13 +487,13 @@ async function runTickPhases(
         : outcome.status;
     runs[key] = (runs[key] ?? 0) + 1;
   }
-  if (skippedPhases.length > 0) {
+  if (skippedPhases.length > 0 || cutShortPhases.length > 0) {
     logger.warn(
-      { event: "automation_tick.over_budget", skippedPhases, budgetMs },
+      { event: "automation_tick.over_budget", skippedPhases, cutShortPhases, budgetMs },
       "Scheduled tick ran out of its time budget",
     );
   }
-  await reportTick(failedPhases, skippedPhases, now());
+  await reportTick(failedPhases, skippedPhases, cutShortPhases, now());
   return {
     recovered: summary.recovered,
     scheduled: summary.scheduled,
@@ -433,7 +505,8 @@ async function runTickPhases(
     videoJobsResumed,
     insightsSyncs,
     failedPhases,
-    status: skippedPhases.length > 0 ? "partial" : "completed",
+    status: skippedPhases.length > 0 || cutShortPhases.length > 0 ? "partial" : "completed",
     skippedPhases,
+    cutShortPhases,
   };
 }

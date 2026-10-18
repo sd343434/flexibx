@@ -5,20 +5,27 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceRole } from "@/generated/prisma/enums";
+import { FakeVideoProvider } from "@/server/ai/providers/video/fake";
 import { databaseAlertThrottle } from "@/server/monitoring/alert-sink";
-import { recordJobFinished } from "@/server/monitoring/heartbeat";
+import { recordJobFinished, recordJobStarted } from "@/server/monitoring/heartbeat";
 import { runLedgerIntegrityCheck } from "@/server/monitoring/ledger-integrity";
 import {
   collectOpsStatus,
+  LEASE_OVERDUE_MS,
+  RETENTION_STALE_SECONDS,
   STUCK_HOLD_MS,
+  TICK_RUNNING_WARNING_SECONDS,
   TICK_STALE_SECONDS,
+  VIDEO_OVERDUE_MS,
 } from "@/server/monitoring/ops-status";
 import { runScheduledAutomationTick, type TickPhases } from "@/server/orchestration/runtime";
+import { MemoryStorageService } from "@/server/storage/memory-storage";
+import { requestVideoGeneration } from "@/server/videos/generation/video-generation-service";
 
 import { createTenant, createTestDb, resetDatabase } from "./helpers";
 
 const SECRET = ["ops", "status", "secret", "for", "tests", "0123456789abcdef"].join("-");
-const { system } = createTestDb();
+const { system, db } = createTestDb();
 const NOW = new Date();
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
 
@@ -41,6 +48,8 @@ const check = (status: Awaited<ReturnType<typeof collectOpsStatus>>, name: strin
 
 async function seedProblems() {
   const ctx = await createTenant(system, { role: WorkspaceRole.OWNER });
+  // The daily retention job is healthy: only the problems below are reported.
+  await recordJobFinished(system, "video-retention", [], ago(3_600_000));
   const workspaceId = ctx.workspaceId;
   const hold = (key: string, createdAt: Date, status: "HELD" | "RELEASED" = "HELD") =>
     system.creditHold.create({
@@ -146,6 +155,7 @@ describe("ops status", () => {
 
   it("is ok with a recent successful tick and nothing stuck", async () => {
     await recordJobFinished(system, "automation-tick", [], ago(60_000));
+    await recordJobFinished(system, "video-retention", [], ago(3_600_000));
     // Until the ledger integrity check has run once, the ledger state is a warning.
     expect((await collectOpsStatus(system, NOW)).status).toBe("warning");
     await runLedgerIntegrityCheck(system, ago(60_000), { intervalMs: 3_600_000 });
@@ -155,6 +165,183 @@ describe("ops status", () => {
 
     await recordJobFinished(system, "automation-tick", [], ago(TICK_STALE_SECONDS * 1000));
     expect((await collectOpsStatus(system, NOW)).status).toBe("critical");
+  });
+
+  it("reports a hung, partial or missed scheduled job", async () => {
+    // A partial tick: finished at its time budget with work left over.
+    await recordJobFinished(system, "automation-tick", [], ago(60_000), { partial: true });
+    let status = await collectOpsStatus(system, NOW);
+    expect(check(status, "automation_tick_last_run_partial")).toMatchObject({
+      value: 1,
+      level: "warning",
+    });
+    expect(check(status, "automation_tick_last_success_age_seconds")?.level).toBe("ok");
+    expect(check(status, "automation_tick_running_seconds")).toMatchObject({ value: 0 });
+    // A tick started long ago and never finished.
+    await recordJobStarted(
+      system,
+      "automation-tick",
+      ago((TICK_RUNNING_WARNING_SECONDS + 60) * 1000),
+    );
+    await recordJobFinished(
+      system,
+      "automation-tick",
+      [],
+      ago((TICK_RUNNING_WARNING_SECONDS + 120) * 1000),
+    );
+    status = await collectOpsStatus(system, NOW);
+    expect(check(status, "automation_tick_running_seconds")).toMatchObject({
+      value: TICK_RUNNING_WARNING_SECONDS + 60,
+      level: "warning",
+    });
+    // Video retention never ran, then ran too long ago, then recently.
+    expect(check(status, "video_retention_last_success_age_seconds")).toMatchObject({
+      value: null,
+      level: "warning",
+    });
+    await recordJobFinished(
+      system,
+      "video-retention",
+      [],
+      ago((RETENTION_STALE_SECONDS + 1) * 1000),
+    );
+    status = await collectOpsStatus(system, NOW);
+    expect(check(status, "video_retention_last_success_age_seconds")?.level).toBe("warning");
+    await recordJobFinished(system, "video-retention", [], ago(60_000));
+    status = await collectOpsStatus(system, NOW);
+    expect(check(status, "video_retention_last_success_age_seconds")?.level).toBe("ok");
+  });
+
+  it("reports stuck leases, overdue video jobs and failing Meta Insights sources", async () => {
+    const ctx = await createTenant(system, { role: WorkspaceRole.OWNER });
+    const { workspaceId } = ctx;
+    const empty = await collectOpsStatus(system, NOW);
+    for (const name of [
+      "video_jobs_overdue",
+      "video_jobs_needs_reconciliation",
+      "video_attempts_failed_24h",
+      "agent_tasks_lease_expired",
+      "insights_sources_lease_expired",
+      "insights_sync_runs_failed_24h",
+      "insights_sync_runs_partial_24h",
+      "insights_sources_failing",
+    ]) {
+      expect(check(empty, name)).toMatchObject({ value: 0, level: "ok" });
+    }
+
+    // Video: one job long past its deadline, one waiting for an operator.
+    const video = {
+      db,
+      provider: new FakeVideoProvider({ scenarios: [] }),
+      writeTarget: () =>
+        Promise.resolve({
+          provider: "LEGACY_S3" as const,
+          storage: new MemoryStorageService(),
+          confirm: () => Promise.resolve(),
+        }),
+    };
+    const request = {
+      title: "Clip",
+      prompt: "A cup of coffee",
+      durationSeconds: 8,
+      aspectRatio: "16:9" as const,
+      resolution: "720p" as const,
+      audio: false,
+      tier: "DRAFT" as const,
+    };
+    const overdue = await requestVideoGeneration(video, ctx, request);
+    await system.videoGenerationJob.update({
+      where: { id: overdue.jobId },
+      data: { deadlineAt: ago(VIDEO_OVERDUE_MS + 60_000) },
+    });
+    const held = await requestVideoGeneration(video, ctx, request);
+    await system.videoGenerationJob.update({
+      where: { id: held.jobId },
+      data: { state: "IN_PROGRESS" },
+    });
+    await system.videoGenerationJob.update({
+      where: { id: held.jobId },
+      data: { state: "NEEDS_RECONCILIATION", failureCode: "outcome_unknown" },
+    });
+
+    // An agent task still RUNNING long after its lease ended.
+    const run = await system.agentRun.create({
+      data: { workspaceId, workflow: "content_planning", trigger: "MANUAL", idempotencyKey: "k1" },
+    });
+    await system.agentTask.create({
+      data: {
+        workspaceId,
+        runId: run.id,
+        key: "observe",
+        handler: "observe",
+        risk: "INTERNAL",
+        maxAttempts: 1,
+        timeoutMs: 1000,
+        state: "RUNNING",
+        leaseToken: crypto.randomUUID(),
+        leaseExpiresAt: ago(LEASE_OVERDUE_MS + 60_000),
+      },
+    });
+
+    // Meta Insights: a source failing again and again, held by a dead run.
+    const channel = await system.socialChannel.create({
+      data: { workspaceId, platform: "FACEBOOK", externalId: "1001", pageId: "1001", name: "Page" },
+    });
+    const source = await system.insightsSource.create({
+      data: {
+        workspaceId,
+        socialChannelId: channel.id,
+        kind: "FACEBOOK_PAGE",
+        externalId: "1001",
+        pageId: "1001",
+        name: "Page",
+        failureCount: 4,
+        leaseRunId: crypto.randomUUID(),
+        leaseUntil: ago(LEASE_OVERDUE_MS + 60_000),
+      },
+    });
+    for (const runStatus of ["FAILED", "FAILED", "ABANDONED", "PARTIAL"] as const) {
+      await system.insightsSyncRun.create({
+        data: {
+          workspaceId,
+          sourceId: source.id,
+          trigger: "SCHEDULED",
+          status: runStatus,
+          startedAt: ago(120_000),
+          finishedAt: ago(60_000),
+          errorCode: runStatus === "PARTIAL" ? null : "internal_error",
+        },
+      });
+    }
+
+    const status = await collectOpsStatus(system, NOW);
+    expect(check(status, "video_jobs_overdue")).toMatchObject({ value: 1, level: "critical" });
+    expect(check(status, "video_jobs_needs_reconciliation")).toMatchObject({
+      value: 1,
+      level: "warning",
+    });
+    expect(check(status, "agent_tasks_lease_expired")).toMatchObject({
+      value: 1,
+      level: "critical",
+    });
+    expect(check(status, "insights_sources_lease_expired")).toMatchObject({
+      value: 1,
+      level: "warning",
+    });
+    expect(check(status, "insights_sync_runs_failed_24h")).toMatchObject({
+      value: 3,
+      level: "warning",
+    });
+    expect(check(status, "insights_sync_runs_partial_24h")).toMatchObject({
+      value: 1,
+      level: "ok",
+    });
+    expect(check(status, "insights_sources_failing")).toMatchObject({ value: 1, level: "warning" });
+    expect(status.status).toBe("critical");
+    // Counts and names only: no ids, page ids or names.
+    const text = JSON.stringify(status);
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(text).not.toContain("1001");
   });
 });
 
@@ -298,6 +485,19 @@ describe("tick heartbeat and alerts", () => {
     }
   }, 20_000);
 
+  it("the database throttle gives a slot back after a failed delivery, and only that slot", async () => {
+    const throttle = databaseAlertThrottle(system);
+    const at = new Date("2026-10-18T10:00:00Z");
+    expect(await throttle.claim("k", at, 30 * 60_000)).toEqual({ send: true, suppressed: 0 });
+    expect((await throttle.claim("k", at, 30 * 60_000)).send).toBe(false);
+    // Another occurrence claimed the slot since: giving back an older claim changes nothing.
+    await throttle.release?.("k", new Date(at.getTime() - 1));
+    expect((await throttle.claim("k", at, 30 * 60_000)).send).toBe(false);
+    // The failed delivery's own slot: the next occurrence is delivered, with the count.
+    await throttle.release?.("k", at);
+    expect(await throttle.claim("k", at, 30 * 60_000)).toEqual({ send: true, suppressed: 2 });
+  });
+
   it("the database throttle lets exactly one of many concurrent claims through", async () => {
     const throttle = databaseAlertThrottle(system);
     const results = await Promise.all(
@@ -334,6 +534,28 @@ describe("GET /api/internal/ops-status", () => {
     expect(body).not.toMatch(/automation_tick|credit_holds|checks/);
   });
 
+  it("answers 429 once the shared quota (60 per 10 minutes) is used up", async () => {
+    vi.stubEnv("OPS_STATUS_SECRET", SECRET);
+    vi.resetModules();
+    const route = await import("@/app/api/internal/ops-status/route");
+    const call = (authorization: string) =>
+      route.GET(
+        new Request("http://localhost:3000/api/internal/ops-status", {
+          headers: { authorization },
+        }),
+      );
+    for (let i = 0; i < 60; i += 1) {
+      expect([200, 503]).toContain((await call(`Bearer ${SECRET}`)).status);
+    }
+    const limited = await call(`Bearer ${SECRET}`);
+    expect(limited.status).toBe(429);
+    const body = await limited.text();
+    expect(body).not.toContain(SECRET);
+    expect(body).not.toMatch(/credit|tick|stuck/);
+    // A wrong token is still a 404, not a 429 (rejected calls never reach the limiter).
+    expect((await call("Bearer wrong-token-0123456789abcdef0123456789")).status).toBe(404);
+  }, 60_000);
+
   it("answers 503 when something is critical and 200 when healthy", async () => {
     vi.stubEnv("OPS_STATUS_SECRET", SECRET);
     const critical = await get(`Bearer ${SECRET}`);
@@ -342,6 +564,7 @@ describe("GET /api/internal/ops-status", () => {
     expect(((await critical.json()) as { status: string }).status).toBe("critical");
 
     await recordJobFinished(system, "automation-tick", [], new Date());
+    await recordJobFinished(system, "video-retention", [], new Date());
     await runLedgerIntegrityCheck(system, new Date(), { intervalMs: 3_600_000 });
     const healthy = await get(`Bearer ${SECRET}`);
     expect(healthy.status).toBe(200);

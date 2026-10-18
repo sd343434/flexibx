@@ -312,9 +312,22 @@ const spec = (job: JobRow): VideoSpec => ({
 
 const systemScope = (job: JobRow) => ({ workspaceId: job.workspaceId, userId: null });
 
+/**
+ * This runner no longer holds the job: its lease expired and another runner took the job
+ * over, or another runner already moved the attempt or the job on. Whatever this runner
+ * was writing is rolled back (each write is conditional on the state it read).
+ */
+class LeaseLostError extends Error {
+  constructor() {
+    super("Video job lease lost");
+    this.name = "LeaseLostError";
+  }
+}
+
 class Run {
   private readonly limits: VideoLimits;
   private readonly card: VideoRateCard;
+  private token: string | null = null;
 
   constructor(
     private readonly deps: VideoGenerationDeps,
@@ -366,11 +379,31 @@ class Run {
     data: Record<string, unknown> = {},
   ): Promise<AttemptRow> {
     assertAttemptTransition(attempt.state, to);
-    return db.videoGenerationAttempt.update({
-      where: { id: attempt.id, workspaceId: this.job.workspaceId },
+    // Conditional on the state this runner read: of two runners holding the same attempt
+    // (a lease taken over while the first one waited on the provider), only one moves it.
+    const moved = await db.videoGenerationAttempt.updateMany({
+      where: { id: attempt.id, workspaceId: this.job.workspaceId, state: attempt.state },
       data: { ...data, state: to },
+    });
+    if (moved.count !== 1) throw new LeaseLostError();
+    return db.videoGenerationAttempt.findFirstOrThrow({
+      where: { id: attempt.id, workspaceId: this.job.workspaceId },
       select: ATTEMPT_SELECT,
     });
+  }
+
+  /**
+   * Pushes the lease forward (database clock). False when another runner holds the job
+   * now: this runner must stop without writing anything more.
+   */
+  private async renewLease(): Promise<boolean> {
+    if (this.token === null) return false;
+    const now = await databaseNow(this.db);
+    const renewed = await this.db.videoGenerationJob.updateMany({
+      where: { ...this.where(), leaseToken: this.token },
+      data: { leaseExpiresAt: new Date(now.getTime() + LEASE_MS) },
+    });
+    return renewed.count === 1;
   }
 
   /** Records what one attempt was charged (CAPTURE), bounded by what is still reserved. */
@@ -446,8 +479,8 @@ class Run {
         },
       });
     }
-    await db.videoGenerationJob.update({
-      where: this.where(),
+    const ended = await db.videoGenerationJob.updateMany({
+      where: { ...this.where(), state: this.job.state },
       data: {
         state,
         failureCode,
@@ -460,6 +493,7 @@ class Run {
           : { generatedVideoId: extra.generatedVideoId }),
       },
     });
+    if (ended.count !== 1) throw new LeaseLostError();
     await recordAudit(db, systemScope(this.job), {
       action: "video.job_finished",
       entityType: "video_job",
@@ -639,6 +673,9 @@ class Run {
     const maxPolls = this.deps.maxPolls ?? 30;
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     for (let polls = 0; polls < maxPolls; polls += 1) {
+      // A slow provider can outlast the lease: renewed before every poll, so a live runner
+      // keeps the job, and one that lost it stops here.
+      if (!(await this.renewLease())) return { status: "waiting", reason: "lease_lost" };
       if (await this.pastDeadline()) {
         await provider.cancel(providerJobId).catch(() => undefined);
         await this.db.$transaction(async (tx) => {
@@ -696,6 +733,7 @@ class Run {
    * removed again and the attempt stays OUTPUT_READY for the next run.
    */
   private async store(attempt: AttemptRow): Promise<VideoRunOutcome | null> {
+    if (!(await this.renewLease())) return { status: "waiting", reason: "lease_lost" };
     const providerJobId = attempt.providerJobId ?? "";
     let bytes: Uint8Array | null = null;
     for (let tries = 0; tries < DOWNLOAD_TRIES && bytes === null; tries += 1) {
@@ -778,6 +816,7 @@ class Run {
       await target.storage.delete(storageKey).catch((cleanupError: unknown) => {
         this.deps.logger?.error({ err: cleanupError }, "Could not remove an orphaned video");
       });
+      if (error instanceof LeaseLostError) throw error;
       this.deps.logger?.error({ err: error, jobId: this.job.id }, "Could not record a video");
       await this.reload();
       return { status: "waiting", reason: "record_failed" };
@@ -795,7 +834,9 @@ class Run {
       },
       data: { leaseToken: token, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) },
     });
-    return claimed.count === 1 ? token : null;
+    if (claimed.count !== 1) return null;
+    this.token = token;
+    return token;
   }
 
   async release(token: string): Promise<void> {
@@ -831,6 +872,10 @@ export async function runVideoJob(
   if (token === null) return { status: "busy" };
   try {
     return await run.execute();
+  } catch (error) {
+    // Another runner owns the job now; everything this one was writing was rolled back.
+    if (error instanceof LeaseLostError) return { status: "waiting", reason: "lease_lost" };
+    throw error;
   } finally {
     await run.release(token);
   }
@@ -843,7 +888,7 @@ export async function runVideoJob(
  */
 export async function recoverVideoJobs(
   deps: VideoGenerationDeps & { readonly system: PrismaClient },
-  options: { readonly limit?: number } = {},
+  options: { readonly limit?: number; readonly shouldStop?: () => boolean } = {},
 ): Promise<{ readonly resumed: number; readonly outcomes: readonly VideoRunOutcome[] }> {
   const now = await deps.system.$queryRaw<{ now: Date }[]>`SELECT statement_timestamp() AS "now"`;
   const at = now[0]?.now ?? new Date();
@@ -857,14 +902,18 @@ export async function recoverVideoJobs(
     select: { id: true, workspaceId: true },
   });
   const outcomes: VideoRunOutcome[] = [];
+  let resumed = 0;
   for (const job of jobs) {
+    // The scheduler's time budget ran out: the remaining jobs wait for the next tick.
+    if (options.shouldStop?.() === true) break;
+    resumed += 1;
     try {
       outcomes.push(await runVideoJob(deps, job.workspaceId, job.id));
     } catch (error) {
       deps.logger?.error({ err: error, jobId: job.id }, "Video job recovery failed");
     }
   }
-  return { resumed: jobs.length, outcomes };
+  return { resumed, outcomes };
 }
 
 /** A person accepts or rejects a clip waiting for review. */

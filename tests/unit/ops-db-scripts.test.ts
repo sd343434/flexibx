@@ -51,6 +51,13 @@ case "$tool" in
     elif [[ "$args" == *information_schema.tables* ]]; then echo "\${FAKE_TABLES:-0}"
     elif [[ "$args" == *row-counts.sql* ]]; then printf 'users\\t3\\nworkspaces\\t1\\n'
     elif [[ "$args" == *integrity.sql* ]]; then printf 'credit_balance_vs_ledger\\t0\\norphans\\t0\\n'
+    elif [[ "$args" == *restore-checks.sql* ]]; then
+      printf 'indexes_invalid\\t0\\nvideo_usage_vs_jobs\\t%s\\n' "\${FAKE_VIDEO_USAGE:-0}"
+    elif [[ "$args" == *schema-objects.sql* ]]; then
+      # The migrated schema, minus or plus one object when asked.
+      grep -v '^#' scripts/ops/sql/expected-schema-objects.tsv | \\
+        { if [[ "\${FAKE_SCHEMA:-}" == "missing" ]]; then sed 1d; else cat; fi; }
+      [[ "\${FAKE_SCHEMA:-}" == "extra" ]] && printf 'index\\tusers\\tusers_by_hand\\n'
     elif [[ "$args" == *_prisma_migrations* ]]; then
       # What Prisma records: name + SHA-256 of each applied migration.sql.
       for file in prisma/migrations/*/migration.sql; do
@@ -124,6 +131,16 @@ async function run(name: string, args: readonly string[], env: Record<string, st
   }
 }
 
+/** A row-count manifest with its checksum, as db-backup.sh writes them. */
+async function manifest(): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  const counts = join(work, `x-${Math.random().toString(16).slice(2)}.counts.tsv`);
+  const body = "users\t3\nworkspaces\t1\n";
+  writeFileSync(counts, body);
+  writeFileSync(`${counts}.sha256`, `${createHash("sha256").update(body).digest("hex")}\n`);
+  return counts;
+}
+
 /** Temporary password-file directories left behind under TMPDIR. */
 const leftovers = () => readdirSync(work).filter((entry) => entry.startsWith("tmp.")); // mktemp -d
 
@@ -164,6 +181,9 @@ describe("ops database scripts keep the URL off the command line", () => {
     expect(dump?.passContent).toBe("*:*:*:*:s3cr\\:et\\\\p@ss/word");
     expect(counts?.tool).toBe("psql");
     expect(counts?.env.PGPASSFILE).toBe(dump?.env.PGPASSFILE);
+    // The manifest gets its own checksum (db-verify.sh refuses a manifest without one).
+    const written = readdirSync(out);
+    expect(written.filter((name) => name.endsWith(".counts.tsv.sha256"))).toHaveLength(1);
     // Removed when the script ends.
     expect(existsSync(dump?.env.PGPASSFILE ?? "")).toBe(false);
     expect(leftovers()).toEqual([]);
@@ -259,16 +279,18 @@ describe("ops database scripts keep the URL off the command line", () => {
   });
 
   it("verify: everything through psql with libpq environment (no Prisma process)", async () => {
-    const counts = join(work, "x.counts.tsv");
-    writeFileSync(counts, "users\t3\nworkspaces\t1\n");
+    const counts = await manifest();
     const result = await run("db-verify.sh", [counts], { VERIFY_DATABASE_URL: URL_WITH_PASSWORD });
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('{"status":"VERIFIED"}');
     expect(result.stdout + result.stderr).not.toContain(PASSWORD);
     const tools = calls().map((call) => call.tool);
     // Prisma's schema engine would get the URL on its command line: not used.
-    expect(tools).toEqual(["psql", "psql", "psql"]);
+    expect(tools).toEqual(["psql", "psql", "psql", "psql", "psql"]);
     expect(result.stdout).toMatch(/prisma_migrations\tup to date \(\d+ applied\)/);
+    expect(result.stdout).toMatch(/row_counts\tmatch \(2 tables\)/);
+    expect(result.stdout).toMatch(/schema_objects\tmatch \(\d+ indexes and constraints\)/);
+    expect(result.stdout).toContain("video_usage_vs_jobs\t0");
     for (const call of calls()) {
       expect(JSON.stringify(call.argv)).not.toContain(encodeURIComponent(PASSWORD));
       expect(JSON.stringify(call.argv)).not.toMatch(/postgres(ql)?:\/\//);
@@ -277,7 +299,7 @@ describe("ops database scripts keep the URL off the command line", () => {
   });
 
   it("verify: a connection failure is a failure, never VERIFIED", async () => {
-    const result = await run("db-verify.sh", [], {
+    const result = await run("db-verify.sh", ["--no-row-counts"], {
       VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
       FAKE_FAIL: "psql",
     });
@@ -288,7 +310,7 @@ describe("ops database scripts keep the URL off the command line", () => {
   });
 
   it("verify: a line-ending-only difference (CRLF checkout) is tolerated", async () => {
-    const result = await run("db-verify.sh", [], {
+    const result = await run("db-verify.sh", ["--no-row-counts"], {
       VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
       FAKE_MIGRATIONS: "crlf",
       FAKE_LAST: LAST_MIGRATION ?? "",
@@ -300,7 +322,7 @@ describe("ops database scripts keep the URL off the command line", () => {
   it.each(["pending", "modified", "unknown", "crlf-modified"])(
     "verify: a %s migration fails the verification",
     async (state) => {
-      const result = await run("db-verify.sh", [], {
+      const result = await run("db-verify.sh", ["--no-row-counts"], {
         VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
         FAKE_MIGRATIONS: state,
         FAKE_LAST: LAST_MIGRATION ?? "",
@@ -316,8 +338,68 @@ describe("ops database scripts keep the URL off the command line", () => {
     },
   );
 
+  it("verify: the row-count manifest is required, and must match its checksum", async () => {
+    const refused = await run("db-verify.sh", [], { VERIFY_DATABASE_URL: URL_WITH_PASSWORD });
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("--no-row-counts");
+    expect(calls()).toEqual([]); // refused before any connection
+
+    const counts = await manifest();
+    rmSync(`${counts}.sha256`);
+    const unchecked = await run("db-verify.sh", [counts], {
+      VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
+    });
+    expect(unchecked.code).toBe(1);
+    expect(unchecked.stdout).toContain("row_counts_manifest\tMISSING");
+
+    const edited = await manifest();
+    writeFileSync(edited, "users\t3\nworkspaces\t9\n"); // edited after the backup
+    const tampered = await run("db-verify.sh", [edited], {
+      VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
+    });
+    expect(tampered.code).toBe(1);
+    expect(tampered.stdout).toContain("row_counts_manifest\tCHECKSUM MISMATCH");
+    expect(tampered.stdout).not.toContain("VERIFIED");
+  });
+
+  it.each([
+    ["missing", "1 missing, 0 unexpected", "  missing: "],
+    ["extra", "0 missing, 1 unexpected", "  unexpected: index\tusers\tusers_by_hand"],
+  ])("verify: a %s index or constraint fails the verification", async (state, summary, line) => {
+    const result = await run("db-verify.sh", ["--no-row-counts"], {
+      VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
+      FAKE_SCHEMA: state,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain(`schema_objects\tMISMATCH (${summary})`);
+    expect(result.stdout).toContain(line);
+    expect(result.stdout).toContain('{"status":"FAILED"}');
+  });
+
+  it("verify: a restore check that is not 0 fails the verification", async () => {
+    const result = await run("db-verify.sh", ["--no-row-counts"], {
+      VERIFY_DATABASE_URL: URL_WITH_PASSWORD,
+      FAKE_VIDEO_USAGE: "2",
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("video_usage_vs_jobs\t2");
+    expect(result.stdout).toContain('{"status":"FAILED"}');
+  });
+
+  it("schema objects: prints the expected-file format, URL off the command line", async () => {
+    const result = await run("db-schema-objects.sh", [], {
+      SCHEMA_DATABASE_URL: URL_WITH_PASSWORD,
+    });
+    expect(result.code).toBe(0);
+    expectNoSecretAnywhere(result);
+    expect(result.stdout).toBe(
+      readFileSync(join(root, "scripts/ops/sql/expected-schema-objects.tsv"), "utf8"),
+    );
+    expect(leftovers()).toEqual([]);
+  });
+
   it("no ops script passes a connection URL as an argument", () => {
-    for (const name of ["db-backup.sh", "db-restore.sh", "db-verify.sh"]) {
+    for (const name of ["db-backup.sh", "db-restore.sh", "db-verify.sh", "db-schema-objects.sh"]) {
       const source = readFileSync(script(name), "utf8")
         .split("\n")
         .filter((line) => !line.trimStart().startsWith("#"))

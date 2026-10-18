@@ -1235,7 +1235,7 @@ export async function sendReply(
     extra: { externalReplyId?: string; sendError?: string },
   ) => {
     await db.$transaction(async (tx) => {
-      await tx.socialReply.updateMany({
+      const settled = await tx.socialReply.updateMany({
         where: { workspaceId, id: reply.id, sendStatus: "SENDING" },
         data: {
           sendStatus,
@@ -1244,6 +1244,10 @@ export async function sendReply(
           ...(sendStatus === "SENT" ? { sentAt: now } : {}),
         },
       });
+      // A result arriving after the stuck-send recovery marked the send UNCERTAIN changes
+      // nothing: the interaction stays with its reply (looked up on the Page), and its
+      // claim is kept.
+      if (settled.count === 0) return;
       await tx.socialInteraction.updateMany({
         where: { workspaceId, id: interaction.id },
         data: {

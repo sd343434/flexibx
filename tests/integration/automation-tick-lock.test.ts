@@ -189,8 +189,10 @@ describe("tick time budget", () => {
       failedPhases: [],
     });
     expect(slow.calls).toEqual(["orchestration"]);
-    // Not a failure: the heartbeat records a finished tick.
-    expect(await heartbeat()).toMatchObject({ lastStatus: "ok", failedPhases: [] });
+    // Not a failure, but not a full run either: ops-status warns on it.
+    const beat = await heartbeat();
+    expect(beat).toMatchObject({ lastStatus: "partial", failedPhases: [] });
+    expect(beat?.lastSucceededAt).not.toBeNull();
 
     const next = phases();
     expect(
@@ -200,6 +202,64 @@ describe("tick time budget", () => {
       }),
     ).toMatchObject({ status: "completed", skippedPhases: [] });
     expect(next.calls).toEqual(["orchestration", "social", "credits", "video"]);
+  });
+
+  it("a phase stops before its next item once the budget runs out, and says so", async () => {
+    let clock = 0;
+    const handled: number[] = [];
+    const set: TickPhases = {
+      ...phases().set,
+      // Five items; each takes 2 s of a 5 s budget: the phase stops after the third.
+      video: async (shouldStop) => {
+        for (const item of [1, 2, 3, 4, 5]) {
+          if (shouldStop?.() === true) break;
+          handled.push(item);
+          clock += 2_000;
+          await Promise.resolve();
+        }
+        return handled.length;
+      },
+    };
+    const summary = await runScheduledAutomationTick(() => NOW, set, {
+      timeBudgetMs: 5_000,
+      elapsedClock: () => clock,
+    });
+    expect(handled).toEqual([1, 2, 3]);
+    expect(summary).toMatchObject({
+      status: "partial",
+      cutShortPhases: ["video"],
+      skippedPhases: [],
+      failedPhases: [],
+      videoJobsResumed: 3,
+    });
+    expect(await heartbeat()).toMatchObject({ lastStatus: "partial" });
+  });
+
+  it("a social step that failed as a whole makes the tick a failed one", async () => {
+    const set: TickPhases = {
+      ...phases().set,
+      social: () =>
+        Promise.resolve({
+          published: 0,
+          drafted: 2,
+          sent: 0,
+          uncertain: 0,
+          reviewed: 0,
+          failedPhases: ["publish"],
+        }),
+    };
+    const summary = await runScheduledAutomationTick(() => NOW, set);
+    expect(summary).toMatchObject({
+      status: "completed",
+      failedPhases: ["social.publish"],
+      social: { drafted: 2 },
+    });
+    expect(summary.social).not.toHaveProperty("failedPhases");
+    expect(await heartbeat()).toMatchObject({
+      lastStatus: "failed",
+      failedPhases: ["social.publish"],
+      lastSucceededAt: null,
+    });
   });
 
   it("raises alerts for an over-budget tick and for an overlapping one", async () => {

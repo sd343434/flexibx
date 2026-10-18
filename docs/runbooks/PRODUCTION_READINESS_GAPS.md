@@ -82,6 +82,19 @@ and `@prisma/adapter-pg` `latest` `7.10.1`, no 7.10.2. Not upgraded: no new evid
 the dated gate (2026-10-22) has not been reached. Next review trigger: 2026-10-22, or
 earlier if an advisory reaches a package in the runtime image.
 
+Pass 7 re-check (2026-10-18): `pnpm audit` unchanged (3 high, 1 moderate: the rows
+above). **Trial upgrade to 7.10.1** in an isolated copy of the tree (never this checkout's
+`node_modules`): install, `prisma generate`, `db:validate`, typecheck, lint, unit (1061/1061),
+the full integration suite on a disposable database (842/842) and build all passed, and
+`pnpm audit` then reports only `braces`. **Not adopted yet:** the lockfile shows that
+7.10.1 also moves Prisma's bundled engines to an 8.1.0-based build
+(`@prisma/engines-version 8.1.0-1.d1b3f37…`), i.e. the migration engine that runs
+production migrations changes in a patch release three days old; the advisories reach
+development and migration tooling only, never the production image. Keep the dated gate
+(2026-10-22): if no 7.10.2 or regression report has appeared, apply exactly this change
+(three version pins and the regenerated lockfile) and run the gates above plus a
+migration on a copy of a real backup (§ 5.1).
+
 ## 3. Storage
 
 | Item                                | Severity                                                                                        | Evidence                                                                                                                                                                                                                                                                                                     | Required action                                                      | Safe verification                  | Approval                                                |
@@ -392,3 +405,30 @@ residency and legal review, pilot approval.
 
 - **Not verified:** CI (GitHub Actions jobs blocked before execution since run 43); any
   real Meta call; production readiness.
+
+## 12. Pass 7: operational reliability — status by evidence
+
+Pass 7 (2026-10-18) fixed and tested the scheduler, monitoring and restore findings in
+[`OPERATIONAL_RELIABILITY.md`](OPERATIONAL_RELIABILITY.md). Each launch-relevant area by
+the strongest evidence that exists today. States: **A** implemented and proven locally;
+**B** implemented, not proven in an external environment; **C** needs an account or
+service; **D** needs a legal or security approval; **E** needs a supervised production
+test; **F** not implemented.
+
+| Area                             | State     | Evidence / what is missing                                                                                                                                                                                                       |
+| -------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduler tick behaviour         | A, then E | Single flight, per-item time budget, lease renewal and fenced writes for video jobs, late-answer safety for replies, failed social steps reported: integration-tested. Never run by a real scheduler.                            |
+| Scheduler trigger                | C         | No scheduler is configured (no hosting). `AUTOMATION_CRON_SECRET` and the call are documented (ARCHITECTURE).                                                                                                                    |
+| No duplicate external actions    | A, then E | Claims by lease / compare-and-set, unknown outcomes never re-sent, a taken-over video runner cannot charge twice: tested against stand-ins only.                                                                                 |
+| Operator status (`ops-status`)   | A         | 11 new checks (hung / partial tick, retention, stuck leases, overdue video jobs, Insights failures, video provider failures); secret, 404, 429 and no-customer-data tested.                                                      |
+| External alerting                | B, C      | Webhook delivery, throttle and the new give-back on failed delivery are tested with fakes; no destination is configured, and an external uptime monitor (the only alert when the scheduler itself stops) has no account.         |
+| Backup / restore scripts         | A         | Checksum-verified dump and manifest, confirmed empty target, one transaction, verification of counts, integrity, restore checks, schema objects and migrations: unit-tested and drilled locally (OPERATIONAL_RELIABILITY § 3.1). |
+| Off-site backups and PITR        | C         | Needs the managed database / storage decision (§ 6, PHASE_D_1).                                                                                                                                                                  |
+| Restore drill, RTO / RPO         | E         | Only a local drill on seed data. No production-sized restore, no measured RTO, no RPO from real PITR.                                                                                                                            |
+| Secrets storage                  | C         | Environment variables only; no secret manager chosen.                                                                                                                                                                            |
+| Application and database hosting | C         | Not chosen (§ 6).                                                                                                                                                                                                                |
+| CI (GitHub Actions)              | C         | Not proven: every run since #43 (latest #47, `9fca28e`) failed in 2–3 s with 0 billable ms, before a runner was allocated — an account-level block, not a code failure. Local gates are not a substitute.                        |
+| Meta app review and permissions  | C, D      | No real Meta app call was ever made; Graph v26.0 metric names and permissions unverified (§ 11); App Review not started.                                                                                                         |
+| Data residency and legal         | D         | Region, DPA, privacy policy and retention periods need an owner's legal decision (§ 6).                                                                                                                                          |
+| Dependency advisories            | B         | Prisma 7.10.1 upgrade verified in isolation, deferred to the 2026-10-22 gate (§ 2); `braces` has no fix upstream.                                                                                                                |
+| Planning task retry overlap      | F (low)   | A timed-out planning task may start its retry while its AI call (bounded by `AI_TIMEOUT_MS`) is finishing; the abort signal is not passed into the AI call.                                                                      |

@@ -29,9 +29,15 @@ export interface TickSummary {
 
 export async function automationTick<S>(
   deps: OrchestrationDeps<S> & { readonly system: PrismaClient },
-  options: { readonly limit?: number; readonly maxTasksPerRun?: number } = {},
+  options: {
+    readonly limit?: number;
+    readonly maxTasksPerRun?: number;
+    /** The tick's time budget ran out: start nothing more (the next tick goes on). */
+    readonly shouldStop?: () => boolean;
+  } = {},
 ): Promise<TickSummary> {
   const { system } = deps;
+  const shouldStop = options.shouldStop ?? (() => false);
   const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
   const rows = await system.$queryRaw<{ now: Date }[]>`SELECT statement_timestamp() AS "now"`;
   const now = rows[0]?.now ?? new Date();
@@ -65,6 +71,7 @@ export async function automationTick<S>(
     take: limit,
   });
   for (const policy of due) {
+    if (shouldStop()) break;
     if (policy.nextPlanningAt === null) continue;
     const slot = policy.nextPlanningAt;
     try {
@@ -112,6 +119,7 @@ export async function automationTick<S>(
   });
   const executed: ExecuteOutcome[] = [];
   for (const run of active) {
+    if (shouldStop()) break;
     try {
       executed.push(
         await executeRun(deps, run.workspaceId, run.id, {

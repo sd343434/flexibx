@@ -809,7 +809,7 @@ export const SCHEDULED_SOURCES_PER_TICK = 5;
 export async function runDueInsightsSyncs(
   deps: InsightsDeps,
   system: PrismaClient,
-  options: { readonly limit?: number } = {},
+  options: { readonly limit?: number; readonly shouldStop?: () => boolean } = {},
 ): Promise<{ readonly started: number; readonly failed: number }> {
   if (deps.client === null || deps.meta === null) return { started: 0, failed: 0 };
   const now = nowOf(deps);
@@ -825,7 +825,11 @@ export async function runDueInsightsSyncs(
     select: { id: true, workspaceId: true },
   });
   let failed = 0;
+  let started = 0;
   for (const source of due) {
+    // The scheduler's time budget ran out: the remaining sources stay due for the next tick.
+    if (options.shouldStop?.() === true) break;
+    started += 1;
     try {
       const outcome = await runSync(
         deps,
@@ -840,7 +844,7 @@ export async function runDueInsightsSyncs(
       failed += 1;
     }
   }
-  return { started: due.length, failed };
+  return { started, failed };
 }
 
 export type { CallBudget, InsightsFailure };

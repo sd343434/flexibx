@@ -134,6 +134,8 @@ export interface SocialSweepSummary {
   readonly sent: number;
   readonly uncertain: number;
   readonly reviewed: number;
+  /** Steps that failed as a whole (a query or the database), by name; [] when all ran. */
+  readonly failedPhases: readonly string[];
 }
 
 /**
@@ -154,11 +156,15 @@ export async function socialSweep(
   system: PrismaClient = getSystemDb(),
   now: Date = new Date(),
   limit = 25,
+  /** The scheduler's time budget ran out: no further item is started. */
+  shouldStop: () => boolean = () => false,
 ): Promise<SocialSweepSummary> {
+  const failedPhases: string[] = [];
   async function phase(name: string, work: () => Promise<number>): Promise<number> {
     try {
       return await work();
     } catch (error) {
+      failedPhases.push(name);
       logger.error({ err: error, phase: name }, "Social sweep phase failed");
       return 0;
     }
@@ -171,6 +177,7 @@ export async function socialSweep(
     if (!deps.sendingEnabled) return 0;
     let count = 0;
     for (const post of await duePosts(system, now, limit)) {
+      if (shouldStop()) break;
       try {
         if ((await publishPost(atSweepTime, post.workspaceId, post.id)) === "published") {
           count += 1;
@@ -237,6 +244,7 @@ export async function socialSweep(
     });
     let count = 0;
     for (const row of due) {
+      if (shouldStop()) break;
       try {
         const outcome = await draftInteraction(atSweepTime, row.workspaceId, row.id);
         if (outcome !== "skipped" && outcome !== "failed") count += 1;
@@ -263,6 +271,7 @@ export async function socialSweep(
     });
     let count = 0;
     for (const row of unsent) {
+      if (shouldStop()) break;
       try {
         if ((await sendReply(atSweepTime, row.workspaceId, row.id, null)) === "sent") count += 1;
       } catch (error) {
@@ -311,6 +320,7 @@ export async function socialSweep(
     });
     let count = 0;
     for (const agent of agents) {
+      if (shouldStop()) break;
       try {
         if (await reviewIfDue(atSweepTime, agent)) count += 1;
       } catch (error) {
@@ -320,7 +330,7 @@ export async function socialSweep(
     }
     return count;
   });
-  return { published, drafted, sent, uncertain, reviewed };
+  return { published, drafted, sent, uncertain, reviewed, failedPhases };
 }
 
 async function reviewIfDue(

@@ -124,6 +124,43 @@ describe("alert sink", () => {
     });
   });
 
+  it("delivers the next occurrence when a delivery failed, instead of swallowing it", async () => {
+    let status = 503;
+    const posted: string[] = [];
+    const { sink } = setup({
+      fetch: ((_url: string, init: RequestInit) => {
+        posted.push(init.body as string);
+        return Promise.resolve(new Response("x", { status }));
+      }) as unknown as typeof fetch,
+    });
+    expect(await sink(ALERT)).toBe("failed");
+    status = 200;
+    expect(await sink(ALERT)).toBe("sent");
+    expect(posted).toHaveLength(2);
+    expect(await sink(ALERT)).toBe("throttled"); // a delivered slot is kept
+
+    let reject = true;
+    const network = setup({
+      fetch: (() =>
+        reject
+          ? Promise.reject(new TypeError("down"))
+          : Promise.resolve(new Response("ok"))) as unknown as typeof fetch,
+    });
+    expect(await network.sink(ALERT)).toBe("failed");
+    reject = false;
+    expect(await network.sink(ALERT)).toBe("sent");
+  });
+
+  it("does not give back a slot another occurrence claimed since", async () => {
+    const throttle = memoryAlertThrottle();
+    const at = new Date("2026-10-12T12:00:00Z");
+    expect((await throttle.claim("k", at, ALERT_INTERVAL_MS)).send).toBe(true);
+    await throttle.release?.("k", new Date(at.getTime() - 1));
+    expect((await throttle.claim("k", at, ALERT_INTERVAL_MS)).send).toBe(false);
+    await throttle.release?.("k", at);
+    expect(await throttle.claim("k", at, ALERT_INTERVAL_MS)).toEqual({ send: true, suppressed: 1 });
+  });
+
   it("never throws: network errors, bad statuses, broken throttle store or logger", async () => {
     const failing = setup({ fetch: () => Promise.reject(new TypeError("down")) });
     expect(await failing.sink(ALERT)).toBe("failed");

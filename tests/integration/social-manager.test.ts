@@ -666,6 +666,47 @@ describe("drafting and decisions", () => {
     expect(s.graph.posts()).toHaveLength(1);
   });
 
+  it("a send answer arriving after the stuck-send recovery leaves the recovery in place", async () => {
+    const s = await setup();
+    const id = await receiveOne(s, "Are you open on Friday?");
+    await draftInteraction(s.deps, s.owner.workspaceId, id);
+    const reply = await latestReply(id);
+    await system.socialReply.update({
+      where: { id: reply.id },
+      data: { decision: "APPROVED", finalText: "Yes, from 8.", decidedAt: new Date() },
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let posted: () => void = () => undefined;
+    const posting = new Promise<void>((resolve) => {
+      posted = resolve;
+    });
+    // The Page reply hangs: the sender is still waiting when the sweep gives up on it.
+    const slowFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posted();
+        await gate;
+      }
+      return s.graph.fetch(input, init);
+    }) as typeof fetch;
+    const slow: SocialDeps = {
+      ...s.deps,
+      meta: createMetaSocial({ appSecret: "x".repeat(32), version: "v26.0", fetch: slowFetch }),
+    };
+    const sending = sendReply(slow, s.owner.workspaceId, reply.id, s.owner);
+    await posting;
+    await system.$executeRaw`UPDATE social_replies SET updated_at = now() - interval '1 hour' WHERE id = ${reply.id}::uuid`;
+    expect(await socialSweep(s.deps, system)).toMatchObject({ uncertain: 1 });
+    release();
+    await sending;
+    // Reply and interaction agree (both wait for the Page lookup); nothing was overwritten.
+    expect(await latestReply(id)).toMatchObject({ sendStatus: "UNCERTAIN" });
+    expect(await interactionOf(id)).toMatchObject({ status: "UNCERTAIN" });
+    expect(s.graph.posts()).toHaveLength(1);
+  });
+
   it("never answers a private message after 24 hours", async () => {
     const s = await setup();
     const old = new Date(Date.now() - 25 * 3_600_000);

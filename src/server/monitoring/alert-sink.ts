@@ -35,6 +35,12 @@ export interface AlertThrottleStore {
    * swallowed since the last delivery). Records the decision atomically.
    */
   claim(key: string, now: Date, intervalMs: number): Promise<{ send: boolean; suppressed: number }>;
+  /**
+   * Gives back the slot claimed at `claimedAt` after its delivery failed, so the next
+   * occurrence is delivered instead of being swallowed for the rest of the interval. A
+   * slot claimed since by another process is left alone.
+   */
+  release?(key: string, claimedAt: Date): Promise<void>;
 }
 
 export type AlertLog = (
@@ -95,6 +101,11 @@ export function memoryAlertThrottle(): AlertThrottleStore {
       last.set(key, { at: now.getTime(), suppressed: 0 });
       return Promise.resolve({ send: true, suppressed: entry?.suppressed ?? 0 });
     },
+    release: (key, claimedAt) => {
+      const entry = last.get(key);
+      if (entry?.at === claimedAt.getTime()) entry.at = 0;
+      return Promise.resolve();
+    },
   };
 }
 
@@ -123,6 +134,13 @@ export function databaseAlertThrottle(system: PrismaClient): AlertThrottleStore 
       const row = rows[0];
       return { send: row?.send === true, suppressed: row?.suppressed ?? 0 };
     },
+    // The epoch is older than any interval: the next claim delivers, and reports the
+    // occurrences counted meanwhile.
+    release: async (key, claimedAt) => {
+      await system.$executeRaw`
+        UPDATE "alert_throttles" SET "last_sent_at" = to_timestamp(0)
+        WHERE "key" = ${key} AND "last_sent_at" = ${claimedAt}`;
+    },
   };
 }
 
@@ -135,6 +153,8 @@ export function createAlertSink(config: AlertSinkConfig): AlertSink {
   const intervalMs = config.intervalMs ?? ALERT_INTERVAL_MS;
 
   return async (alert) => {
+    // Set once a slot is claimed: a failed delivery gives it back.
+    let giveBack: (() => Promise<void>) | undefined;
     try {
       const key = alert.key.slice(0, MAX_KEY_LENGTH);
       const details = sanitizeDetails(alert.details);
@@ -147,12 +167,21 @@ export function createAlertSink(config: AlertSinkConfig): AlertSink {
 
       const at = now();
       let decision: { send: boolean; suppressed: number };
+      let store: AlertThrottleStore = config.throttle;
       try {
-        decision = await config.throttle.claim(key, at, intervalMs);
+        decision = await store.claim(key, at, intervalMs);
       } catch {
-        decision = await fallback.claim(key, at, intervalMs);
+        store = fallback;
+        decision = await store.claim(key, at, intervalMs);
       }
       if (!decision.send) return "throttled";
+      giveBack = async () => {
+        try {
+          await store.release?.(key, at);
+        } catch {
+          // The slot stays taken: this key is delivered again after the interval.
+        }
+      };
 
       const response = await doFetch(config.webhookUrl, {
         method: "POST",
@@ -177,6 +206,7 @@ export function createAlertSink(config: AlertSinkConfig): AlertSink {
         redirect: "error",
       });
       if (!response.ok) {
+        await giveBack();
         config.log(
           "warn",
           { event: "alert.delivery_failed", alertKey: key, status: response.status },
@@ -186,6 +216,7 @@ export function createAlertSink(config: AlertSinkConfig): AlertSink {
       }
       return "sent";
     } catch (error) {
+      await giveBack?.();
       try {
         config.log(
           "warn",
