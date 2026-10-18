@@ -73,6 +73,10 @@ const SAMPLE_PARAMS = {
   exports: 1,
   attempts: 1,
   at: "Oct 18, 2026, 9:00 PM",
+  // Creator Studio (Pass 9): external provider and resumable upload.
+  model: "whisper-1",
+  region: "US",
+  part: 3,
   // AI Marketing Engine (Phase 4).
   words: "cheap",
   number: 2,

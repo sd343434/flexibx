@@ -18,6 +18,7 @@ import { getStudioProject } from "@/server/creator/creator-actions";
 import { guardPage, openWorkspacePage, type WorkspaceRouteParams } from "../../page-data";
 import {
   submitCancelJob,
+  submitDeleteProject,
   submitClip,
   submitExport,
   submitNewClip,
@@ -67,7 +68,7 @@ export default async function StudioProjectRoute({
 
   const slug = workspace.slug;
   const api = `/api/w/${encodeURIComponent(slug)}/studio`;
-  const { project, source, estimate, provider } = data;
+  const { project, source, estimate, provider, deletion } = data;
   const original = data.transcripts.find((row) => row.kind === "ORIGINAL") ?? null;
   const translations = data.transcripts.filter((row) => row.kind === "TRANSLATION");
   const activeJobs = data.jobs.filter((job) => job.state === "QUEUED" || job.state === "RUNNING");
@@ -83,6 +84,36 @@ export default async function StudioProjectRoute({
       {t("simulated.badge")}
     </Badge>
   );
+
+  if (project.status === "DELETING") {
+    return (
+      <div className="space-y-6">
+        <AutoRefresh active everyMs={10_000} />
+        <Link href={`/w/${slug}/studio`} className="text-sm text-muted-foreground hover:underline">
+          {t("back")}
+        </Link>
+        <PageHeader
+          title={project.name}
+          actions={
+            <Badge tone={PROJECT_STATUS_TONES[project.status]} testId="studio-status-DELETING">
+              {t("projectStatus.DELETING")}
+            </Badge>
+          }
+        />
+        <Card title={t("delete.pendingTitle")} testId="studio-deletion">
+          <p className="text-sm">{t("delete.pendingBody")}</p>
+          <p className="text-sm text-muted-foreground" data-testid="studio-deletion-pending">
+            {t("delete.pendingFiles", { count: deletion?.pending ?? 0 })}
+          </p>
+          {(deletion?.failing ?? 0) > 0 ? (
+            <Notice testId="studio-deletion-failing">
+              {t("delete.failing", { count: deletion?.failing ?? 0 })}
+            </Notice>
+          ) : null}
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -109,19 +140,30 @@ export default async function StudioProjectRoute({
         <Notice testId="studio-provider-disabled">{t("provider.disabled")}</Notice>
       ) : provider.simulated ? (
         <Notice testId="studio-provider-simulated">{t("provider.simulated")}</Notice>
-      ) : null}
+      ) : (
+        <Notice testId="studio-provider-external">
+          {t("provider.external", {
+            provider: provider.id,
+            model: provider.model,
+            region: provider.region ?? "—",
+          })}
+        </Notice>
+      )}
 
       {/* ── Source ─────────────────────────────────────────────────────────── */}
       <Card title={t("source.title")} testId="studio-source">
-        {source === null && data.canCreate && !busySource && !pendingUpload ? (
+        {source === null && pendingUpload ? (
+          <Notice testId="studio-source-pending">{t("source.pending")}</Notice>
+        ) : null}
+        {source === null && data.canCreate && !busySource ? (
           <UploadPanel
             slug={slug}
             locale={locale}
             projectId={project.id}
             maxBytes={data.limits.maxUploadBytes}
+            singleMaxBytes={data.limits.singleUploadMaxBytes}
           />
         ) : null}
-        {source === null && pendingUpload ? <Notice>{t("source.pending")}</Notice> : null}
         {busySource ? (
           <Notice testId="studio-source-checking">{t("source.checking")}</Notice>
         ) : null}
@@ -211,6 +253,19 @@ export default async function StudioProjectRoute({
                       { value: "en", label: t("languages.en") },
                     ],
                   },
+                  ...(provider.external
+                    ? [
+                        {
+                          kind: "checkbox" as const,
+                          name: "externalProcessing",
+                          label: t("provider.consent", {
+                            provider: provider.id,
+                            region: provider.region ?? "—",
+                          }),
+                          wide: true,
+                        },
+                      ]
+                    : []),
                 ]}
               >
                 <input type="hidden" name="requestKey" value={randomUUID()} />
@@ -294,6 +349,19 @@ export default async function StudioProjectRoute({
                           !translations.some((row) => row.language === code),
                       ).map((code) => ({ value: code, label: t(`languages.${code}`) })),
                     },
+                    ...(provider.external
+                      ? [
+                          {
+                            kind: "checkbox" as const,
+                            name: "externalProcessing",
+                            label: t("provider.consent", {
+                              provider: provider.id,
+                              region: provider.region ?? "—",
+                            }),
+                            wide: true,
+                          },
+                        ]
+                      : []),
                   ]}
                 >
                   <input type="hidden" name="requestKey" value={randomUUID()} />
@@ -646,6 +714,42 @@ export default async function StudioProjectRoute({
           </details>
         ) : null}
       </Card>
+
+      {/* ── Data and deletion ──────────────────────────────────────────────── */}
+      {data.canDelete ? (
+        <Card title={t("delete.title")} testId="studio-danger">
+          <div className="space-y-2">
+            <h3 className="font-semibold">{t("dataExport.title")}</h3>
+            <p className="text-sm text-muted-foreground">{t("dataExport.body")}</p>
+            <a
+              className="text-sm underline"
+              href={`${api}/projects/${project.id}/data`}
+              data-testid="studio-data-export"
+            >
+              {t("dataExport.download")}
+            </a>
+          </div>
+          <div className="space-y-2 border-t pt-4">
+            <h3 className="font-semibold text-destructive">{t("delete.heading")}</h3>
+            <p className="text-sm text-muted-foreground">{t("delete.body")}</p>
+            <EntityForm
+              action={submitDeleteProject.bind(null, slug, locale, project.id)}
+              testId="studio-delete-form"
+              submitLabel={t("delete.submit")}
+              pendingLabel={t("delete.pending")}
+              fields={[
+                {
+                  kind: "text",
+                  name: "confirmName",
+                  label: t("delete.confirm", { name: project.name }),
+                  maxLength: 200,
+                  wide: true,
+                },
+              ]}
+            />
+          </div>
+        </Card>
+      ) : null}
     </div>
   );
 }

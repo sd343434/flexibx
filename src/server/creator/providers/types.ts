@@ -1,8 +1,16 @@
 import { z } from "zod";
 
 // Provider boundaries of the Creator Studio. The pipeline depends only on these
-// contracts; a commercial speech-to-text or translation service is added as another
-// implementation (adapter + env selection), without touching the pipeline. Pure.
+// contracts; a speech-to-text or translation service is one implementation (adapter +
+// env selection) — today the declared simulator and OpenAI. Pure.
+
+/** Where a provider runs, for the person deciding to send media to it. */
+export interface ProviderProcessing {
+  /** True when audio or text leaves the deployment (an external service). */
+  readonly external: boolean;
+  /** Processing region as documented by the vendor (null: not external / unknown). */
+  readonly region: string | null;
+}
 
 export interface TimedText {
   readonly startMs: number;
@@ -14,11 +22,11 @@ export interface TranscriptionResult {
   /** BCP 47 language of the speech (as detected or as requested). */
   readonly language: string;
   readonly segments: readonly TimedText[];
-  /** Seconds the provider billed (null when it does not say). */
+  /** Seconds of audio the provider processed (null when it does not say). */
   readonly billedSeconds: number | null;
 }
 
-export interface TranscriptionProvider {
+export interface TranscriptionProvider extends ProviderProcessing {
   /** Stored with every transcript (e.g. `simulated`, or a vendor id). */
   readonly id: string;
   readonly model: string;
@@ -27,6 +35,15 @@ export interface TranscriptionProvider {
   /** Longest media it accepts. */
   readonly maxDurationMs: number;
   readonly supportsLanguage: (language: string) => boolean;
+  /**
+   * When set, the pipeline sends the audio in consecutive pieces of at most this length
+   * (encoded as small Opus files) and offsets the timestamps itself; each piece's result
+   * is kept, so a retried step never pays for a piece twice. Null: the whole 16 kHz WAV
+   * in one call.
+   */
+  readonly chunkMs: number | null;
+  /** Estimated price per second of audio in micro-USD (null: free or unknown). */
+  readonly costMicroUsdPerAudioSecond: number | null;
   transcribe(input: {
     readonly audioPath: string;
     readonly durationMs: number;
@@ -35,18 +52,28 @@ export interface TranscriptionProvider {
   }): Promise<TranscriptionResult>;
 }
 
-export interface TranslationProvider {
+export interface ProviderUsage {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+}
+
+export interface TranslationProvider extends ProviderProcessing {
   readonly id: string;
   readonly model: string;
   readonly simulated: boolean;
   readonly supportsLanguage: (language: string) => boolean;
+  /**
+   * Cues per call. The pipeline translates in batches of this size and keeps each
+   * batch's result, so a retried step resumes after the last batch it paid for.
+   */
+  readonly batchSize: number;
   /** Same cues, same timestamps, translated text. */
   translate(input: {
     readonly segments: readonly TimedText[];
     readonly from: string;
     readonly to: string;
     readonly signal: AbortSignal;
-  }): Promise<readonly TimedText[]>;
+  }): Promise<{ readonly segments: readonly TimedText[]; readonly usage: ProviderUsage | null }>;
 }
 
 export interface ClipSuggestion {
@@ -68,14 +95,27 @@ export interface ClipSuggestionProvider {
   }): readonly ClipSuggestion[];
 }
 
-/** Why a provider call failed (codes only — never a provider's message). */
+/**
+ * Why a provider call failed (codes only — never a provider's message).
+ * - `rate_limited`, `unavailable`: the provider answered that it did not do the work
+ *   (429, 5xx) or could not be reached; worth another attempt later.
+ * - `outcome_unknown`: the request was sent and no answer came back (connection reset,
+ *   the request's own timeout). The provider may have done — and billed — the work, so
+ *   it is NOT retried automatically; a person decides.
+ * - `rejected` (the request itself was refused: 400, 413, 415…), `auth` (401/403: key or
+ *   permissions), `invalid_output`: retrying the same request cannot help.
+ */
 export type ProviderFailure =
   | "unsupported_language"
   | "too_long"
   | "quota_exceeded"
   | "unavailable"
   | "invalid_output"
-  | "timeout";
+  | "timeout"
+  | "rate_limited"
+  | "rejected"
+  | "auth"
+  | "outcome_unknown";
 
 export class CreatorProviderError extends Error {
   constructor(

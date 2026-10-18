@@ -8,6 +8,7 @@ export const PROJECT_STATUS_TONES: Readonly<Record<string, BadgeTone>> = {
   NEEDS_REVIEW: "soft",
   COMPLETED: "solid",
   FAILED: "danger",
+  DELETING: "muted",
 };
 
 export const JOB_STATE_TONES: Readonly<Record<string, BadgeTone>> = {

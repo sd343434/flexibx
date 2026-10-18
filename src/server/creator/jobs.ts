@@ -1,16 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
 
-import type { PrismaClient, Prisma } from "@/generated/prisma/client";
-import type { CreatorJobKind } from "@/generated/prisma/enums";
+import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import type { CreatorJobKind, StorageProvider } from "@/generated/prisma/enums";
 
 import { captureHold, holdCredits, releaseHold } from "../billing/credits";
 import type { CreditFeature } from "../billing/pricing";
 import type { Db } from "../db/types";
-import { buildWorkspaceKey, putOrCleanUp } from "../storage/storage";
+import { buildWorkspaceKey, ObjectTooLargeError, putOrCleanUp } from "../storage/storage";
 
 import {
   billedMinutes,
@@ -24,9 +24,12 @@ import {
   STEP_TIMEOUT_MS,
   type CreatorDeps,
 } from "./config";
+import { queueStorageDeletions } from "./deletions";
 import { classifyFailure, LeaseLostError, StepFailure, type JobFailure } from "./errors";
+import { freeBytes, hashFile, readHead } from "./media/files";
 import {
   cuesForClip,
+  encodeAudioPiece,
   extractAudio,
   probeMedia,
   renderClip,
@@ -36,7 +39,7 @@ import {
 import { containerMatches, isSourceContentType, SNIFF_BYTES, sniffContainer } from "./media/sniff";
 import { MediaToolError } from "./media/tools";
 import { createWorkDir, removeWorkDir } from "./media/workdir";
-import { LANGUAGE_PATTERN, validateTimedText } from "./providers/types";
+import { LANGUAGE_PATTERN, validateTimedText, type TimedText } from "./providers/types";
 
 // The Creator Studio's background work: queueing, claiming with a lease, the steps of
 // each kind of job, and how a job ends. Pure (no `server-only`): the worker
@@ -55,6 +58,11 @@ import { LANGUAGE_PATTERN, validateTimedText } from "./providers/types";
 //   the hold is captured in the same transaction that stores the step's result — so the
 //   work is charged once, and never for a result that was not stored.
 // - Simulated provider output is never charged.
+// - Provider results a step already paid for (transcribed audio pieces, translated
+//   batches) are kept on the step (`checkpoint`, fenced), so a retried attempt only buys
+//   what is still missing. A request whose outcome is unknown is never retried blindly.
+// - Work on our own machines (FFmpeg) and work bought from a provider are recorded apart
+//   on the step (local_processing_ms vs provider_* usage and estimated cost).
 
 async function dbNow(db: Db): Promise<Date> {
   const rows = await db.$queryRaw<{ now: Date }[]>`SELECT statement_timestamp() AS "now"`;
@@ -298,6 +306,13 @@ export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise
   }, deps.timing?.heartbeatMs ?? HEARTBEAT_MS);
   const workDir = await createWorkDir(deps.workDir);
   try {
+    const project = await deps.db.creatorProject.findFirst({
+      where: { id: job.projectId, workspaceId: job.workspaceId },
+      select: { status: true },
+    });
+    if (project === null || project.status === "DELETING") {
+      return await finishFailed(deps, lease, null, new StepFailure("project_deleted", false));
+    }
     const steps = await deps.db.creatorJobStep.findMany({
       where: { workspaceId: job.workspaceId, jobId: job.id },
       orderBy: { position: "asc" },
@@ -363,6 +378,7 @@ export async function workOnce(
 const FILE_PROBLEMS: ReadonlySet<JobFailure> = new Set([
   "upload_missing",
   "size_mismatch",
+  "checksum_mismatch",
   "too_large",
   "unsupported_format",
   "type_mismatch",
@@ -393,7 +409,6 @@ async function finishFailed(
   failure: StepFailure,
 ): Promise<JobOutcome> {
   const { job } = lease;
-  let rejectedKey: { provider: string; key: string } | null = null;
   const outcome = await lease.write(async (tx, now): Promise<JobOutcome> => {
     if (step !== null) {
       const current = await tx.creatorJobStep.findFirst({
@@ -445,8 +460,23 @@ async function finishFailed(
         where: { id: job.sourceId, workspaceId: job.workspaceId },
         data: { status: "REJECTED", rejectionCode: failure.failure },
       });
-      if (source !== null)
-        rejectedKey = { provider: source.storageProvider, key: source.storageKey };
+      // A rejected upload is not kept (it may not even be media): queued for deletion in
+      // this transaction, removed by the worker's storage sweep.
+      if (source !== null) {
+        await queueStorageDeletions(
+          tx,
+          [
+            {
+              workspaceId: job.workspaceId,
+              projectId: job.projectId,
+              reason: "source_rejected",
+              storageProvider: source.storageProvider,
+              storageKey: source.storageKey,
+            },
+          ],
+          now,
+        );
+      }
     }
     if (job.exportId !== null) {
       await tx.creatorExport.updateMany({
@@ -460,7 +490,7 @@ async function finishFailed(
     }
     if (job.kind === "ANALYZE" || job.kind === "TRANSCRIBE") {
       await tx.creatorProject.updateMany({
-        where: { id: job.projectId, workspaceId: job.workspaceId },
+        where: { id: job.projectId, workspaceId: job.workspaceId, status: { not: "DELETING" } },
         data: { status: "FAILED", version: { increment: 1 } },
       });
     }
@@ -471,16 +501,6 @@ async function finishFailed(
     });
     return { status: "failed", failure: failure.failure };
   });
-  // A rejected upload is not kept (it may not even be media).
-  const rejected = rejectedKey as { provider: string; key: string } | null;
-  if (rejected !== null) {
-    try {
-      const storage = await deps.storage.forProvider(rejected.provider as "LEGACY_S3" | "WASABI");
-      await storage.delete(rejected.key, { signal: AbortSignal.timeout(15_000) });
-    } catch {
-      deps.logger?.warn({ jobId: job.id }, "Could not remove a rejected upload");
-    }
-  }
   return outcome;
 }
 
@@ -508,7 +528,7 @@ async function finishSucceeded(deps: CreatorDeps, lease: JobLease): Promise<void
             : null;
     if (status !== null) {
       await tx.creatorProject.updateMany({
-        where: { id: job.projectId, workspaceId: job.workspaceId },
+        where: { id: job.projectId, workspaceId: job.workspaceId, status: { not: "DELETING" } },
         data: { status, version: { increment: 1 } },
       });
     }
@@ -586,31 +606,92 @@ async function verifiedSource(ctx: StepContext) {
   return source;
 }
 
-/** Copies the source's bytes into the run's scratch directory. */
+/** Scratch space a step needs on top of the source (audio, pieces, the rendered clip). */
+const SCRATCH_MARGIN_BYTES = 256 * 1024 * 1024;
+
+interface SourceFile {
+  readonly storageProvider: StorageProvider;
+  readonly storageKey: string;
+  readonly declaredBytes: number;
+  /** Set once verified: later steps check the bytes they process are those verified. */
+  readonly sha256: string | null;
+}
+
+/**
+ * Streams the source into the run's scratch directory (never into memory). Refuses to
+ * start when the disk could not hold it plus the step's own files; after ANALYZE, the
+ * bytes must still hash to what was verified.
+ */
 async function downloadSource(
   ctx: StepContext,
-  source: { storageProvider: "LEGACY_S3" | "WASABI"; storageKey: string; declaredBytes: number },
-): Promise<{ path: string; body: Uint8Array }> {
+  source: SourceFile,
+): Promise<{ path: string; bytes: number }> {
   let storage;
   try {
     storage = await ctx.deps.storage.forProvider(source.storageProvider);
   } catch {
     throw new StepFailure("storage_unavailable", true);
   }
-  let object;
+  if (storage.downloadToFile === undefined) throw new StepFailure("storage_unavailable", false);
+  const free = await freeBytes(ctx.workDir);
+  if (free !== null && free < 2 * source.declaredBytes + SCRATCH_MARGIN_BYTES) {
+    throw new StepFailure("worker_disk_full", true);
+  }
+  const path = join(ctx.workDir, "source.bin");
+  let bytes;
   try {
-    object = await storage.getObject(source.storageKey, {
+    bytes = await storage.downloadToFile(source.storageKey, path, {
       expectedBytes: source.declaredBytes,
+      maxBytes: source.declaredBytes,
       signal: ctx.signal,
     });
   } catch (error) {
     if (ctx.signal.aborted) throw error;
+    if (error instanceof ObjectTooLargeError) throw new StepFailure("size_mismatch", false);
     throw new StepFailure("storage_unavailable", true);
   }
-  if (object === null) throw new StepFailure("upload_missing", false);
-  const path = join(ctx.workDir, "source.bin");
-  await writeFile(path, object.body);
-  return { path, body: object.body };
+  if (bytes === null) throw new StepFailure("upload_missing", false);
+  if (source.sha256 !== null) {
+    const { sha256 } = await hashFile(path, null, ctx.signal);
+    if (sha256 !== source.sha256) throw new StepFailure("checksum_mismatch", false);
+  }
+  return { path, bytes };
+}
+
+interface StepCosts {
+  readonly localProcessingMs?: number | null;
+  readonly providerAudioSeconds?: number | null;
+  readonly providerInputTokens?: number | null;
+  readonly providerOutputTokens?: number | null;
+  readonly providerCostMicroUsd?: number | null;
+}
+
+/** Times local work (FFmpeg) for the step's cost record. */
+async function timed<T>(costs: { localMs: number }, work: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await work();
+  } finally {
+    costs.localMs += Date.now() - started;
+  }
+}
+
+/** Saves what this attempt already bought from a provider (fenced: only the owner writes). */
+async function saveCheckpoint(ctx: StepContext, checkpoint: Prisma.InputJsonValue): Promise<void> {
+  await ctx.lease.write((tx) =>
+    tx.creatorJobStep.updateMany({
+      where: { id: ctx.step.id, workspaceId: ctx.job.workspaceId },
+      data: { checkpoint },
+    }),
+  );
+}
+
+async function loadCheckpoint(ctx: StepContext): Promise<unknown> {
+  const row = await ctx.deps.db.creatorJobStep.findFirst({
+    where: { id: ctx.step.id, workspaceId: ctx.job.workspaceId },
+    select: { checkpoint: true },
+  });
+  return row?.checkpoint ?? null;
 }
 
 const stepDone = (
@@ -619,6 +700,7 @@ const stepDone = (
   now: Date,
   output: Record<string, string | number | boolean | null>,
   provider?: { id: string; model: string; simulated: boolean },
+  costs: StepCosts = {},
 ) =>
   tx.creatorJobStep.updateMany({
     where: { id: ctx.step.id, workspaceId: ctx.job.workspaceId },
@@ -626,6 +708,12 @@ const stepDone = (
       state: "SUCCEEDED",
       finishedAt: now,
       output,
+      checkpoint: Prisma.DbNull,
+      localProcessingMs: costs.localProcessingMs ?? null,
+      providerAudioSeconds: costs.providerAudioSeconds ?? null,
+      providerInputTokens: costs.providerInputTokens ?? null,
+      providerOutputTokens: costs.providerOutputTokens ?? null,
+      providerCostMicroUsd: costs.providerCostMicroUsd ?? null,
       ...(provider === undefined
         ? {}
         : { provider: provider.id, model: provider.model, simulated: provider.simulated }),
@@ -634,14 +722,18 @@ const stepDone = (
 
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
-/** ANALYZE: the uploaded bytes are what was announced, a known container, and media. */
+/**
+ * ANALYZE: the uploaded bytes are what was announced (size; the SHA-256 the browser
+ * declared for the file or for each of its parts), a known container, and media.
+ */
 async function verify(ctx: StepContext): Promise<void> {
   const { deps, job } = ctx;
   const source = await verifiedSource(ctx);
-  const { path, body } = await downloadSource(ctx, source);
-  if (body.byteLength !== source.declaredBytes) throw new StepFailure("size_mismatch", false);
-  if (body.byteLength > deps.limits.maxUploadBytes) throw new StepFailure("too_large", false);
-  const container = sniffContainer(body.subarray(0, SNIFF_BYTES));
+  const costs = { localMs: 0 };
+  const { path, bytes } = await downloadSource(ctx, { ...source, sha256: null });
+  if (bytes !== source.declaredBytes) throw new StepFailure("size_mismatch", false);
+  if (bytes > deps.limits.maxUploadBytes) throw new StepFailure("too_large", false);
+  const container = sniffContainer(await readHead(path, SNIFF_BYTES));
   if (container === null) throw new StepFailure("unsupported_format", false);
   if (
     !isSourceContentType(source.declaredContentType) ||
@@ -649,9 +741,28 @@ async function verify(ctx: StepContext): Promise<void> {
   ) {
     throw new StepFailure("type_mismatch", false);
   }
+  const multipart = source.uploadMode === "multipart" ? source.partSizeBytes : null;
+  const hashes = await hashFile(path, multipart, ctx.signal);
+  if (multipart !== null) {
+    const parts = await deps.db.creatorSourcePart.findMany({
+      where: { workspaceId: job.workspaceId, sourceId: source.id },
+      orderBy: { partNumber: "asc" },
+      select: { partNumber: true, sha256: true },
+    });
+    const matches =
+      parts.length === hashes.parts.length &&
+      parts.every(
+        (part, index) => part.partNumber === index + 1 && part.sha256 === hashes.parts[index],
+      );
+    if (!matches) throw new StepFailure("checksum_mismatch", false);
+  } else if (source.declaredSha256 !== null && source.declaredSha256 !== hashes.sha256) {
+    throw new StepFailure("checksum_mismatch", false);
+  }
   let info;
   try {
-    info = await probeMedia(deps.tools, path, { timeoutMs: 60_000, signal: ctx.signal });
+    info = await timed(costs, () =>
+      probeMedia(deps.tools, path, { timeoutMs: 60_000, signal: ctx.signal }),
+    );
   } catch (error) {
     if (error instanceof MediaToolError && error.code === "failed") {
       throw new StepFailure("unreadable_media", false);
@@ -662,7 +773,6 @@ async function verify(ctx: StepContext): Promise<void> {
     throw new StepFailure("unreadable_media", false);
   }
   if (info.durationMs > deps.limits.maxDurationMs) throw new StepFailure("too_long", false);
-  const sha256 = createHash("sha256").update(body).digest("hex");
   await ctx.lease.write(async (tx, now) => {
     await tx.creatorSource.updateMany({
       where: { id: source.id, workspaceId: job.workspaceId },
@@ -670,8 +780,8 @@ async function verify(ctx: StepContext): Promise<void> {
         status: "VERIFIED",
         verifiedAt: now,
         container,
-        byteSize: body.byteLength,
-        sha256,
+        byteSize: bytes,
+        sha256: hashes.sha256,
         durationMs: info.durationMs,
         width: info.width,
         height: info.height,
@@ -682,12 +792,21 @@ async function verify(ctx: StepContext): Promise<void> {
         audioCodec: info.audioCodec,
       },
     });
-    await stepDone(tx, ctx, now, {
-      container,
-      durationMs: info.durationMs,
-      hasVideo: info.hasVideo,
-      hasAudio: info.hasAudio,
-    });
+    await stepDone(
+      tx,
+      ctx,
+      now,
+      {
+        container,
+        durationMs: info.durationMs,
+        hasVideo: info.hasVideo,
+        hasAudio: info.hasAudio,
+        checksum:
+          multipart === null ? (source.declaredSha256 === null ? "computed" : "file") : "parts",
+      },
+      undefined,
+      { localProcessingMs: costs.localMs },
+    );
     await recordEvent(tx, job.workspaceId, job.projectId, "source_verified", null, {
       container,
       durationMs: info.durationMs,
@@ -699,9 +818,36 @@ const jobOptions = z.object({
   language: z.string().regex(LANGUAGE_PATTERN).optional(),
   targetLanguage: z.string().regex(LANGUAGE_PATTERN).optional(),
   transcriptId: z.uuid().optional(),
+  /** The requester confirmed that the media is sent to an external provider. */
+  externalProcessing: z.literal("confirmed").optional(),
 });
 
-/** TRANSCRIBE: audio → provider → stored transcript (charged only when real). */
+const pieceCheckpoint = z.object({
+  kind: z.literal("transcription"),
+  provider: z.string(),
+  pieceMs: z.number().int().positive(),
+  pieces: z.array(
+    z.object({
+      index: z.number().int().min(0),
+      language: z.string().regex(LANGUAGE_PATTERN),
+      billedSeconds: z.number().int().min(0).nullable(),
+      segments: z.array(z.object({ startMs: z.number(), endMs: z.number(), text: z.string() })),
+    }),
+  ),
+});
+
+/** Estimated provider cost: audio seconds × the provider's published per-second price. */
+function audioCost(seconds: number | null, microUsdPerSecond: number | null): number | null {
+  return seconds === null || microUsdPerSecond === null
+    ? null
+    : Math.round(seconds * microUsdPerSecond);
+}
+
+/**
+ * TRANSCRIBE: audio → provider → stored transcript (charged only when real). A provider
+ * with `chunkMs` gets the audio in pieces; each piece's result is checkpointed, so a
+ * retried attempt resumes at the first piece not yet paid for.
+ */
 async function transcribe(ctx: StepContext): Promise<void> {
   const { deps, job } = ctx;
   const provider = deps.transcription;
@@ -713,25 +859,94 @@ async function transcribe(ctx: StepContext): Promise<void> {
   if (source.hasAudio !== true) throw new StepFailure("no_audio", false);
   if (source.durationMs > provider.maxDurationMs) throw new StepFailure("too_long", false);
   const options = jobOptions.parse(job.options ?? {});
+  // Media goes to an external service only if the requester confirmed it for this job.
+  if (provider.external && options.externalProcessing !== "confirmed") {
+    throw new StepFailure("provider_disabled", false);
+  }
   const hint = options.language ?? null;
   if (hint !== null && !provider.supportsLanguage(hint)) {
     throw new StepFailure("unsupported_language", false);
   }
+  const durationMs = source.durationMs;
   const holdId = provider.simulated
     ? null
-    : await holdForStep(ctx, "creator_transcription", billedMinutes(source.durationMs));
+    : await holdForStep(ctx, "creator_transcription", billedMinutes(durationMs));
+  const costs = { localMs: 0 };
   const { path } = await downloadSource(ctx, source);
   const audioPath = join(ctx.workDir, "audio.wav");
-  await extractAudio(deps.tools, path, audioPath, { timeoutMs: 5 * 60_000, signal: ctx.signal });
-  const result = await provider.transcribe({
-    audioPath,
-    durationMs: source.durationMs,
-    languageHint: hint,
-    signal: ctx.signal,
-  });
-  const segments = validateTimedText(result.segments, source.durationMs);
-  if (!LANGUAGE_PATTERN.test(result.language))
-    throw new StepFailure("provider_invalid_output", false);
+  await timed(costs, () =>
+    extractAudio(deps.tools, path, audioPath, { timeoutMs: 5 * 60_000, signal: ctx.signal }),
+  );
+  let language: string;
+  let raw: TimedText[];
+  let billedSeconds: number | null;
+  if (provider.chunkMs === null) {
+    const result = await provider.transcribe({
+      audioPath,
+      durationMs,
+      languageHint: hint,
+      signal: ctx.signal,
+    });
+    ({ language, billedSeconds } = result);
+    raw = [...result.segments];
+  } else {
+    const pieceMs = provider.chunkMs;
+    const saved = pieceCheckpoint.safeParse(await loadCheckpoint(ctx));
+    // A checkpoint of another provider or piece length is not reused.
+    const pieces =
+      saved.success && saved.data.provider === provider.id && saved.data.pieceMs === pieceMs
+        ? [...saved.data.pieces]
+        : [];
+    const count = Math.ceil(durationMs / pieceMs);
+    for (let index = 0; index < count; index += 1) {
+      if (pieces.some((piece) => piece.index === index)) continue;
+      const startMs = index * pieceMs;
+      const pieceDurationMs = Math.min(pieceMs, durationMs - startMs);
+      if (pieceDurationMs < 200) break;
+      const piecePath = join(ctx.workDir, `piece-${String(index)}.ogg`);
+      await timed(costs, () =>
+        encodeAudioPiece(
+          deps.tools,
+          audioPath,
+          piecePath,
+          { startMs, durationMs: pieceDurationMs },
+          { timeoutMs: 2 * 60_000, signal: ctx.signal },
+        ),
+      );
+      // Later pieces keep the language the first one was heard in.
+      const languageHint = hint ?? pieces.find((piece) => piece.index === 0)?.language ?? null;
+      const result = await provider.transcribe({
+        audioPath: piecePath,
+        durationMs: pieceDurationMs,
+        languageHint,
+        signal: ctx.signal,
+      });
+      pieces.push({
+        index,
+        language: result.language,
+        billedSeconds: result.billedSeconds,
+        segments: result.segments.map((segment) => ({
+          startMs: segment.startMs + startMs,
+          endMs: segment.endMs + startMs,
+          text: segment.text,
+        })),
+      });
+      await saveCheckpoint(ctx, {
+        kind: "transcription",
+        provider: provider.id,
+        pieceMs,
+        pieces,
+      });
+    }
+    pieces.sort((a, b) => a.index - b.index);
+    language = hint ?? pieces[0]?.language ?? "und";
+    raw = pieces.flatMap((piece) => piece.segments);
+    billedSeconds = pieces.every((piece) => piece.billedSeconds !== null)
+      ? pieces.reduce((sum, piece) => sum + (piece.billedSeconds ?? 0), 0)
+      : null;
+  }
+  const segments = validateTimedText(raw, durationMs);
+  if (!LANGUAGE_PATTERN.test(language)) throw new StepFailure("provider_invalid_output", false);
   await ctx.lease.write(async (tx, now) => {
     const transcript = await tx.creatorTranscript.create({
       data: {
@@ -740,7 +955,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
         sourceId: source.id,
         jobId: job.id,
         kind: "ORIGINAL",
-        language: result.language,
+        language,
         provider: provider.id,
         model: provider.model,
         simulated: provider.simulated,
@@ -770,8 +985,15 @@ async function transcribe(ctx: StepContext): Promise<void> {
       tx,
       ctx,
       now,
-      { segments: segments.length, language: result.language, charged: holdId !== null },
+      { segments: segments.length, language, charged: holdId !== null },
       provider,
+      {
+        localProcessingMs: costs.localMs,
+        providerAudioSeconds: provider.simulated ? null : billedSeconds,
+        providerCostMicroUsd: provider.simulated
+          ? null
+          : audioCost(billedSeconds, provider.costMicroUsdPerAudioSecond),
+      },
     );
     await recordEvent(tx, job.workspaceId, job.projectId, "transcribed", null, {
       segments: segments.length,
@@ -825,7 +1047,29 @@ async function suggest(ctx: StepContext): Promise<void> {
   });
 }
 
-/** TRANSLATE: the transcript's cues in another language (same timestamps). */
+const batchCheckpoint = z.object({
+  kind: z.literal("translation"),
+  provider: z.string(),
+  batchSize: z.number().int().positive(),
+  batches: z.array(
+    z.object({
+      index: z.number().int().min(0),
+      inputTokens: z.number().int().min(0).nullable(),
+      outputTokens: z.number().int().min(0).nullable(),
+      segments: z.array(z.object({ startMs: z.number(), endMs: z.number(), text: z.string() })),
+    }),
+  ),
+});
+
+function sumOrNull(values: readonly (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === values.length ? known.reduce((sum, value) => sum + value, 0) : null;
+}
+
+/**
+ * TRANSLATE: the transcript's cues in another language (same timestamps), in batches of
+ * the provider's size; each batch's result is checkpointed (a retry resumes after it).
+ */
 async function translate(ctx: StepContext): Promise<void> {
   const { deps, job } = ctx;
   const provider = deps.translation;
@@ -833,6 +1077,9 @@ async function translate(ctx: StepContext): Promise<void> {
   const options = jobOptions.parse(job.options ?? {});
   if (options.targetLanguage === undefined || options.transcriptId === undefined) {
     throw new StepFailure("internal_error", false);
+  }
+  if (provider.external && options.externalProcessing !== "confirmed") {
+    throw new StepFailure("provider_disabled", false);
   }
   if (!provider.supportsLanguage(options.targetLanguage)) {
     throw new StepFailure("unsupported_language", false);
@@ -858,18 +1105,43 @@ async function translate(ctx: StepContext): Promise<void> {
   const holdId = provider.simulated
     ? null
     : await holdForStep(ctx, "creator_translation", billedMinutes(durationMs));
-  const translated = validateTimedText(
-    await provider.translate({
-      segments,
+  const language = options.targetLanguage;
+  const batchSize = Math.max(1, provider.batchSize);
+  const saved = batchCheckpoint.safeParse(await loadCheckpoint(ctx));
+  const batches =
+    saved.success && saved.data.provider === provider.id && saved.data.batchSize === batchSize
+      ? [...saved.data.batches]
+      : [];
+  const count = Math.ceil(segments.length / batchSize);
+  for (let index = 0; index < count; index += 1) {
+    if (batches.some((batch) => batch.index === index)) continue;
+    const slice = segments.slice(index * batchSize, (index + 1) * batchSize);
+    const result = await provider.translate({
+      segments: slice,
       from: original.language,
-      to: options.targetLanguage,
+      to: language,
       signal: ctx.signal,
-    }),
+    });
+    if (result.segments.length !== slice.length) {
+      throw new StepFailure("provider_invalid_output", false);
+    }
+    batches.push({
+      index,
+      inputTokens: result.usage?.inputTokens ?? null,
+      outputTokens: result.usage?.outputTokens ?? null,
+      segments: [...result.segments],
+    });
+    if (count > 1) {
+      await saveCheckpoint(ctx, { kind: "translation", provider: provider.id, batchSize, batches });
+    }
+  }
+  batches.sort((a, b) => a.index - b.index);
+  const translated = validateTimedText(
+    batches.flatMap((batch) => batch.segments),
     durationMs,
   );
   if (translated.length !== segments.length)
     throw new StepFailure("provider_invalid_output", false);
-  const language = options.targetLanguage;
   await ctx.lease.write(async (tx, now) => {
     const transcript = await tx.creatorTranscript.create({
       data: {
@@ -911,6 +1183,12 @@ async function translate(ctx: StepContext): Promise<void> {
       now,
       { segments: translated.length, language, charged: holdId !== null },
       provider,
+      provider.simulated
+        ? {}
+        : {
+            providerInputTokens: sumOrNull(batches.map((batch) => batch.inputTokens)),
+            providerOutputTokens: sumOrNull(batches.map((batch) => batch.outputTokens)),
+          },
     );
     await recordEvent(tx, job.workspaceId, job.projectId, "translated", null, {
       language,
@@ -943,6 +1221,7 @@ async function render(ctx: StepContext): Promise<void> {
   );
   const durationMs = exportRow.endMs - exportRow.startMs;
   const holdId = await holdForStep(ctx, "creator_export", billedMinutes(durationMs));
+  const costs = { localMs: 0 };
   const { path } = await downloadSource(ctx, source);
   let cues = null;
   if (exportRow.burnSubtitles && exportRow.subtitleTranscriptId !== null) {
@@ -955,25 +1234,30 @@ async function render(ctx: StepContext): Promise<void> {
   }
   const output = join(ctx.workDir, "clip.mp4");
   const aspect: AspectRatio = exportRow.aspectRatio;
-  await renderClip(deps.tools, {
-    input: path,
-    output,
-    workDir: ctx.workDir,
-    startMs: exportRow.startMs,
-    endMs: exportRow.endMs,
-    source: { width: source.width, height: source.height, hasAudio: source.hasAudio === true },
-    aspect,
-    cropX: exportRow.cropX,
-    subtitles: cues,
-    maxBytes: EXPORT_MAX_BYTES,
-    timeoutMs: 8 * 60_000,
-    signal: ctx.signal,
-  });
-  const info = await verifyRender(
-    deps.tools,
-    output,
-    { durationMs, aspect },
-    { timeoutMs: 60_000, signal: ctx.signal },
+  const frame = { width: source.width, height: source.height, hasAudio: source.hasAudio === true };
+  await timed(costs, () =>
+    renderClip(deps.tools, {
+      input: path,
+      output,
+      workDir: ctx.workDir,
+      startMs: exportRow.startMs,
+      endMs: exportRow.endMs,
+      source: frame,
+      aspect,
+      cropX: exportRow.cropX,
+      subtitles: cues,
+      maxBytes: EXPORT_MAX_BYTES,
+      timeoutMs: 8 * 60_000,
+      signal: ctx.signal,
+    }),
+  );
+  const info = await timed(costs, () =>
+    verifyRender(
+      deps.tools,
+      output,
+      { durationMs, aspect },
+      { timeoutMs: 60_000, signal: ctx.signal },
+    ),
   );
   if (info === null) throw new StepFailure("render_invalid", true);
   const bytes = new Uint8Array(await readFile(output));
@@ -987,6 +1271,9 @@ async function render(ctx: StepContext): Promise<void> {
     throw new StepFailure("storage_unavailable", true);
   }
   const key = buildWorkspaceKey(job.workspaceId, "creator-exports", "video/mp4");
+  // Still this worker's job (not cancelled, not taken over, its project not deleted)
+  // right before the file is written: a lost job stores nothing.
+  if (!(await ctx.lease.renew())) throw new LeaseLostError();
   try {
     await putOrCleanUp(target.storage, key, bytes, { contentType: "video/mp4" });
   } catch (error) {
@@ -1031,6 +1318,7 @@ async function render(ctx: StepContext): Promise<void> {
           height: info.height ?? 0,
         },
         { id: "ffmpeg", model: "libx264", simulated: false },
+        { localProcessingMs: costs.localMs },
       );
       await recordEvent(tx, job.workspaceId, job.projectId, "export_ready", null, {
         exportId: exportRow.id,
@@ -1038,9 +1326,25 @@ async function render(ctx: StepContext): Promise<void> {
       });
     });
   } catch (error) {
-    // Not recorded (lease lost, a storage location change, the database): not kept.
-    await target.storage.delete(key, { signal: AbortSignal.timeout(15_000) }).catch(() => {
-      deps.logger?.error({ jobId: job.id }, "Could not remove an unrecorded export");
+    // Not recorded (lease lost, a storage location change, the database): not kept. If
+    // storage refuses the delete now, the object is queued so the sweep removes it later.
+    await target.storage.delete(key, { signal: AbortSignal.timeout(15_000) }).catch(async () => {
+      deps.logger?.error({ jobId: job.id }, "Could not remove an unrecorded export; queued");
+      await queueStorageDeletions(
+        deps.db,
+        [
+          {
+            workspaceId: job.workspaceId,
+            projectId: job.projectId,
+            reason: "render_discarded",
+            storageProvider: target.provider,
+            storageKey: key,
+          },
+        ],
+        new Date(),
+      ).catch(() => {
+        deps.logger?.error({ jobId: job.id }, "Could not queue an unrecorded export");
+      });
     });
     throw error;
   }

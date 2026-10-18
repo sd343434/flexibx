@@ -7,10 +7,12 @@ import { requireWorkspaceAccess } from "../tenancy/access";
 import { can } from "../tenancy/permissions";
 
 import {
+  abortUpload,
   cancelJob,
   completeUpload,
   createClip,
   createProject,
+  deleteProject,
   getProject,
   listProjects,
   requestExport,
@@ -18,9 +20,13 @@ import {
   requestTranslation,
   retryJob,
   reviewClip,
+  signUploadPart,
+  startMultipartUpload,
   startUpload,
   updateClip,
   updateSegment,
+  uploadStatus,
+  type UploadTransport,
 } from "./project-service";
 import { getCreatorDeps } from "./runtime";
 
@@ -35,6 +41,23 @@ const ms = z.coerce.number().int().min(0).max(14_400_000);
 const requestKey = z.string().regex(/^[A-Za-z0-9-]{8,64}$/);
 const language = z.string().regex(/^[a-z]{2,3}(-[A-Z]{2})?$/);
 const title = z.string().trim().min(1).max(200);
+const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+const fileInput = {
+  fileName: z.string().min(1).max(500),
+  contentType: z.string().min(1).max(100),
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+};
+
+/** Where the browser PUTs: storage's signed URL, or the app's test-only route (memory store). */
+function uploadUrl(
+  upload: UploadTransport,
+  appPath: string,
+  appHeaders: Readonly<Record<string, string>> = {},
+) {
+  return upload.kind === "direct"
+    ? { url: upload.url, headers: upload.headers, expiresAt: upload.expiresAt.toISOString() }
+    : { url: appPath, headers: appHeaders, expiresAt: upload.expiresAt.toISOString() };
+}
 
 export const createProjectAction = withAction({
   name: "studio.project_create",
@@ -54,30 +77,77 @@ export const createProjectAction = withAction({
 
 export const startUploadAction = withAction({
   name: "studio.upload_start",
-  input: z.strictObject({
-    slug,
-    projectId: z.uuid(),
-    fileName: z.string().min(1).max(500),
-    contentType: z.string().min(1).max(100),
-    size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  }),
+  input: z.strictObject({ slug, projectId: z.uuid(), ...fileInput, sha256: sha256.optional() }),
+  handler: async ({ slug: workspace, projectId, sha256: hash, ...file }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "content.create");
+    const { sourceId, upload } = await startUpload(getCreatorDeps(), ctx, projectId, {
+      ...file,
+      sha256: hash ?? null,
+    });
+    return {
+      sourceId,
+      ...uploadUrl(upload, `/api/w/${encodeURIComponent(workspace)}/studio/uploads/${sourceId}`, {
+        "content-type": file.contentType,
+      }),
+    };
+  },
+});
+
+export const startMultipartUploadAction = withAction({
+  name: "studio.upload_start_multipart",
+  input: z.strictObject({ slug, projectId: z.uuid(), ...fileInput }),
   handler: async ({ slug: workspace, projectId, ...file }) => {
     const ctx = await requireWorkspaceAccess(workspace, "content.create");
-    const { sourceId, upload } = await startUpload(getCreatorDeps(), ctx, projectId, file);
-    // The in-memory test transport goes through the app's own access-checked route.
-    return upload.kind === "direct"
-      ? {
-          sourceId,
-          url: upload.url,
-          headers: upload.headers,
-          expiresAt: upload.expiresAt.toISOString(),
-        }
-      : {
-          sourceId,
-          url: `/api/w/${encodeURIComponent(workspace)}/studio/uploads/${sourceId}`,
-          headers: { "content-type": file.contentType },
-          expiresAt: upload.expiresAt.toISOString(),
-        };
+    const started = await startMultipartUpload(getCreatorDeps(), ctx, projectId, file);
+    return { ...started, expiresAt: started.expiresAt.toISOString() };
+  },
+});
+
+export const signUploadPartAction = withAction({
+  name: "studio.upload_part",
+  input: z.strictObject({
+    slug,
+    sourceId: z.uuid(),
+    partNumber: z.number().int().min(1).max(10_000),
+    size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    sha256,
+  }),
+  handler: async ({ slug: workspace, sourceId, ...part }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "content.create");
+    const { upload } = await signUploadPart(getCreatorDeps(), ctx, sourceId, part);
+    return uploadUrl(
+      upload,
+      `/api/w/${encodeURIComponent(workspace)}/studio/uploads/${sourceId}/parts/${String(part.partNumber)}`,
+    );
+  },
+});
+
+export const uploadStatusAction = withAction({
+  name: "studio.upload_status",
+  input: z.strictObject({ slug, sourceId: z.uuid() }),
+  handler: async ({ slug: workspace, sourceId }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "content.create");
+    const status = await uploadStatus(getCreatorDeps(), ctx, sourceId);
+    return { ...status, expiresAt: status.expiresAt.toISOString() };
+  },
+});
+
+export const abortUploadAction = withAction({
+  name: "studio.upload_abort",
+  input: z.strictObject({ slug, sourceId: z.uuid() }),
+  handler: async ({ slug: workspace, sourceId }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "content.create");
+    await abortUpload(getCreatorDeps(), ctx, sourceId);
+    return { aborted: true };
+  },
+});
+
+export const deleteProjectAction = withAction({
+  name: "studio.project_delete",
+  input: z.strictObject({ slug, projectId: z.uuid(), confirmName: z.string().max(200) }),
+  handler: async ({ slug: workspace, projectId, confirmName }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "content.edit");
+    return deleteProject(getCreatorDeps(), ctx, projectId, { confirmName });
   },
 });
 
@@ -92,24 +162,38 @@ export const completeUploadAction = withAction({
 
 export const requestTranscriptionAction = withAction({
   name: "studio.transcribe",
-  input: z.strictObject({ slug, projectId: z.uuid(), language: language.optional(), requestKey }),
-  handler: async ({ slug: workspace, projectId, language: lang, requestKey: key }) => {
+  input: z.strictObject({
+    slug,
+    projectId: z.uuid(),
+    language: language.optional(),
+    requestKey,
+    externalProcessing: z.boolean().optional(),
+  }),
+  handler: async ({ slug: workspace, projectId, language: lang, requestKey: key, ...rest }) => {
     const ctx = await requireWorkspaceAccess(workspace, "content.create");
     return requestTranscription(getCreatorDeps(), ctx, projectId, {
       language: lang ?? null,
       requestKey: key,
+      externalProcessing: rest.externalProcessing === true,
     });
   },
 });
 
 export const requestTranslationAction = withAction({
   name: "studio.translate",
-  input: z.strictObject({ slug, transcriptId: z.uuid(), targetLanguage: language, requestKey }),
-  handler: async ({ slug: workspace, transcriptId, targetLanguage, requestKey: key }) => {
+  input: z.strictObject({
+    slug,
+    transcriptId: z.uuid(),
+    targetLanguage: language,
+    requestKey,
+    externalProcessing: z.boolean().optional(),
+  }),
+  handler: async ({ slug: workspace, transcriptId, targetLanguage, requestKey: key, ...rest }) => {
     const ctx = await requireWorkspaceAccess(workspace, "content.create");
     return requestTranslation(getCreatorDeps(), ctx, transcriptId, {
       targetLanguage,
       requestKey: key,
+      externalProcessing: rest.externalProcessing === true,
     });
   },
 });
@@ -234,5 +318,7 @@ export async function getStudioProject(workspace: string, projectId: string) {
     canCreate: can(ctx.role, "content.create"),
     canEdit: can(ctx.role, "content.edit"),
     canApprove: can(ctx.role, "content.approve"),
+    // Deleting a project and exporting its data: the same role as deleting content.
+    canDelete: can(ctx.role, "content.edit"),
   };
 }

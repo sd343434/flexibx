@@ -149,6 +149,15 @@ export const VALIDATION_CODES = [
   "creator_translation_exists",
   "creator_segment_out_of_bounds",
   "creator_stale",
+  "creator_project_deleting",
+  "creator_upload_in_progress",
+  "creator_upload_limit",
+  "creator_checksum_invalid",
+  "creator_multipart_unsupported",
+  "creator_part_invalid",
+  "creator_upload_incomplete",
+  "creator_external_consent_required",
+  "creator_delete_name_mismatch",
 ] as const;
 
 export type ValidationCode = (typeof VALIDATION_CODES)[number];

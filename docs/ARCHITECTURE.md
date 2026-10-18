@@ -1204,3 +1204,43 @@ reframed short clips. Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATO
     English (LTR).
 - **Worker:** `pnpm creator:worker` (`scripts/creator/worker.ts`) is a separate process
   and the only place FFmpeg runs.
+
+## 24. Creator Studio production capabilities (Pass 9)
+
+Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md) §§ 4 and 7–10.
+
+- **Data (migration `20261021090000_creator_studio_production`):**
+  - `creator_sources` gains `upload_mode` (`single` | `multipart`), the multipart
+    upload id, part size and count, and the declared SHA-256. `creator_source_parts`
+    holds each part's declared size and SHA-256 (CHECKs: parts 5–256 MiB, only the last
+    may be smaller).
+  - `creator_storage_deletions`: the queue and record of objects to remove (reason,
+    provider, key, open multipart upload, attempts, last error code, next attempt,
+    completion). Identity columns are immutable and a completed row cannot be reopened.
+  - `creator_projects.status` gains `DELETING` (with `deleted_at`). A BEFORE INSERT
+    trigger on sources, jobs, transcripts, clips and exports refuses rows for a project
+    that is being deleted (`FOR SHARE` on the project row, so it serialises with the
+    delete).
+  - `creator_job_steps` gains the cost columns (local processing time; provider audio
+    seconds, tokens and estimated cost) and a `checkpoint` JSON for partial results.
+- **Providers:** `TranscriptionProvider` / `TranslationProvider` now declare
+  `processing` (external or not, and region), the audio piece length and the price per
+  audio second. `providersFromEnv` (`runtime-env.ts`, pure) builds the simulator or the
+  OpenAI adapters (`providers/openai.ts`) behind the configuration gate. Provider
+  failures are typed (`rate_limited`, `timeout`, `unavailable`, `rejected`, `auth`,
+  `outcome_unknown`); only the safe ones are retried, and `outcome_unknown` never is.
+- **Resumable upload:** `StorageService.multipart` (create, sign part, list, complete,
+  abort) implemented for S3 and in memory. The server keeps the session (source row
+  bound to workspace, project, uploader and expiry), signs one part URL at a time after
+  the browser declares the part's SHA-256, and completes from `ListParts`. The worker
+  downloads to disk with a size cap (`downloadToFile`) and verifies every part's hash in
+  one pass (`hashFile`).
+- **Checkpoints:** TRANSCRIBE (per audio piece) and TRANSLATE (per batch) save partial
+  results on the step through the fenced lease write, so retries and takeovers continue
+  without paying the provider twice; the customer's hold is captured once, when the step
+  succeeds.
+- **Deletion and export:** `deleteProject` (`project-service.ts`) and the sweep
+  `processStorageDeletions` (`deletions.ts`, run by the worker every minute).
+  `exportProjectData` returns a versioned JSON document.
+- **Monitoring:** the worker's heartbeat (`creator-worker`) and eleven creator checks in
+  `ops-status` (counts and ages only).

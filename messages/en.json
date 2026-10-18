@@ -512,7 +512,16 @@
     "creator_language_unsupported": "This language is not supported by the configured provider.",
     "creator_translation_exists": "A translation to this language already exists.",
     "creator_segment_out_of_bounds": "A subtitle must end after it starts and stay inside the media.",
-    "creator_stale": "Someone changed this in the meantime. Reload and try again."
+    "creator_stale": "Someone changed this in the meantime. Reload and try again.",
+    "creator_project_deleting": "This project is being deleted.",
+    "creator_upload_in_progress": "An upload is already in progress for this project. Choose the same file to resume it.",
+    "creator_upload_limit": "Too many uploads in progress in this workspace (at most {maximum}). Finish or cancel one first.",
+    "creator_checksum_invalid": "The file's checksum is invalid.",
+    "creator_multipart_unsupported": "Large uploads are not available with the current storage.",
+    "creator_part_invalid": "This part of the upload is not valid.",
+    "creator_upload_incomplete": "Part {part} of the upload is missing. Resume the upload with the same file.",
+    "creator_external_consent_required": "Confirm that the media may be sent to the processing service.",
+    "creator_delete_name_mismatch": "The name does not match the project's name."
   },
   "marketing": {
     "common": {
@@ -2827,7 +2836,8 @@
       "PROCESSING": "Processing",
       "NEEDS_REVIEW": "Needs review",
       "COMPLETED": "Completed",
-      "FAILED": "Failed"
+      "FAILED": "Failed",
+      "DELETING": "Being deleted"
     },
     "sourceStatus": {
       "PENDING_UPLOAD": "Upload started",
@@ -2918,7 +2928,9 @@
       "clips_suggested": "Clips suggested",
       "translated": "Translated",
       "export_ready": "Export ready",
-      "clip_reviewed": "Clip reviewed"
+      "clip_reviewed": "Clip reviewed",
+      "upload_cancelled": "Upload cancelled",
+      "project_deletion_requested": "Deletion requested"
     },
     "failures": {
       "upload_missing": "The uploaded file was not found. Upload it again.",
@@ -2945,11 +2957,21 @@
       "deadline_reached": "The job ran past its time limit.",
       "max_attempts": "The job failed after all retries.",
       "cancelled": "Cancelled.",
-      "internal_error": "An unexpected error occurred."
+      "internal_error": "An unexpected error occurred.",
+      "provider_rate_limited": "The processing service is busy. It will be retried.",
+      "provider_rejected": "The processing service refused the request.",
+      "provider_auth": "The processing service rejected the deployment's credentials. An administrator must check the configuration.",
+      "provider_outcome_unknown": "The processing service did not answer, and it may have done the work. It was not retried automatically, so nothing is paid twice; retry when you are ready.",
+      "checksum_mismatch": "The uploaded file does not match what the browser sent (checksum). Upload it again.",
+      "worker_disk_full": "The processing server is out of disk space. It will be retried.",
+      "project_deleted": "The project was deleted."
     },
     "provider": {
       "disabled": "AI processing is not enabled here. You can upload and check files, but transcription and translation are unavailable.",
-      "simulated": "Simulation mode: transcripts and translations here are generated placeholder text, not a real transcription of your media. They are never charged."
+      "simulated": "Simulation mode: transcripts and translations here are generated placeholder text, not a real transcription of your media. They are never charged.",
+      "external": "Transcription and translation use {provider} ({model}). Audio and transcript text are sent to {provider} for processing (region: {region}); they are not used to train its models.",
+      "consent": "I confirm the audio of this project is sent to {provider} (region {region}) to be transcribed.",
+      "consentText": "I confirm the transcript text is sent to {provider} (region {region}) to be translated."
     },
     "simulated": {
       "badge": "Simulated",
@@ -2957,9 +2979,9 @@
     },
     "source": {
       "title": "Source media",
-      "pending": "An upload was started and not finished. It expires automatically.",
+      "pending": "An upload was started and not finished. Choose the same file again to resume it; unfinished uploads expire automatically.",
       "checking": "Checking the uploaded file…",
-      "limits": "Up to {minutes} minutes. MP4, MOV, WebM, MP3, M4A or WAV.",
+      "limits": "Up to {minutes} minutes. MP4, MOV, WebM, MP3, M4A or WAV. Large files are uploaded in parts and can be resumed.",
       "file": "File",
       "duration": "Duration",
       "dimensions": "Dimensions",
@@ -2978,7 +3000,13 @@
       "done": "Uploaded. The file is being checked.",
       "tooLarge": "The file is larger than the allowed size.",
       "unsupported": "This file type is not supported.",
-      "transferFailed": "The upload failed. Check your connection and try again."
+      "transferFailed": "The upload failed. Check your connection and try again.",
+      "hashing": "Preparing the file…",
+      "paused": "Paused at {percent}%",
+      "resumed": "resumed",
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancelled": "Upload cancelled."
     },
     "transcript": {
       "title": "Transcript",
@@ -3051,6 +3079,23 @@
       "saving": "Saving…",
       "cancel": "Cancel",
       "requesting": "Requesting…"
+    },
+    "delete": {
+      "title": "Data and deletion",
+      "heading": "Delete this project",
+      "body": "Deletes the source file, transcripts, translations, clips and exported files. Running work is stopped and held credits are released; credits already used are not refunded. This cannot be undone.",
+      "confirm": "Type the project name to confirm: {name}",
+      "submit": "Delete project",
+      "pending": "Deleting…",
+      "pendingTitle": "Deletion in progress",
+      "pendingBody": "The project's content was removed. Its files are being deleted from storage; the project disappears once storage confirms.",
+      "pendingFiles": "{count, plural, =0 {All files deleted.} one {# file still to delete.} other {# files still to delete.}}",
+      "failing": "{count, plural, one {# file} other {# files}} could not be deleted yet; the system retries automatically."
+    },
+    "dataExport": {
+      "title": "Download the project's data",
+      "body": "A JSON file with the project, transcripts and translations (with timings), clips, exports and processing history.",
+      "download": "Download data (JSON)"
     }
   }
 }

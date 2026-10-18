@@ -1,9 +1,19 @@
+import { createWriteStream } from "node:fs";
+import { unlink } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  ListPartsCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -11,18 +21,22 @@ import type { StorageEnv } from "../env-schema";
 import {
   assertUploadAllowed,
   assertValidKey,
+  ObjectTooLargeError,
   resolveTtl,
   STORAGE_CATEGORIES,
   StorageAccessError,
   StorageTimeoutError,
   type AllowedContentType,
+  type DownloadToFileOptions,
   type GetObjectOptions,
+  type MultipartStorage,
   type SignedUpload,
   type SignedUploadOptions,
   type StorageAccessFailure,
   type StorageDeleteOptions,
   type StorageService,
   type StoredObjectData,
+  type UploadedPart,
 } from "./storage";
 
 /**
@@ -169,6 +183,13 @@ export class S3StorageService implements StorageService {
           secretAccessKey: env.S3_SECRET_ACCESS_KEY,
         },
         ...(env.S3_ENDPOINT === undefined ? {} : { endpoint: env.S3_ENDPOINT }),
+        // Checksums only where S3 requires them. The SDK's default (since 3.729) adds a
+        // CRC32 of the (empty) body to every presigned PUT, which then rejects the
+        // browser's real upload with a checksum mismatch; S3-compatible services also
+        // differ in what they accept. Integrity is checked end to end instead (sizes are
+        // signed; Creator Studio parts carry SHA-256 the worker verifies).
+        requestChecksumCalculation: "WHEN_REQUIRED",
+        responseChecksumValidation: "WHEN_REQUIRED",
         requestHandler: {
           connectionTimeout: timeouts.connectionMs,
           socketTimeout: timeouts.idleMs,
@@ -291,4 +312,178 @@ export class S3StorageService implements StorageService {
       throw error;
     }
   }
+
+  async downloadToFile(
+    key: string,
+    path: string,
+    options: DownloadToFileOptions,
+  ): Promise<number | null> {
+    assertValidKey(key);
+    try {
+      return await withinDeadline(
+        "get",
+        transferDeadlineMs(options.expectedBytes, this.timeouts),
+        options.signal,
+        async (abortSignal) => {
+          const result = await this.client.send(
+            new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+            { abortSignal },
+          );
+          if (result.Body === undefined) return null;
+          const body =
+            result.Body instanceof Readable
+              ? result.Body
+              : Readable.fromWeb(
+                  (
+                    result.Body as { transformToWebStream(): ReadableStream }
+                  ).transformToWebStream() as never,
+                );
+          return writeCapped(body, path, options.maxBytes, abortSignal);
+        },
+      );
+    } catch (error) {
+      if (error instanceof Error && (error.name === "NoSuchKey" || error.name === "NotFound")) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  readonly multipart: MultipartStorage = {
+    create: async (key, options) => {
+      assertValidKey(key);
+      const result = await withinDeadline("put", this.timeouts.deleteMs, undefined, (abortSignal) =>
+        this.client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: this.bucket,
+            Key: key,
+            ContentType: options.contentType,
+          }),
+          { abortSignal },
+        ),
+      );
+      if (result.UploadId === undefined || result.UploadId === "") {
+        throw new Error("Storage returned no multipart upload id");
+      }
+      return result.UploadId;
+    },
+    signPart: async (key, uploadId, partNumber, options) => {
+      assertValidKey(key);
+      const expiresIn = resolveTtl(options.expiresInSeconds);
+      // The signed Content-Length binds the URL to that part's exact size.
+      const url = await getSignedUrl(
+        this.client,
+        new UploadPartCommand({
+          Bucket: this.bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+          ContentLength: options.contentLength,
+        }),
+        { expiresIn, signableHeaders: new Set(["content-length"]) },
+      );
+      return {
+        url,
+        method: "PUT",
+        headers: { "content-length": String(options.contentLength) },
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
+      };
+    },
+    listParts: async (key, uploadId, options = {}) => {
+      assertValidKey(key);
+      const parts: UploadedPart[] = [];
+      let marker: string | undefined;
+      try {
+        for (let page = 0; page < 20; page += 1) {
+          const result = await withinDeadline(
+            "get",
+            this.timeouts.deleteMs,
+            options.signal,
+            (abortSignal) =>
+              this.client.send(
+                new ListPartsCommand({
+                  Bucket: this.bucket,
+                  Key: key,
+                  UploadId: uploadId,
+                  MaxParts: 1000,
+                  ...(marker === undefined ? {} : { PartNumberMarker: marker }),
+                }),
+                { abortSignal },
+              ),
+          );
+          for (const part of result.Parts ?? []) {
+            if (part.PartNumber === undefined || part.Size === undefined || part.ETag === undefined)
+              continue;
+            parts.push({ partNumber: part.PartNumber, size: part.Size, etag: part.ETag });
+          }
+          if (result.IsTruncated !== true || result.NextPartNumberMarker === undefined) break;
+          marker = result.NextPartNumberMarker;
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === "NoSuchUpload") return null;
+        throw error;
+      }
+      return parts;
+    },
+    complete: async (key, uploadId, parts) => {
+      assertValidKey(key);
+      await withinDeadline("put", this.timeouts.deleteMs * 2, undefined, (abortSignal) =>
+        this.client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: this.bucket,
+            Key: key,
+            UploadId: uploadId,
+            MultipartUpload: {
+              Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })),
+            },
+          }),
+          { abortSignal },
+        ),
+      );
+    },
+    abort: async (key, uploadId, options = {}) => {
+      assertValidKey(key);
+      try {
+        await withinDeadline("delete", this.timeouts.deleteMs, options.signal, (abortSignal) =>
+          this.client.send(
+            new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }),
+            { abortSignal },
+          ),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.name === "NoSuchUpload") return;
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * Pipes `body` into a new file at `path`, failing once more than `maxBytes` arrive; a
+ * failed or cut-off transfer leaves no file behind. Resolves with the bytes written.
+ */
+export async function writeCapped(
+  body: Readable,
+  path: string,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<number> {
+  let written = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      written += chunk.byteLength;
+      if (written > maxBytes) {
+        callback(new ObjectTooLargeError());
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(body, cap, createWriteStream(path, { flags: "wx" }), { signal });
+  } catch (error) {
+    await unlink(path).catch(() => undefined);
+    throw error;
+  }
+  return written;
 }

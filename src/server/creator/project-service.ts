@@ -9,8 +9,11 @@ import { AppError } from "../errors/app-error";
 import {
   assertUploadAllowed,
   buildWorkspaceKey,
+  CREATOR_SINGLE_UPLOAD_MAX_BYTES,
+  CREATOR_SOURCE_MAX_BYTES,
   STORAGE_CATEGORIES,
   type AllowedContentType,
+  type StorageService,
 } from "../storage/storage";
 import { isUuid, type TenantContext } from "../tenancy/context";
 import { assertCan } from "../tenancy/permissions";
@@ -20,10 +23,13 @@ import {
   JOB_DEADLINE_MS,
   MAX_CLIP_MS,
   MIN_CLIP_MS,
+  PART_URL_TTL_SECONDS,
+  partSizeFor,
   UPLOAD_CLEANUP_GRACE_MS,
   UPLOAD_TTL_SECONDS,
   type CreatorDeps,
 } from "./config";
+import { queueStorageDeletions } from "./deletions";
 import { creatorError } from "./errors";
 import { enqueueJob, recordEvent } from "./jobs";
 import { toSrt, toVtt } from "./media/media";
@@ -43,15 +49,29 @@ async function dbNow(db: Db): Promise<Date> {
   return rows[0]?.now ?? new Date();
 }
 
-async function projectOf(db: Db, ctx: TenantContext, projectId: string) {
+/**
+ * The caller's project. A project being deleted can still be looked at (its deletion
+ * status) but nothing new starts in it: `active` refuses it.
+ */
+async function projectOf(
+  db: Db,
+  ctx: TenantContext,
+  projectId: string,
+  mode: "active" | "any" = "active",
+) {
   if (!isUuid(projectId)) throw notFound("creator_project");
   const project = await db.creatorProject.findFirst({
     where: { id: projectId, workspaceId: ctx.workspaceId },
-    select: { id: true, status: true, version: true },
+    select: { id: true, name: true, status: true, version: true },
   });
   if (project === null) throw notFound("creator_project");
+  if (mode === "active" && project.status === "DELETING") {
+    throw creatorError("CONFLICT", "creator_project_deleting");
+  }
   return project;
 }
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 // ── Projects ──────────────────────────────────────────────────────────────────
 
@@ -101,7 +121,7 @@ export async function listProjects(db: Db, ctx: TenantContext) {
 export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectId: string) {
   assertCan(ctx, "content.view");
   const { db } = deps;
-  await projectOf(db, ctx, projectId);
+  await projectOf(db, ctx, projectId, "any");
   const where = { workspaceId: ctx.workspaceId, projectId };
   const [project, sources, jobs, transcripts, clips, exports, events] = await Promise.all([
     db.creatorProject.findFirst({
@@ -113,6 +133,7 @@ export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectI
         status: true,
         version: true,
         createdAt: true,
+        deletedAt: true,
       },
     }),
     db.creatorSource.findMany({
@@ -132,6 +153,9 @@ export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectI
         hasAudio: true,
         hasVideo: true,
         rejectionCode: true,
+        uploadMode: true,
+        partSizeBytes: true,
+        partCount: true,
         createdAt: true,
       },
     }),
@@ -232,6 +256,17 @@ export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectI
     }),
   ]);
   if (project === null) throw notFound("creator_project");
+  const deletion =
+    project.status === "DELETING"
+      ? {
+          pending: await db.creatorStorageDeletion.count({
+            where: { ...where, completedAt: null },
+          }),
+          failing: await db.creatorStorageDeletion.count({
+            where: { ...where, completedAt: null, lastErrorCode: { not: null } },
+          }),
+        }
+      : null;
   const source = sources.find((row) => row.status === "VERIFIED") ?? null;
   const durationMs = source?.durationMs ?? null;
   const minutes = durationMs === null ? null : billedMinutes(durationMs);
@@ -244,10 +279,18 @@ export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectI
     clips,
     exports,
     events,
+    deletion,
     provider:
       deps.transcription === null
         ? null
-        : { id: deps.transcription.id, simulated: deps.transcription.simulated },
+        : {
+            id: deps.transcription.id,
+            model: deps.transcription.model,
+            simulated: deps.transcription.simulated,
+            external: deps.transcription.external,
+            region: deps.transcription.region,
+            translation: deps.translation === null ? null : deps.translation.model,
+          },
     estimate: {
       minutes,
       // Simulated text is never charged.
@@ -262,8 +305,9 @@ export async function getProject(deps: CreatorDeps, ctx: TenantContext, projectI
       exportCreditsPerMinute: FEATURE_PRICES.creator_export,
     },
     limits: {
-      maxUploadBytes: deps.limits.maxUploadBytes,
+      maxUploadBytes: Math.min(deps.limits.maxUploadBytes, CREATOR_SOURCE_MAX_BYTES),
       maxDurationMs: deps.limits.maxDurationMs,
+      singleUploadMaxBytes: CREATOR_SINGLE_UPLOAD_MAX_BYTES,
     },
   };
 }
@@ -285,33 +329,92 @@ export type UploadTransport =
   /** In-memory test storage only: the app's own upload route receives the bytes. */
   | { readonly kind: "app"; readonly expiresAt: Date };
 
+/** The in-memory test store cannot receive a browser PUT: the app's route stands in. */
+function transport(signed: {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly expiresAt: Date;
+}): UploadTransport {
+  return signed.url.startsWith("memory://")
+    ? { kind: "app", expiresAt: signed.expiresAt }
+    : {
+        kind: "direct",
+        url: signed.url,
+        method: "PUT",
+        headers: signed.headers,
+        expiresAt: signed.expiresAt,
+      };
+}
+
 /**
- * Starts an upload: checks the declared type and size against the configured limits,
- * reserves a server-generated private key in the project's workspace and returns a
- * short-lived signed PUT for exactly that type and size. Nothing is trusted yet: the
- * analysis job checks the bytes themselves once the upload is completed.
+ * Checks shared by both kinds of upload: the declared type, the size limit, one open
+ * upload per project, at most `maxActiveUploads` open in the workspace.
+ */
+async function checkNewUpload(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  projectId: string,
+  input: { readonly contentType: string; readonly size: number },
+  maxBytes: number,
+) {
+  const project = await projectOf(deps.db, ctx, projectId);
+  if (!isSourceContentType(input.contentType)) {
+    throw creatorError("UNSUPPORTED_MEDIA_TYPE", "creator_type_unsupported");
+  }
+  if (!Number.isSafeInteger(input.size) || input.size <= 0 || input.size > maxBytes) {
+    throw creatorError("PAYLOAD_TOO_LARGE", "creator_upload_too_large", {
+      maximum: Math.floor(maxBytes / (1024 * 1024)),
+    });
+  }
+  const now = await dbNow(deps.db);
+  const open = { status: "PENDING_UPLOAD" as const, uploadExpiresAt: { gt: now } };
+  if (
+    (await deps.db.creatorSource.count({
+      where: { workspaceId: ctx.workspaceId, projectId, ...open },
+    })) > 0
+  ) {
+    throw creatorError("CONFLICT", "creator_upload_in_progress");
+  }
+  if (
+    (await deps.db.creatorSource.count({ where: { workspaceId: ctx.workspaceId, ...open } })) >=
+    deps.limits.maxActiveUploads
+  ) {
+    throw creatorError("RATE_LIMITED", "creator_upload_limit", {
+      maximum: deps.limits.maxActiveUploads,
+    });
+  }
+  return { project, contentType: input.contentType as AllowedContentType, now };
+}
+
+/**
+ * Starts a single-PUT upload (files up to CREATOR_SINGLE_UPLOAD_MAX_BYTES): checks the
+ * declared type and size, reserves a server-generated private key in the project's
+ * workspace and returns a short-lived signed PUT for exactly that type and size. The
+ * browser also declares the file's SHA-256; nothing is trusted yet — the analysis job
+ * checks the bytes, their hash and their format.
  */
 export async function startUpload(
   deps: CreatorDeps,
   ctx: TenantContext,
   projectId: string,
-  input: { readonly fileName: string; readonly contentType: string; readonly size: number },
+  input: {
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly size: number;
+    readonly sha256?: string | null;
+  },
 ): Promise<{ sourceId: string; upload: UploadTransport }> {
   assertCan(ctx, "content.create");
-  const project = await projectOf(deps.db, ctx, projectId);
-  if (!isSourceContentType(input.contentType)) {
-    throw creatorError("UNSUPPORTED_MEDIA_TYPE", "creator_type_unsupported");
-  }
   const maxBytes = Math.min(
     deps.limits.maxUploadBytes,
+    CREATOR_SINGLE_UPLOAD_MAX_BYTES,
     STORAGE_CATEGORIES["creator-sources"].maxBytes,
   );
-  if (!Number.isInteger(input.size) || input.size <= 0 || input.size > maxBytes) {
-    throw creatorError("PAYLOAD_TOO_LARGE", "creator_upload_too_large", {
-      maximum: Math.floor(maxBytes / (1024 * 1024)),
-    });
+  const sha256 = input.sha256 ?? null;
+  if (sha256 !== null && !SHA256_HEX.test(sha256)) {
+    throw creatorError("VALIDATION_FAILED", "creator_checksum_invalid");
   }
-  const contentType = input.contentType as AllowedContentType;
+  const { project, contentType } = await checkNewUpload(deps, ctx, projectId, input, maxBytes);
   assertUploadAllowed("creator-sources", contentType, input.size);
   const target = await deps.storage.writeTarget();
   const key = buildWorkspaceKey(ctx.workspaceId, "creator-sources", contentType);
@@ -332,6 +435,7 @@ export async function startUpload(
         originalName: printable(input.fileName).slice(0, 200) || "upload",
         declaredContentType: contentType,
         declaredBytes: input.size,
+        declaredSha256: sha256,
         uploadExpiresAt: signed.expiresAt,
         createdByUserId: ctx.userId,
       },
@@ -343,20 +447,78 @@ export async function startUpload(
     });
     await recordEvent(tx, ctx.workspaceId, project.id, "upload_started", ctx.userId, {
       bytes: input.size,
+      mode: "single",
     });
     return source.id;
   });
-  // The in-memory test store cannot receive a browser PUT: the app's route stands in.
-  const upload: UploadTransport = signed.url.startsWith("memory://")
-    ? { kind: "app", expiresAt: signed.expiresAt }
-    : {
-        kind: "direct",
-        url: signed.url,
-        method: "PUT",
-        headers: signed.headers,
-        expiresAt: signed.expiresAt,
-      };
-  return { sourceId, upload };
+  return { sourceId, upload: transport(signed) };
+}
+
+/**
+ * Starts a resumable upload in parts (S3 multipart) for large files, up to the
+ * deployment's CREATOR_MAX_UPLOAD_MB. The session belongs to this project, workspace and
+ * user, stays open for CREATOR_UPLOAD_SESSION_HOURS and is aborted (parts removed) when
+ * it expires.
+ */
+export async function startMultipartUpload(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  projectId: string,
+  input: { readonly fileName: string; readonly contentType: string; readonly size: number },
+): Promise<{ sourceId: string; partSize: number; partCount: number; expiresAt: Date }> {
+  assertCan(ctx, "content.create");
+  const maxBytes = Math.min(deps.limits.maxUploadBytes, CREATOR_SOURCE_MAX_BYTES);
+  const { project, contentType, now } = await checkNewUpload(deps, ctx, projectId, input, maxBytes);
+  const target = await deps.storage.writeTarget();
+  const multipart = target.storage.multipart;
+  if (multipart === undefined) {
+    throw creatorError("SERVICE_UNAVAILABLE", "creator_multipart_unsupported");
+  }
+  const key = buildWorkspaceKey(ctx.workspaceId, "creator-sources", contentType);
+  const partSize = deps.timing?.partSizeBytes ?? partSizeFor(input.size);
+  const partCount = Math.ceil(input.size / partSize);
+  const uploadId = await multipart.create(key, { contentType });
+  const expiresAt = new Date(now.getTime() + deps.limits.uploadSessionMs);
+  try {
+    const sourceId = await deps.db.$transaction(async (tx) => {
+      await target.confirm(tx);
+      const source = await tx.creatorSource.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          projectId: project.id,
+          storageProvider: target.provider,
+          storageKey: key,
+          originalName: printable(input.fileName).slice(0, 200) || "upload",
+          declaredContentType: contentType,
+          declaredBytes: input.size,
+          uploadMode: "multipart",
+          multipartUploadId: uploadId,
+          partSizeBytes: partSize,
+          partCount,
+          uploadExpiresAt: expiresAt,
+          createdByUserId: ctx.userId,
+        },
+        select: { id: true },
+      });
+      await tx.creatorProject.updateMany({
+        where: { id: project.id, workspaceId: ctx.workspaceId },
+        data: { status: "UPLOADING", version: { increment: 1 } },
+      });
+      await recordEvent(tx, ctx.workspaceId, project.id, "upload_started", ctx.userId, {
+        bytes: input.size,
+        mode: "multipart",
+        parts: partCount,
+      });
+      return source.id;
+    });
+    return { sourceId, partSize, partCount, expiresAt };
+  } catch (error) {
+    // Not recorded: the empty multipart upload is not left behind.
+    await multipart.abort(key, uploadId, { signal: AbortSignal.timeout(15_000) }).catch(() => {
+      deps.logger?.warn({ projectId }, "Could not abort an unrecorded multipart upload");
+    });
+    throw error;
+  }
 }
 
 async function pendingSource(db: Db, ctx: TenantContext, sourceId: string) {
@@ -372,6 +534,10 @@ async function pendingSource(db: Db, ctx: TenantContext, sourceId: string) {
       declaredContentType: true,
       declaredBytes: true,
       uploadExpiresAt: true,
+      uploadMode: true,
+      multipartUploadId: true,
+      partSizeBytes: true,
+      partCount: true,
     },
   });
   if (source === null) throw notFound("creator_source");
@@ -382,6 +548,126 @@ async function pendingSource(db: Db, ctx: TenantContext, sourceId: string) {
     throw creatorError("CONFLICT", "creator_upload_expired");
   }
   return source;
+}
+
+type PendingSource = Awaited<ReturnType<typeof pendingSource>>;
+
+function multipartOf(source: PendingSource) {
+  if (
+    source.uploadMode !== "multipart" ||
+    source.multipartUploadId === null ||
+    source.partSizeBytes === null ||
+    source.partCount === null
+  ) {
+    throw creatorError("CONFLICT", "creator_upload_not_pending");
+  }
+  return {
+    uploadId: source.multipartUploadId,
+    partSize: source.partSizeBytes,
+    partCount: source.partCount,
+  };
+}
+
+/** The exact size of part `partNumber` (every part is `partSize`, the last one the rest). */
+function expectedPartSize(source: PendingSource, partNumber: number): number {
+  const { partSize, partCount } = multipartOf(source);
+  return partNumber < partCount ? partSize : source.declaredBytes - partSize * (partCount - 1);
+}
+
+async function storageOf(deps: CreatorDeps, source: PendingSource): Promise<StorageService> {
+  return deps.storage.forProvider(source.storageProvider);
+}
+
+/**
+ * A short-lived signed PUT for one part, bound to that part's exact size. The browser
+ * declares the part's SHA-256 first; the worker checks every part against it.
+ */
+export async function signUploadPart(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  sourceId: string,
+  input: { readonly partNumber: number; readonly size: number; readonly sha256: string },
+): Promise<{ upload: UploadTransport }> {
+  assertCan(ctx, "content.create");
+  const source = await pendingSource(deps.db, ctx, sourceId);
+  await projectOf(deps.db, ctx, source.projectId);
+  const { uploadId, partCount } = multipartOf(source);
+  if (!Number.isInteger(input.partNumber) || input.partNumber < 1 || input.partNumber > partCount) {
+    throw creatorError("VALIDATION_FAILED", "creator_part_invalid");
+  }
+  if (input.size !== expectedPartSize(source, input.partNumber)) {
+    throw creatorError("VALIDATION_FAILED", "creator_part_invalid");
+  }
+  if (!SHA256_HEX.test(input.sha256)) {
+    throw creatorError("VALIDATION_FAILED", "creator_checksum_invalid");
+  }
+  const storage = await storageOf(deps, source);
+  if (storage.multipart === undefined) {
+    throw creatorError("SERVICE_UNAVAILABLE", "creator_multipart_unsupported");
+  }
+  // Declared (or re-declared, when the browser sends the part again) before it is signed.
+  const declared = await deps.db.creatorSourcePart.updateMany({
+    where: { workspaceId: ctx.workspaceId, sourceId: source.id, partNumber: input.partNumber },
+    data: { sha256: input.sha256, sizeBytes: input.size, etag: null, uploadedAt: null },
+  });
+  if (declared.count === 0) {
+    await deps.db.creatorSourcePart.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        sourceId: source.id,
+        partNumber: input.partNumber,
+        sizeBytes: input.size,
+        sha256: input.sha256,
+      },
+    });
+  }
+  const signed = await storage.multipart.signPart(source.storageKey, uploadId, input.partNumber, {
+    contentLength: input.size,
+    expiresInSeconds: PART_URL_TTL_SECONDS,
+  });
+  return { upload: transport(signed) };
+}
+
+/**
+ * Where a resumable upload stands, read from storage itself: the parts that arrived
+ * with their declared size (a browser resumes with the others).
+ */
+export async function uploadStatus(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  sourceId: string,
+): Promise<{
+  readonly partSize: number;
+  readonly partCount: number;
+  readonly size: number;
+  readonly expiresAt: Date;
+  readonly uploadedParts: readonly number[];
+}> {
+  assertCan(ctx, "content.create");
+  const source = await pendingSource(deps.db, ctx, sourceId);
+  const { uploadId, partSize, partCount } = multipartOf(source);
+  const storage = await storageOf(deps, source);
+  const stored = (await storage.multipart?.listParts(source.storageKey, uploadId)) ?? null;
+  if (stored === null) throw creatorError("CONFLICT", "creator_upload_expired");
+  const declared = await deps.db.creatorSourcePart.findMany({
+    where: { workspaceId: ctx.workspaceId, sourceId: source.id },
+    select: { partNumber: true, sizeBytes: true },
+  });
+  const declaredSizes = new Map(declared.map((part) => [part.partNumber, part.sizeBytes]));
+  const uploadedParts = stored
+    .filter(
+      (part) =>
+        declaredSizes.get(part.partNumber) === part.size &&
+        part.size === expectedPartSize(source, part.partNumber),
+    )
+    .map((part) => part.partNumber);
+  return {
+    partSize,
+    partCount,
+    size: source.declaredBytes,
+    expiresAt: source.uploadExpiresAt,
+    uploadedParts,
+  };
 }
 
 /**
@@ -396,16 +682,46 @@ export async function receiveAppUpload(
 ): Promise<void> {
   assertCan(ctx, "content.create");
   const source = await pendingSource(deps.db, ctx, sourceId);
+  if (source.uploadMode !== "single") throw creatorError("CONFLICT", "creator_upload_not_pending");
   if (body.byteLength !== source.declaredBytes) {
     throw creatorError("VALIDATION_FAILED", "creator_upload_size_mismatch");
   }
-  const storage = await deps.storage.forProvider(source.storageProvider);
+  const storage = await storageOf(deps, source);
   await storage.put(source.storageKey, body, {
     contentType: source.declaredContentType as AllowedContentType,
   });
 }
 
-/** The browser finished uploading: queue the analysis (verify the bytes, ffprobe). */
+/**
+ * The in-app transport of one part (test-memory only, like receiveAppUpload): the
+ * body must have the part's exact size. `put` hands it to the in-memory store.
+ */
+export async function receiveAppPart(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  sourceId: string,
+  partNumber: number,
+  body: Uint8Array,
+  put: (storage: StorageService, uploadId: string, expected: number) => void,
+): Promise<void> {
+  assertCan(ctx, "content.create");
+  const source = await pendingSource(deps.db, ctx, sourceId);
+  const { uploadId, partCount } = multipartOf(source);
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > partCount) {
+    throw creatorError("VALIDATION_FAILED", "creator_part_invalid");
+  }
+  const expected = expectedPartSize(source, partNumber);
+  if (body.byteLength !== expected) {
+    throw creatorError("VALIDATION_FAILED", "creator_upload_size_mismatch");
+  }
+  put(await storageOf(deps, source), uploadId, expected);
+}
+
+/**
+ * The browser finished uploading. For a multipart upload, storage must hold every part
+ * with its declared size; the object is then assembled. Either way the analysis is
+ * queued (it verifies the bytes and their hashes, and runs ffprobe).
+ */
 export async function completeUpload(
   deps: CreatorDeps,
   ctx: TenantContext,
@@ -413,6 +729,46 @@ export async function completeUpload(
 ): Promise<{ jobId: string }> {
   assertCan(ctx, "content.create");
   const source = await pendingSource(deps.db, ctx, sourceId);
+  await projectOf(deps.db, ctx, source.projectId);
+  if (source.uploadMode === "multipart") {
+    const { uploadId, partCount } = multipartOf(source);
+    const storage = await storageOf(deps, source);
+    const multipart = storage.multipart;
+    if (multipart === undefined) {
+      throw creatorError("SERVICE_UNAVAILABLE", "creator_multipart_unsupported");
+    }
+    const stored = await multipart.listParts(source.storageKey, uploadId);
+    if (stored === null) throw creatorError("CONFLICT", "creator_upload_expired");
+    const declared = await deps.db.creatorSourcePart.findMany({
+      where: { workspaceId: ctx.workspaceId, sourceId: source.id },
+      select: { partNumber: true, sizeBytes: true },
+    });
+    const byNumber = new Map(stored.map((part) => [part.partNumber, part]));
+    const declaredSizes = new Map(declared.map((part) => [part.partNumber, part.sizeBytes]));
+    const parts: { partNumber: number; etag: string }[] = [];
+    for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
+      const part = byNumber.get(partNumber);
+      const expected = expectedPartSize(source, partNumber);
+      if (part?.size !== expected || declaredSizes.get(partNumber) !== expected) {
+        throw creatorError("CONFLICT", "creator_upload_incomplete", { part: partNumber });
+      }
+      parts.push({ partNumber, etag: part.etag });
+    }
+    await multipart.complete(source.storageKey, uploadId, parts);
+    await deps.db.$transaction(async (tx) => {
+      const now = await dbNow(tx);
+      for (const part of parts) {
+        await tx.creatorSourcePart.updateMany({
+          where: { workspaceId: ctx.workspaceId, sourceId: source.id, partNumber: part.partNumber },
+          data: { etag: part.etag.slice(0, 200), uploadedAt: now },
+        });
+      }
+      await tx.creatorSource.updateMany({
+        where: { id: source.id, workspaceId: ctx.workspaceId },
+        data: { multipartUploadId: null },
+      });
+    });
+  }
   return deps.db.$transaction(async (tx) => {
     const now = await dbNow(tx);
     const moved = await tx.creatorSource.updateMany({
@@ -438,10 +794,48 @@ export async function completeUpload(
   });
 }
 
+/** The person gives up an upload: it is closed and whatever arrived is removed. */
+export async function abortUpload(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  sourceId: string,
+): Promise<void> {
+  assertCan(ctx, "content.create");
+  const source = await pendingSource(deps.db, ctx, sourceId);
+  await deps.db.$transaction(async (tx) => {
+    const now = await dbNow(tx);
+    const moved = await tx.creatorSource.updateMany({
+      where: { id: source.id, workspaceId: ctx.workspaceId, status: "PENDING_UPLOAD" },
+      data: { status: "EXPIRED", multipartUploadId: null },
+    });
+    if (moved.count !== 1) throw creatorError("CONFLICT", "creator_upload_not_pending");
+    await queueStorageDeletions(
+      tx,
+      [
+        {
+          workspaceId: ctx.workspaceId,
+          projectId: source.projectId,
+          reason: "upload_expired",
+          storageProvider: source.storageProvider,
+          storageKey: source.storageKey,
+          multipartUploadId: source.multipartUploadId,
+        },
+      ],
+      now,
+    );
+    await tx.creatorProject.updateMany({
+      where: { id: source.projectId, workspaceId: ctx.workspaceId, status: "UPLOADING" },
+      data: { status: "DRAFT", version: { increment: 1 } },
+    });
+    await recordEvent(tx, ctx.workspaceId, source.projectId, "upload_cancelled", ctx.userId);
+  });
+}
+
 /**
- * Uploads started and never completed: expired (the signed URL is dead by then) and
- * whatever bytes reached storage removed. Worker loop; `system` finds them across
- * workspaces, every write uses the row's own workspace.
+ * Uploads started and never completed: expired (the signed URLs are dead by then) and
+ * queued for deletion — an open multipart upload is aborted, so its parts stop costing
+ * storage. Worker loop; `system` finds them across workspaces, every write uses the
+ * row's own workspace.
  */
 export async function cleanupExpiredUploads(
   deps: CreatorDeps,
@@ -461,6 +855,7 @@ export async function cleanupExpiredUploads(
       projectId: true,
       storageProvider: true,
       storageKey: true,
+      multipartUploadId: true,
     },
   });
   let cleaned = 0;
@@ -468,25 +863,31 @@ export async function cleanupExpiredUploads(
     const moved = await deps.db.$transaction(async (tx) => {
       const result = await tx.creatorSource.updateMany({
         where: { id: source.id, workspaceId: source.workspaceId, status: "PENDING_UPLOAD" },
-        data: { status: "EXPIRED" },
+        data: { status: "EXPIRED", multipartUploadId: null },
       });
-      if (result.count === 1) {
-        await tx.creatorProject.updateMany({
-          where: { id: source.projectId, workspaceId: source.workspaceId, status: "UPLOADING" },
-          data: { status: "DRAFT", version: { increment: 1 } },
-        });
-        await recordEvent(tx, source.workspaceId, source.projectId, "upload_expired", null);
-      }
-      return result.count === 1;
+      if (result.count !== 1) return false;
+      await queueStorageDeletions(
+        tx,
+        [
+          {
+            workspaceId: source.workspaceId,
+            projectId: source.projectId,
+            reason: "upload_expired",
+            storageProvider: source.storageProvider,
+            storageKey: source.storageKey,
+            multipartUploadId: source.multipartUploadId,
+          },
+        ],
+        now,
+      );
+      await tx.creatorProject.updateMany({
+        where: { id: source.projectId, workspaceId: source.workspaceId, status: "UPLOADING" },
+        data: { status: "DRAFT", version: { increment: 1 } },
+      });
+      await recordEvent(tx, source.workspaceId, source.projectId, "upload_expired", null);
+      return true;
     });
-    if (!moved) continue;
-    cleaned += 1;
-    try {
-      const storage = await deps.storage.forProvider(source.storageProvider);
-      await storage.delete(source.storageKey, { signal: AbortSignal.timeout(15_000) });
-    } catch {
-      deps.logger?.warn({ sourceId: source.id }, "Could not remove an expired upload");
-    }
+    if (moved) cleaned += 1;
   }
   return cleaned;
 }
@@ -515,12 +916,20 @@ export async function requestTranscription(
   deps: CreatorDeps,
   ctx: TenantContext,
   projectId: string,
-  input: { readonly language: string | null; readonly requestKey: string },
+  input: {
+    readonly language: string | null;
+    readonly requestKey: string;
+    /** The person confirmed that the audio is sent to the external provider shown. */
+    readonly externalProcessing?: boolean;
+  },
 ): Promise<{ jobId: string }> {
   assertCan(ctx, "content.create");
   await projectOf(deps.db, ctx, projectId);
   const provider = deps.transcription;
   if (provider === null) throw creatorError("SERVICE_UNAVAILABLE", "creator_provider_disabled");
+  if (provider.external && input.externalProcessing !== true) {
+    throw creatorError("VALIDATION_FAILED", "creator_external_consent_required");
+  }
   if (
     input.language !== null &&
     (!LANGUAGE_PATTERN.test(input.language) || !provider.supportsLanguage(input.language))
@@ -550,7 +959,10 @@ export async function requestTranscription(
       projectId,
       sourceId: source.id,
       kind: "TRANSCRIBE",
-      options: input.language === null ? {} : { language: input.language },
+      options: {
+        ...(input.language === null ? {} : { language: input.language }),
+        ...(provider.external ? { externalProcessing: "confirmed" } : {}),
+      },
       idempotencyKey: `transcribe:${input.requestKey}`,
       requestedByUserId: ctx.userId,
       now,
@@ -564,7 +976,12 @@ export async function requestTranscription(
         action: "creator.processing_requested",
         entityType: "creator_project",
         entityId: projectId,
-        metadata: { kind: "TRANSCRIBE", simulated: provider.simulated },
+        metadata: {
+          kind: "TRANSCRIBE",
+          simulated: provider.simulated,
+          provider: provider.id,
+          external: provider.external,
+        },
       });
     }
     return { jobId: job.id };
@@ -575,12 +992,19 @@ export async function requestTranslation(
   deps: CreatorDeps,
   ctx: TenantContext,
   transcriptId: string,
-  input: { readonly targetLanguage: string; readonly requestKey: string },
+  input: {
+    readonly targetLanguage: string;
+    readonly requestKey: string;
+    readonly externalProcessing?: boolean;
+  },
 ): Promise<{ jobId: string }> {
   assertCan(ctx, "content.create");
   if (!isUuid(transcriptId)) throw notFound("creator_transcript");
   const provider = deps.translation;
   if (provider === null) throw creatorError("SERVICE_UNAVAILABLE", "creator_provider_disabled");
+  if (provider.external && input.externalProcessing !== true) {
+    throw creatorError("VALIDATION_FAILED", "creator_external_consent_required");
+  }
   const transcript = await deps.db.creatorTranscript.findFirst({
     where: { id: transcriptId, workspaceId: ctx.workspaceId, kind: "ORIGINAL" },
     select: { id: true, projectId: true, sourceId: true, language: true },
@@ -614,7 +1038,11 @@ export async function requestTranslation(
       projectId: transcript.projectId,
       sourceId: transcript.sourceId,
       kind: "TRANSLATE",
-      options: { transcriptId: transcript.id, targetLanguage: target },
+      options: {
+        transcriptId: transcript.id,
+        targetLanguage: target,
+        ...(provider.external ? { externalProcessing: "confirmed" } : {}),
+      },
       idempotencyKey: `translate:${input.requestKey}`,
       requestedByUserId: ctx.userId,
       now: await dbNow(tx),
@@ -1082,4 +1510,298 @@ export async function retryJob(
     });
   });
   return { jobId: job.id };
+}
+
+// ── Project lifecycle: deletion and data export ─────────────────────────────
+
+/**
+ * Deletes a project. In one transaction (the project row locked): its open holds are
+ * released, every stored object (sources, exports, open multipart uploads) is queued for
+ * deletion from private storage, and the content rows — jobs, sources, transcripts,
+ * clips, exports — are removed; the project stays as DELETING (nothing new can start in
+ * it, enforced by the database too) until the worker's storage sweep has confirmed every
+ * object gone, then it is purged. A worker still running one of its jobs finds the job
+ * gone on its next fenced write and stops; a file it was about to store is discarded.
+ * Kept: the audit trail (who deleted what, when) and the credit ledger (what was charged).
+ * Repeating the request is harmless.
+ */
+export async function deleteProject(
+  deps: CreatorDeps,
+  ctx: TenantContext,
+  projectId: string,
+  input: { readonly confirmName: string },
+): Promise<{ readonly queuedObjects: number }> {
+  assertCan(ctx, "content.edit");
+  const project = await projectOf(deps.db, ctx, projectId, "any");
+  if (project.status === "DELETING") return { queuedObjects: 0 };
+  if (input.confirmName.trim() !== project.name.trim()) {
+    throw new AppError("VALIDATION_FAILED", {
+      fields: [{ path: "confirmName", code: "creator_delete_name_mismatch" }],
+    });
+  }
+  return deps.db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ status: string }[]>`
+      SELECT "status"::text AS "status" FROM "creator_projects"
+      WHERE "id" = ${project.id}::uuid AND "workspace_id" = ${ctx.workspaceId}::uuid
+      FOR UPDATE`;
+    if (locked[0] === undefined) throw notFound("creator_project");
+    if (locked[0].status === "DELETING") return { queuedObjects: 0 };
+    const now = await dbNow(tx);
+    const where = { workspaceId: ctx.workspaceId, projectId: project.id };
+    // Credits held by unfinished work are released (nothing was delivered).
+    const steps = await tx.creatorJobStep.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        job: { projectId: project.id },
+        holdId: { not: null },
+      },
+      select: { holdId: true },
+    });
+    for (const step of steps) {
+      if (step.holdId === null) continue;
+      const hold = await tx.creditHold.findFirst({
+        where: { workspaceId: ctx.workspaceId, id: step.holdId },
+        select: { status: true },
+      });
+      if (hold?.status === "HELD") {
+        await releaseHold(
+          tx,
+          ctx.workspaceId,
+          step.holdId,
+          "creator_project_deleted",
+          now,
+          deps.credits,
+        );
+      }
+    }
+    const [sources, exports] = await Promise.all([
+      tx.creatorSource.findMany({
+        where,
+        select: { storageProvider: true, storageKey: true, multipartUploadId: true },
+      }),
+      tx.creatorExport.findMany({
+        where: { ...where, storageKey: { not: null } },
+        select: { storageProvider: true, storageKey: true },
+      }),
+    ]);
+    const objects = [
+      ...sources.map((source) => ({
+        workspaceId: ctx.workspaceId,
+        projectId: project.id,
+        reason: "project_deleted" as const,
+        storageProvider: source.storageProvider,
+        storageKey: source.storageKey,
+        multipartUploadId: source.multipartUploadId,
+      })),
+      ...exports.flatMap((row) =>
+        row.storageKey === null || row.storageProvider === null
+          ? []
+          : [
+              {
+                workspaceId: ctx.workspaceId,
+                projectId: project.id,
+                reason: "project_deleted" as const,
+                storageProvider: row.storageProvider,
+                storageKey: row.storageKey,
+              },
+            ],
+      ),
+    ];
+    await queueStorageDeletions(tx, objects, now);
+    await tx.creatorProject.updateMany({
+      where: { id: project.id, workspaceId: ctx.workspaceId },
+      data: { status: "DELETING", deletedAt: now, version: { increment: 1 } },
+    });
+    // Content goes now; jobs first (a running worker's next fenced write fails).
+    await tx.creatorJob.deleteMany({ where });
+    await tx.creatorExport.deleteMany({ where });
+    await tx.creatorClip.deleteMany({ where });
+    await tx.creatorTranscript.deleteMany({ where: { ...where, translatedFromId: { not: null } } });
+    await tx.creatorTranscript.deleteMany({ where });
+    await tx.creatorSource.deleteMany({ where });
+    await recordEvent(tx, ctx.workspaceId, project.id, "project_deletion_requested", ctx.userId, {
+      objects: objects.length,
+    });
+    await recordAudit(tx, ctx, {
+      action: "creator.project_deletion_requested",
+      entityType: "creator_project",
+      entityId: project.id,
+      metadata: { objects: objects.length },
+    });
+    return { queuedObjects: objects.length };
+  });
+}
+
+/**
+ * Everything the workspace stored for a project, as one JSON document the person can
+ * keep: the project, its source's properties (not the media itself, which stays
+ * downloadable only as exports), transcripts and translations with every cue, clips
+ * with their review status, exports, the processing history (codes and counts, with the
+ * credits each step was charged) and the event log. No other workspace's data, no
+ * storage keys, no provider secrets.
+ */
+export async function exportProjectData(deps: CreatorDeps, ctx: TenantContext, projectId: string) {
+  assertCan(ctx, "content.edit");
+  const project = await projectOf(deps.db, ctx, projectId);
+  const where = { workspaceId: ctx.workspaceId, projectId: project.id };
+  const [details, sources, transcripts, clips, exports, jobs, events] = await Promise.all([
+    deps.db.creatorProject.findFirst({
+      where: { id: project.id, workspaceId: ctx.workspaceId },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    deps.db.creatorSource.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        status: true,
+        originalName: true,
+        declaredContentType: true,
+        byteSize: true,
+        sha256: true,
+        container: true,
+        durationMs: true,
+        width: true,
+        height: true,
+        hasAudio: true,
+        hasVideo: true,
+        rejectionCode: true,
+        createdAt: true,
+        verifiedAt: true,
+      },
+    }),
+    deps.db.creatorTranscript.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        kind: true,
+        language: true,
+        translatedFromId: true,
+        provider: true,
+        model: true,
+        simulated: true,
+        createdAt: true,
+        editedAt: true,
+        segments: {
+          orderBy: { position: "asc" },
+          select: { startMs: true, endMs: true, text: true, edited: true },
+        },
+      },
+    }),
+    deps.db.creatorClip.findMany({
+      where,
+      orderBy: { startMs: "asc" },
+      select: {
+        id: true,
+        title: true,
+        startMs: true,
+        endMs: true,
+        text: true,
+        reasons: true,
+        score: true,
+        status: true,
+        origin: true,
+        simulated: true,
+        cropX: true,
+        reviewedAt: true,
+      },
+    }),
+    deps.db.creatorExport.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        clipId: true,
+        status: true,
+        aspectRatio: true,
+        burnSubtitles: true,
+        startMs: true,
+        endMs: true,
+        byteSize: true,
+        sha256: true,
+        durationMs: true,
+        width: true,
+        height: true,
+        failureCode: true,
+        createdAt: true,
+        readyAt: true,
+      },
+    }),
+    deps.db.creatorJob.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        kind: true,
+        state: true,
+        attempts: true,
+        failureCode: true,
+        createdAt: true,
+        finishedAt: true,
+        steps: {
+          orderBy: { position: "asc" },
+          select: {
+            stage: true,
+            state: true,
+            provider: true,
+            model: true,
+            simulated: true,
+            holdId: true,
+            localProcessingMs: true,
+            providerAudioSeconds: true,
+          },
+        },
+      },
+    }),
+    deps.db.creatorProjectEvent.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      take: 5000,
+      select: { type: true, metadata: true, createdAt: true },
+    }),
+  ]);
+  if (details === null) throw notFound("creator_project");
+  const holdIds = jobs.flatMap((job) =>
+    job.steps.flatMap((step) => (step.holdId === null ? [] : [step.holdId])),
+  );
+  const holds =
+    holdIds.length === 0
+      ? []
+      : await deps.db.creditHold.findMany({
+          where: { workspaceId: ctx.workspaceId, id: { in: holdIds } },
+          select: { id: true, status: true, capturedAmount: true },
+        });
+  const charged = new Map(
+    holds.map((hold) => [hold.id, hold.status === "CAPTURED" ? (hold.capturedAmount ?? 0) : 0]),
+  );
+  await recordAudit(deps.db, ctx, {
+    action: "creator.project_data_exported",
+    entityType: "creator_project",
+    entityId: project.id,
+  });
+  return {
+    format: "flexibx.creator-project.v1",
+    exportedAt: new Date().toISOString(),
+    project: details,
+    sources,
+    transcripts,
+    clips,
+    exports,
+    jobs: jobs.map((job) => ({
+      ...job,
+      steps: job.steps.map(({ holdId, ...step }) => ({
+        ...step,
+        creditsCharged: holdId === null ? 0 : (charged.get(holdId) ?? 0),
+      })),
+    })),
+    events,
+  };
 }

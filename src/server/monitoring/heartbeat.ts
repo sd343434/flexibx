@@ -3,7 +3,7 @@ import type { PrismaClient } from "@/generated/prisma/client";
 // Scheduled-job heartbeats (system_heartbeats). Best effort by design: a failed write is
 // logged by the caller and never fails the job. Pure (no `server-only`) for tests.
 
-export type HeartbeatJob = "automation-tick" | "video-retention";
+export type HeartbeatJob = "automation-tick" | "video-retention" | "creator-worker";
 
 export async function recordJobStarted(
   system: PrismaClient,

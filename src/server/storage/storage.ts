@@ -43,6 +43,59 @@ export interface StorageService {
    * provider without it cannot pass the platform admin's connection test.
    */
   checkAccess?(options?: { readonly signal?: AbortSignal }): Promise<void>;
+  /**
+   * Streams the object into a local file without holding it in memory (large media).
+   * Resolves with the bytes written, or null when the object does not exist. Rejects
+   * (and leaves no partial file behind) when more than `maxBytes` arrive.
+   */
+  downloadToFile?(
+    key: string,
+    path: string,
+    options: DownloadToFileOptions,
+  ): Promise<number | null>;
+  /** Resumable uploads in parts (S3 multipart); absent where the adapter has none. */
+  readonly multipart?: MultipartStorage;
+}
+
+export interface DownloadToFileOptions {
+  /** The size recorded at upload: sizes the transfer deadline. */
+  readonly expectedBytes: number;
+  readonly maxBytes: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface UploadedPart {
+  readonly partNumber: number;
+  readonly size: number;
+  readonly etag: string;
+}
+
+/**
+ * S3 multipart uploads. The browser PUTs each part to a short-lived URL signed for that
+ * part's exact length; the server lists what arrived and completes the object. Parts
+ * of an upload that is never completed cost storage until it is aborted.
+ */
+export interface MultipartStorage {
+  create(key: string, options: { readonly contentType: AllowedContentType }): Promise<string>;
+  signPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    options: { readonly contentLength: number; readonly expiresInSeconds?: number },
+  ): Promise<SignedUpload>;
+  /** Parts storage holds for the upload (null: the upload no longer exists). */
+  listParts(
+    key: string,
+    uploadId: string,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<readonly UploadedPart[] | null>;
+  complete(
+    key: string,
+    uploadId: string,
+    parts: readonly { readonly partNumber: number; readonly etag: string }[],
+  ): Promise<void>;
+  /** Removes the upload and its parts; an upload that no longer exists succeeds. */
+  abort(key: string, uploadId: string, options?: { readonly signal?: AbortSignal }): Promise<void>;
 }
 
 /**
@@ -104,6 +157,14 @@ export interface GetObjectOptions {
  * stays an AbortError). For a write or delete the outcome is unknown: the request may
  * have reached storage before it was abandoned.
  */
+/** A download that delivered more bytes than allowed (the object is not what was recorded). */
+export class ObjectTooLargeError extends Error {
+  constructor() {
+    super("Object larger than allowed");
+    this.name = "ObjectTooLargeError";
+  }
+}
+
 export class StorageTimeoutError extends Error {
   constructor(
     readonly operation: "put" | "get" | "delete" | "check",
@@ -209,11 +270,10 @@ export const STORAGE_CATEGORIES = {
   "generated-videos": { maxBytes: 500 * MiB, contentTypes: ["video/mp4", "video/webm"] },
   // Marketing Core media library (Phase 3): raster images only (no SVG: it can carry script).
   "content-media": { maxBytes: 10 * MiB, contentTypes: ["image/png", "image/jpeg", "image/webp"] },
-  // Creator Studio (Pass 8): uploaded sources (private; the per-deployment limit is
-  // CREATOR_MAX_UPLOAD_MB, at most this — the worker holds a source in memory while it
-  // copies it to its scratch directory) and rendered clips.
+  // Creator Studio: sources sent in one signed PUT (small files; larger ones are uploaded
+  // in parts, up to CREATOR_SOURCE_MAX_BYTES below) and rendered clips.
   "creator-sources": {
-    maxBytes: 500 * MiB,
+    maxBytes: 64 * MiB,
     contentTypes: [
       "video/mp4",
       "video/quicktime",
@@ -228,6 +288,17 @@ export const STORAGE_CATEGORIES = {
   string,
   { maxBytes: number; contentTypes: readonly AllowedContentType[] }
 >;
+
+/**
+ * Creator Studio sources (Pass 9): uploaded in parts and only ever streamed to the
+ * worker's disk (`downloadToFile`), never read whole into memory — so they are allowed
+ * to be much larger than any category above (CREATOR_MAX_UPLOAD_MB caps a deployment).
+ * Kept apart from STORAGE_CATEGORIES so the in-memory download deadline of unknown-size
+ * objects stays bounded by the categories that are read whole.
+ */
+export const CREATOR_SOURCE_MAX_BYTES = 2000 * MiB;
+/** A single-PUT creator source (small files); larger ones use a multipart upload. */
+export const CREATOR_SINGLE_UPLOAD_MAX_BYTES = 64 * MiB;
 
 export type StorageCategory = keyof typeof STORAGE_CATEGORIES;
 

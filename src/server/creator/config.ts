@@ -18,17 +18,34 @@ const MiB = 1024 * 1024;
 export interface CreatorLimits {
   readonly maxUploadBytes: number;
   readonly maxDurationMs: number;
+  /** Open (not completed, not expired) uploads per workspace. */
+  readonly maxActiveUploads: number;
+  /** How long a resumable upload stays open. */
+  readonly uploadSessionMs: number;
 }
 
 export function limitsFromEnv(env: {
   readonly CREATOR_MAX_UPLOAD_MB: number;
   readonly CREATOR_MAX_DURATION_SECONDS: number;
+  readonly CREATOR_MAX_ACTIVE_UPLOADS: number;
+  readonly CREATOR_UPLOAD_SESSION_HOURS: number;
 }): CreatorLimits {
   return {
     maxUploadBytes: env.CREATOR_MAX_UPLOAD_MB * MiB,
     maxDurationMs: env.CREATOR_MAX_DURATION_SECONDS * 1000,
+    maxActiveUploads: env.CREATOR_MAX_ACTIVE_UPLOADS,
+    uploadSessionMs: env.CREATOR_UPLOAD_SESSION_HOURS * 3_600_000,
   };
 }
+
+/** Part size of a multipart upload: 16 MiB, larger only to stay within 10 000 parts. */
+export const MIN_PART_BYTES = 16 * MiB;
+export const MAX_PARTS = 10_000;
+export function partSizeFor(size: number): number {
+  return Math.max(MIN_PART_BYTES, Math.ceil(size / MAX_PARTS / MiB) * MiB);
+}
+/** A part's signed URL lives this long (the upload itself stays open much longer). */
+export const PART_URL_TTL_SECONDS = 15 * 60;
 
 /** A signed upload URL lives this long; an upload not completed by then expires. */
 export const UPLOAD_TTL_SECONDS = 15 * 60;
@@ -100,5 +117,7 @@ export interface CreatorDeps {
     readonly heartbeatMs?: number;
     readonly stepTimeoutMs?: number;
     readonly retryBaseMs?: number;
+    /** Multipart part size (tests; the database still requires at least 5 MiB). */
+    readonly partSizeBytes?: number;
   };
 }

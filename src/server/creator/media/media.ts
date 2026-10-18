@@ -110,6 +110,53 @@ export async function probeMedia(
 }
 
 /** Mono 16 kHz PCM WAV: what speech-to-text services expect. */
+/**
+ * One piece of the extracted 16 kHz WAV, as ~24 kbps mono Opus (Ogg): what is sent to an
+ * external speech-to-text provider (ten minutes ≈ 1.8 MB).
+ */
+export async function encodeAudioPiece(
+  tools: MediaTools,
+  input: string,
+  output: string,
+  piece: { readonly startMs: number; readonly durationMs: number },
+  options: { readonly timeoutMs: number; readonly signal?: AbortSignal },
+): Promise<void> {
+  await runMediaTool(
+    tools.ffmpeg,
+    [
+      "-nostdin",
+      "-hide_banner",
+      "-v",
+      "error",
+      ...LOCAL_ONLY,
+      "-ss",
+      (piece.startMs / 1000).toFixed(3),
+      "-t",
+      (piece.durationMs / 1000).toFixed(3),
+      "-i",
+      file(input),
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "24k",
+      "-application",
+      "voip",
+      "-threads",
+      String(tools.threads),
+      "-f",
+      "ogg",
+      "-y",
+      file(output),
+    ],
+    options,
+  );
+}
+
 export async function extractAudio(
   tools: MediaTools,
   input: string,

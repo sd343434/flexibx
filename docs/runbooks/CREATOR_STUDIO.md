@@ -1,4 +1,4 @@
-# Creator Studio — operations runbook (Pass 8)
+# Creator Studio — operations runbook (Passes 8 and 9)
 
 The Creator Studio turns one uploaded video or audio file into short clips:
 
@@ -17,14 +17,16 @@ Code: `src/server/creator/`. Pages: `/{locale}/w/{slug}/studio`. Architecture:
 
 ## 1. What is real and what is simulated
 
-| Part                                                           | Status                                                                          |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Upload (signed PUT, size and type limits, expiry)              | Real. Tested with in-memory storage and S3 signing; never against a real bucket |
-| File check (magic bytes, ffprobe, duration and size limits)    | Real FFmpeg/ffprobe                                                             |
-| Audio extraction, cut, crop/scale, burned subtitles, MP4 check | Real FFmpeg (libx264, AAC, libass), tested on small synthetic files             |
-| Transcription and translation                                  | **No real provider.** `disabled` (default) or `simulated` (tests and demos)     |
-| Clip suggestions                                               | Rules on the transcript (`rules-v1`): questions, numbers, hook words, length    |
-| Credits                                                        | Real holds, capture and release. Simulated work is never charged                |
+| Part                                                           | Status                                                                            |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Upload: one signed PUT up to 64 MiB, resumable multipart above | Real. Tested with in-memory storage and a local S3 stand-in; never a real bucket  |
+| Checksums (SHA-256 per part or file, checked by the worker)    | Real                                                                              |
+| File check (magic bytes, ffprobe, duration and size limits)    | Real FFmpeg/ffprobe                                                               |
+| Audio extraction, cut, crop/scale, burned subtitles, MP4 check | Real FFmpeg (libx264, AAC, libass), tested on small synthetic files               |
+| Transcription and translation                                  | OpenAI adapter written and tested against mocks; **off until the owner approves** |
+| Project deletion, storage clean-up, data export                | Real (deletion queue with retries; JSON export)                                   |
+| Clip suggestions                                               | Rules on the transcript (`rules-v1`): questions, numbers, hook words, length      |
+| Credits                                                        | Real holds, capture and release. Simulated work is never charged                  |
 
 - **The simulator is labelled everywhere.** Each simulated line reads "Simulated line n:
   …" or "نص محاكاة رقم n: …". Transcripts, clips and job steps carry `simulated = true`
@@ -33,27 +35,41 @@ Code: `src/server/creator/`. Pages: `/{locale}/w/{slug}/studio`. Architecture:
 - **The simulator is refused in production** (`NODE_ENV=production`), like the other
   test providers. The one exception is the local end-to-end run (`FLEXIBX_TEST_PROVIDERS`
   with a localhost `APP_URL`).
-- A real provider needs a separate decision covering which service, the data processing
-  agreement, the region, the cost, and an explicit authorization to send user media to
-  it (production readiness register, § 13). No paid API is called, and no user file
-  leaves the server.
+- **The real provider (OpenAI) is off by default** and has never been called from this
+  repository: every test uses a mocked `fetch`. Turning it on is an owner decision (§ 8),
+  enforced by configuration: `CREATOR_AI_PROVIDER=openai` is refused at start-up unless
+  `CREATOR_EXTERNAL_PROCESSING=approved` and `OPENAI_API_KEY` are set.
+- **External processing is shown and confirmed.** With an external provider, the project
+  page names the provider, model and region, and each transcription or translation
+  request needs a ticked confirmation that the audio or text is sent to it
+  (`creator_external_consent_required` otherwise). The job records
+  `externalProcessing: "confirmed"`.
 
 ## 2. Configuration
 
-| Variable                       | Default                   | Meaning                                                                                           |
-| ------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------- |
-| `CREATOR_AI_PROVIDER`          | `disabled`                | `disabled`: upload, checking and manual clips only. `simulated`: test-only, refused in production |
-| `CREATOR_MAX_UPLOAD_MB`        | 500 (1–500)               | Largest source file                                                                               |
-| `CREATOR_MAX_DURATION_SECONDS` | 3600 (10–14400)           | Longest source media                                                                              |
-| `CREATOR_FFMPEG_PATH`          | `ffmpeg`                  | FFmpeg binary (needs libx264, AAC and libass)                                                     |
-| `CREATOR_FFPROBE_PATH`         | `ffprobe`                 | ffprobe binary                                                                                    |
-| `CREATOR_FFMPEG_THREADS`       | 2 (1–16)                  | Threads per FFmpeg run                                                                            |
-| `CREATOR_WORK_DIR`             | the system temp directory | Where per-job scratch directories are created                                                     |
+| Variable                             | Default                   | Meaning                                                                                                              |
+| ------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `CREATOR_AI_PROVIDER`                | `disabled`                | `disabled`: upload, checking and manual clips only. `simulated`: test-only, refused in production. `openai`: see § 8 |
+| `CREATOR_EXTERNAL_PROCESSING`        | unset                     | `approved`: the owner's recorded approval to send media and text to the external provider                            |
+| `OPENAI_API_KEY`                     | unset                     | Shared with the AI Studio. Never logged or shown                                                                     |
+| `CREATOR_OPENAI_TRANSCRIPTION_MODEL` | `whisper-1`               | The model must return segment timestamps (`verbose_json`)                                                            |
+| `CREATOR_OPENAI_TRANSLATION_MODEL`   | `OPENAI_MODEL`            | Responses API model used for translation (`store: false`)                                                            |
+| `CREATOR_PROVIDER_TIMEOUT_MS`        | 120000 (10 s–300 s)       | One provider request                                                                                                 |
+| `CREATOR_MAX_UPLOAD_MB`              | 2000 (1–2000)             | Largest source file (multipart above 64 MiB)                                                                         |
+| `CREATOR_MAX_ACTIVE_UPLOADS`         | 3 (1–20)                  | Open uploads per workspace (and one per project)                                                                     |
+| `CREATOR_UPLOAD_SESSION_HOURS`       | 24 (1–72)                 | How long a resumable upload can be continued before it expires and its parts are removed                             |
+| `CREATOR_MAX_DURATION_SECONDS`       | 3600 (10–14400)           | Longest source media                                                                                                 |
+| `CREATOR_FFMPEG_PATH`                | `ffmpeg`                  | FFmpeg binary (needs libx264, AAC and libass)                                                                        |
+| `CREATOR_FFPROBE_PATH`               | `ffprobe`                 | ffprobe binary                                                                                                       |
+| `CREATOR_FFMPEG_THREADS`             | 2 (1–16)                  | Threads per FFmpeg run                                                                                               |
+| `CREATOR_WORK_DIR`                   | the system temp directory | Where per-job scratch directories are created                                                                        |
 
 Fixed in `src/server/creator/config.ts`:
 
-- **Upload:** the URL is valid for 15 minutes; an unfinished upload expires 5 minutes
-  after that.
+- **Upload:** a single-PUT URL is valid for 15 minutes, and that upload expires 5 minutes
+  after that. A multipart upload stays open for `CREATOR_UPLOAD_SESSION_HOURS`; each part
+  URL is valid for 15 minutes and is signed again on demand. Parts are 16 MiB (more for
+  very large files, at most 10 000 parts).
 - **Leases and retries:** a 2-minute lease renewed every 30 s, a 60-minute deadline per
   job, and 3 attempts with backoff starting at 30 s.
 - **Step timeouts:** VERIFY 5 min, TRANSCRIBE 10 min, SUGGEST 1 min, TRANSLATE 5 min,
@@ -86,7 +102,9 @@ job with a lease, so two workers never run the same job.
 **At start,** the worker removes scratch directories older than 6 hours left behind by a
 crashed run.
 
-**Every 5 minutes,** it expires abandoned uploads and deletes their objects.
+**Every minute,** it records its heartbeat (`system_heartbeats`, job `creator-worker`),
+expires abandoned uploads (queueing their objects and multipart uploads for deletion) and
+runs the storage deletion sweep (§ 9).
 
 **Requirements for each worker host:**
 
@@ -94,10 +112,11 @@ crashed run.
   Sans).
 - The same `DATABASE_URL` and storage settings as the app.
 - No inbound network access.
-- **Memory:** the source file is read into memory once (as large as
-  `CREATOR_MAX_UPLOAD_MB`), plus FFmpeg's own use. Plan for at least 2 GiB per worker
-  with the 500 MB limit.
-- **Disk:** about 3× the largest source per running job, in `CREATOR_WORK_DIR`.
+- **Memory:** the source is streamed to disk (never held in memory whole); plan for
+  FFmpeg's own use, about 1 GiB per worker.
+- **Disk:** about 3× the largest source per running job, in `CREATOR_WORK_DIR`. Before a
+  download the worker checks the free space and fails the step with `worker_disk_full`
+  (retryable) instead of filling the disk.
 
 **Safety of the FFmpeg runs:**
 
@@ -111,9 +130,15 @@ crashed run.
 
 ## 4. Object storage (S3 / Wasabi)
 
-The browser uploads straight to the bucket with a signed `PUT` that fixes the
-`Content-Type` and `Content-Length`. The bucket therefore needs a CORS rule for the app's
-origin:
+The browser uploads straight to the bucket:
+
+- **Up to 64 MiB:** one signed `PUT` that fixes the `Content-Type` and `Content-Length`.
+- **Above 64 MiB:** an S3 multipart upload. The server creates it, signs one `UploadPart`
+  URL per part (bound to the part's exact length) and, at the end, lists the parts
+  (`ListParts`) and completes the upload. The browser never needs to read the `ETag`
+  header, so it does not have to be exposed.
+
+The bucket therefore needs a CORS rule for the app's origin:
 
 ```json
 [
@@ -133,11 +158,28 @@ enforces this prefix.
 **Downloads** are redirects to a signed `GET` that is valid for 2 minutes. The bucket
 stays private.
 
-**Not supported:** multipart or resumable uploads. A failed upload is started again, and
-the incomplete one expires.
+**Resuming:** the browser keeps the upload's id (not the file) in local storage. After a
+reload or a lost connection, the person picks the same file again; the page asks the
+server which parts storage already holds (`ListParts` is the source of truth) and sends
+only the missing ones. Pause, resume and cancel are on the upload panel.
 
-The in-app upload route (`PUT /api/w/{slug}/studio/uploads/{id}`) exists only for the
-in-memory test store. It returns 404 everywhere else.
+**Checksums:** the browser computes the SHA-256 of each part (or of the whole file for a
+single PUT) and declares it before the URL is signed. The worker re-reads the stored file
+in one streaming pass and compares every part; a mismatch rejects the file
+(`checksum_mismatch`) and deletes it. The real type is then checked from the magic bytes
+and ffprobe as before.
+
+**SDK checksums are disabled for presigned URLs.** The AWS SDK adds a CRC32 checksum to
+signed URLs by default, which a browser cannot satisfy. The client sets
+`requestChecksumCalculation` / `responseChecksumValidation` to `WHEN_REQUIRED`; a test
+checks that signed URLs carry no checksum parameters.
+
+**Lifecycle rule (recommended):** add a bucket rule that aborts incomplete multipart
+uploads after 3 days, as a second line of defence behind the worker's clean-up.
+
+The in-app upload routes (`PUT /api/w/{slug}/studio/uploads/{id}` and
+`…/uploads/{id}/parts/{n}`) exist only for the in-memory test store. They return 404
+everywhere else.
 
 ## 5. Failures and what to do
 
@@ -155,6 +197,13 @@ charged again.
 | `step_timeout`, `deadline_reached`                                                                                    | Check the worker host's load and the media size                                        |
 | `ffmpeg_failed`, `render_invalid`                                                                                     | Check the worker log (code and the last stderr lines only; no media content is logged) |
 | `storage_unavailable`                                                                                                 | Storage error; retried automatically                                                   |
+| `checksum_mismatch`                                                                                                   | The stored bytes differ from what the browser hashed. The file is rejected and deleted |
+| `worker_disk_full`                                                                                                    | Not enough free space in `CREATOR_WORK_DIR`; retried. Add disk or lower concurrency    |
+| `provider_rate_limited`, `provider_unavailable`, `provider_timeout`                                                   | Retried (the adapter already retried twice). Persistent: check the provider's status   |
+| `provider_auth`                                                                                                       | The API key is wrong or revoked. Not retried                                           |
+| `provider_rejected`                                                                                                   | The provider refused the input (format, size). Not retried                             |
+| `provider_outcome_unknown`                                                                                            | A request was sent and no answer arrived: see below. **Not retried automatically**     |
+| `project_deleted`                                                                                                     | The project was deleted while the job was queued or running                            |
 | `max_attempts`                                                                                                        | All attempts used. Retry by hand after fixing the cause                                |
 
 **Stuck jobs:**
@@ -168,6 +217,13 @@ charged again.
 
 **Cancel:** cancelling releases the held credits, marks an export CANCELLED and stops a
 running FFmpeg within one heartbeat.
+
+**Provider outcome unknown.** When a request to the provider was sent but the connection
+dropped or the request timed out, the provider may have done (and billed) the work. The
+job fails with `provider_outcome_unknown`, its credit hold is released, and it is not
+retried by itself. Pieces already transcribed are kept as a checkpoint on the step, so a
+person's **Retry** pays the provider only for the pieces still missing. The
+`creator_provider_outcome_unknown_24h` check counts these.
 
 ## 6. Data and isolation
 
@@ -185,12 +241,112 @@ running FFmpeg within one heartbeat.
 - **Export requires an approved clip.** Changing the bounds or framing of an approved
   clip returns it to review.
 
-## 7. Not done yet
+## 7. Credits and costs
 
-- A real transcription or translation provider (needs a decision and authorization).
-- Multipart or resumable uploads, and streaming the source to disk (removes the memory
-  bound).
-- Retention for sources and exports. They are kept until a person deletes the project,
-  and project deletion is not exposed yet.
-- An `ops-status` check for creator jobs that stay queued (no worker running).
-- Running the worker in any hosted environment.
+- **Estimate first.** The page shows the credit estimate before transcription,
+  translation or export is requested (unchanged prices, § 2).
+- **One hold per real step attempt,** captured in the fenced transaction that stores the
+  result; released on failure, cancel, lost lease or deletion. Simulated work takes no
+  hold.
+- **No double charge on retries.** A step's partial results (transcribed pieces,
+  translated batches) are saved as a checkpoint on the step, fenced by the lease. A retry
+  or a takeover by another worker continues from the checkpoint and the customer is
+  charged once, when the step succeeds.
+- **Local and provider costs are recorded separately** on each step:
+  `local_processing_ms` (worker time), and `provider_audio_seconds`,
+  `provider_input_tokens`, `provider_output_tokens` and `provider_cost_micro_usd`
+  (estimated from the documented per-minute price; the provider's invoice is the source
+  of truth). Simulated steps record no provider cost.
+
+## 8. Turning on the real provider (owner decision)
+
+The adapter is `src/server/creator/providers/openai.ts`:
+
+- **Transcription:** `POST /v1/audio/transcriptions`, model `whisper-1`,
+  `response_format=verbose_json`, segment timestamps, with the language given as an ISO
+  code (Arabic is supported). Audio is cut into 10-minute Opus pieces (24 kbit/s, well
+  under the 25 MB request limit); media longer than 2 hours is refused.
+- **Translation:** the Responses API (`store: false`), 40 lines per request as JSON
+  data, with the count and order of lines validated. Timings are kept from the source.
+- **Retries:** 429 and 5xx responses and connection errors before the request was sent
+  are retried twice with backoff (honouring `Retry-After`). 401/403 is `provider_auth`,
+  other 4xx is `provider_rejected`. No key, audio or text is logged; logs carry status
+  codes and failure codes only.
+
+**What the owner must decide and record before setting
+`CREATOR_EXTERNAL_PROCESSING=approved`:**
+
+1. The OpenAI organisation and project that will be billed, with a usage limit.
+2. Data processing terms: OpenAI's DPA, and whether the account has zero data retention
+   (public documentation states the audio endpoints do not retain data and are not used
+   for training; this must be confirmed for the account in use).
+3. Region: by default processing happens in the US. Data residency options depend on the
+   account.
+4. The price: about USD 0.006 per audio minute for `whisper-1` (third-party sources; the
+   official pricing page could not be reached from the build environment). Update
+   `OPENAI_WHISPER_MICRO_USD_PER_SECOND` if it differs.
+5. The customer-facing privacy notice: customers must be told that audio and transcripts
+   are sent to OpenAI.
+
+Then, in staging first: set `CREATOR_AI_PROVIDER=openai`, `CREATOR_EXTERNAL_PROCESSING=approved`
+and `OPENAI_API_KEY`, run one short test file of the team's own (never customer media),
+and compare the recorded `provider_cost_micro_usd` with the usage dashboard.
+
+## 9. Deleting a project, and data export
+
+**Deleting** (`content.edit`; the person types the project name):
+
+1. The project row is locked and set to `DELETING`. A database trigger refuses new
+   sources, jobs, transcripts, clips and exports for it from then on.
+2. Credit holds of its jobs are released; a running worker loses its next fenced write
+   and stops with `project_deleted` (nothing is charged).
+3. Every stored object (sources, open multipart uploads, exports) is written to
+   `creator_storage_deletions` in the same transaction, and the content rows are
+   deleted.
+4. The worker's sweep deletes each object, retrying with backoff (1 minute doubling up
+   to 6 hours) and recording the last error code. Once every object is confirmed gone,
+   the project row is purged.
+
+The page shows "deleting" and, if storage keeps failing, "storage clean-up is being
+retried". **Kept on purpose:** the audit log (`creator.project_deletion_requested`,
+`creator.project_purged`), the credit ledger, and the deletion queue rows (storage keys
+only) as the record of what was removed.
+
+**Stuck deletion:** `creator_storage_deletions_failing` (6 or more attempts) is critical.
+Look at `last_error_code` in `creator_storage_deletions`, fix storage access, and the next
+sweep continues; nothing needs to be reset by hand.
+
+**Data export** (`content.edit`): `GET /api/w/{slug}/studio/projects/{id}/data` returns
+one JSON document (`flexibx.creator-project.v1`) with the project, sources (metadata),
+transcripts and segments, clips, exports, jobs with steps and credits charged, and
+events. Media files are downloaded separately. Each export is audited
+(`creator.project_data_exported`).
+
+## 10. Monitoring
+
+`ops-status` (and its alerts, through the existing tick) includes counts and ages only,
+never names, ids, keys or text:
+
+| Check                                   | Level                                                                    |
+| --------------------------------------- | ------------------------------------------------------------------------ |
+| `creator_worker_last_seen_age_seconds`  | warning if work is queued and the worker has not reported for 10 minutes |
+| `creator_jobs_queued`                   | informational                                                            |
+| `creator_oldest_queued_job_age_seconds` | warning after 15 minutes                                                 |
+| `creator_jobs_lease_expired`            | critical                                                                 |
+| `creator_jobs_past_deadline`            | warning                                                                  |
+| `creator_exports_failed_24h`            | warning above the threshold                                              |
+| `creator_provider_failures_24h`         | warning above the threshold                                              |
+| `creator_provider_outcome_unknown_24h`  | warning                                                                  |
+| `creator_uploads_not_cleaned`           | warning                                                                  |
+| `creator_storage_deletions_overdue`     | warning                                                                  |
+| `creator_storage_deletions_failing`     | critical                                                                 |
+
+## 11. Not done yet
+
+- The real provider has never been called (no approval, no key). Nothing has run in a
+  hosted environment: no real bucket (CORS, multipart, lifecycle rule), no hosted worker.
+- Retention for sources and exports of projects that are kept: they stay until the
+  project is deleted.
+- A very long file (2 hours) may need more than one 10-minute TRANSCRIBE attempt; the
+  checkpoint makes the retry continue, but it has not been measured against the real
+  provider.

@@ -10,21 +10,20 @@ import { getStorageRouter } from "../storage/providers";
 
 import { limitsFromEnv, type CreatorDeps } from "./config";
 import { ruleBasedClipSuggester } from "./providers/clip-suggester";
-import { createSimulatedTranscription, createSimulatedTranslation } from "./providers/simulated";
+import { providersFromEnv } from "./runtime-env";
 
 // The application's Creator Studio dependencies. CREATOR_AI_PROVIDER=disabled (default)
 // leaves transcription and translation off (projects, uploads, analysis, clips and
-// exports still work); `simulated` uses the declared simulator (refused in production
-// by the environment schema). No commercial provider is wired yet.
+// exports still work); `simulated` uses the declared simulator (refused in production);
+// `openai` sends audio and transcript text to OpenAI — accepted by the environment
+// schema only together with CREATOR_EXTERNAL_PROCESSING=approved and OPENAI_API_KEY.
 
 export function getCreatorDeps(): CreatorDeps {
   const env = getCreatorEnv();
-  const simulated = env.CREATOR_AI_PROVIDER === "simulated";
   return {
     db: getDb(),
     storage: getStorageRouter(),
-    transcription: simulated ? createSimulatedTranscription() : null,
-    translation: simulated ? createSimulatedTranslation() : null,
+    ...providersFromEnv(env),
     clips: ruleBasedClipSuggester,
     tools: {
       ffmpeg: env.CREATOR_FFMPEG_PATH,

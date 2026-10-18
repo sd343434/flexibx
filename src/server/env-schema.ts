@@ -197,42 +197,99 @@ export function parseVideoEnv(source: EnvSource): VideoEnv {
 }
 
 /**
- * AI Creator Studio (Pass 8).
+ * AI Creator Studio (Pass 8, production capabilities in Pass 9).
  * - CREATOR_AI_PROVIDER: who transcribes and translates. `disabled` (default): projects
  *   can be created, uploaded and analysed (FFmpeg), but transcription and translation
  *   are refused. `simulated`: the built-in simulator — no external call, no cost; its
- *   text is labelled everywhere as simulated and never presented as the media's words;
- *   refused when NODE_ENV=production. No commercial provider is integrated yet, so no
- *   key is read and no file ever leaves the deployment.
- * - CREATOR_MAX_UPLOAD_MB (1–500, default 500) and CREATOR_MAX_DURATION_SECONDS
+ *   text is labelled everywhere as simulated; refused when NODE_ENV=production. `openai`:
+ *   speech-to-text through OpenAI's audio API and translation through its Responses API.
+ *   Customer audio and transcript text leave the deployment, so it also needs
+ *   CREATOR_EXTERNAL_PROCESSING=approved — the owner's recorded approval (privacy terms,
+ *   data region, cost) — and OPENAI_API_KEY (server-only, never logged).
+ * - CREATOR_OPENAI_TRANSCRIPTION_MODEL (default `whisper-1`: the model documented with
+ *   segment timestamps) and CREATOR_OPENAI_TRANSLATION_MODEL (default OPENAI_MODEL, then
+ *   the project's DEFAULT_OPENAI_MODEL). CREATOR_PROVIDER_TIMEOUT_MS bounds one provider
+ *   request (10–300 s, default 120 s).
+ * - CREATOR_MAX_UPLOAD_MB (1–2000, default 2000) and CREATOR_MAX_DURATION_SECONDS
  *   (10–14400, default 3600): limits checked when an upload starts and after analysis.
+ *   Large sources are uploaded in parts and streamed to the worker's disk, never held in
+ *   memory. CREATOR_MAX_ACTIVE_UPLOADS (1–20, default 3): open uploads per workspace.
+ *   CREATOR_UPLOAD_SESSION_HOURS (1–72, default 24): how long a resumable upload stays
+ *   open before it is aborted and its parts removed.
  * - CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH: the binaries the worker runs (default
  *   `ffmpeg` / `ffprobe` on PATH). CREATOR_FFMPEG_THREADS (1–16, default 2) caps the
  *   threads of one FFmpeg run. CREATOR_WORK_DIR: scratch space for the worker (default
  *   the OS temporary directory).
  */
-export const creatorEnvSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  CREATOR_AI_PROVIDER: z.preprocess(
-    emptyToUndefined,
-    z.enum(["disabled", "simulated"]).default("disabled"),
-  ),
-  CREATOR_MAX_UPLOAD_MB: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().int().min(1).max(500).default(500),
-  ),
-  CREATOR_MAX_DURATION_SECONDS: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().int().min(10).max(14_400).default(3600),
-  ),
-  CREATOR_FFMPEG_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffmpeg")),
-  CREATOR_FFPROBE_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffprobe")),
-  CREATOR_FFMPEG_THREADS: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().int().min(1).max(16).default(2),
-  ),
-  CREATOR_WORK_DIR: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
-});
+export const creatorEnvSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    CREATOR_AI_PROVIDER: z.preprocess(
+      emptyToUndefined,
+      z.enum(["disabled", "simulated", "openai"]).default("disabled"),
+    ),
+    CREATOR_EXTERNAL_PROCESSING: optional(z.enum(["approved"])),
+    OPENAI_API_KEY: optional(z.string().trim().min(20, "must be an OpenAI API key")),
+    OPENAI_MODEL: optional(
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
+    ),
+    CREATOR_OPENAI_TRANSCRIPTION_MODEL: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "must be an OpenAI model name")
+        .default("whisper-1"),
+    ),
+    CREATOR_OPENAI_TRANSLATION_MODEL: optional(
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "must be an OpenAI model name"),
+    ),
+    CREATOR_PROVIDER_TIMEOUT_MS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(10_000).max(300_000).default(120_000),
+    ),
+    CREATOR_MAX_UPLOAD_MB: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(2000).default(2000),
+    ),
+    CREATOR_MAX_DURATION_SECONDS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(10).max(14_400).default(3600),
+    ),
+    CREATOR_MAX_ACTIVE_UPLOADS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(20).default(3),
+    ),
+    CREATOR_UPLOAD_SESSION_HOURS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(72).default(24),
+    ),
+    CREATOR_FFMPEG_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffmpeg")),
+    CREATOR_FFPROBE_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffprobe")),
+    CREATOR_FFMPEG_THREADS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(16).default(2),
+    ),
+    CREATOR_WORK_DIR: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  })
+  .refine(
+    (env) => env.CREATOR_AI_PROVIDER !== "openai" || env.CREATOR_EXTERNAL_PROCESSING === "approved",
+    {
+      path: ["CREATOR_EXTERNAL_PROCESSING"],
+      message:
+        "CREATOR_AI_PROVIDER=openai sends customer audio and text to OpenAI: set CREATOR_EXTERNAL_PROCESSING=approved once the owner has approved it",
+    },
+  )
+  .refine((env) => env.CREATOR_AI_PROVIDER !== "openai" || env.OPENAI_API_KEY !== undefined, {
+    path: ["OPENAI_API_KEY"],
+    message: "CREATOR_AI_PROVIDER=openai needs OPENAI_API_KEY",
+  });
 
 export type CreatorEnv = z.infer<typeof creatorEnvSchema>;
 

@@ -88,6 +88,9 @@ export const TENANT_MODELS = {
   CreatorClip: { workspaceId: "required", appendOnly: false },
   CreatorExport: { workspaceId: "required", appendOnly: false },
   CreatorProjectEvent: { workspaceId: "required", appendOnly: true },
+  // Pass 9: parts of resumable uploads, and the queue of storage objects to delete.
+  CreatorSourcePart: { workspaceId: "required", appendOnly: false },
+  CreatorStorageDeletion: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -163,6 +166,8 @@ export const TENANT_ROOT_RELATIONS = [
   "creatorClips",
   "creatorExports",
   "creatorEvents",
+  "creatorSourceParts",
+  "creatorStorageDeletions",
 ] as const;
 
 /**

@@ -11,6 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkspaceRole } from "@/generated/prisma/enums";
 import type { CreatorDeps } from "@/server/creator/config";
+import { processStorageDeletions } from "@/server/creator/deletions";
 import { claimNextJob, runClaimedJob, workOnce } from "@/server/creator/jobs";
 import { probeMedia } from "@/server/creator/media/media";
 import { runMediaTool } from "@/server/creator/media/tools";
@@ -107,7 +108,12 @@ function harness(overrides: Partial<CreatorDeps> = {}) {
     clips: ruleBasedClipSuggester,
     tools: TOOLS,
     credits: { trialPeriodCredits: 50 },
-    limits: { maxUploadBytes: 50 * 1024 * 1024, maxDurationMs: 600_000 },
+    limits: {
+      maxUploadBytes: 50 * 1024 * 1024,
+      maxDurationMs: 600_000,
+      maxActiveUploads: 3,
+      uploadSessionMs: 3_600_000,
+    },
     workDir: media,
     timing: { retryBaseMs: 0 },
     ...overrides,
@@ -124,6 +130,10 @@ function paidTranscription(
     id: "test-paid",
     model: "test-model",
     simulated: false,
+    external: false,
+    region: null,
+    chunkMs: null,
+    costMicroUsdPerAudioSecond: 100,
     maxDurationMs: 3_600_000,
     supportsLanguage: () => true,
     transcribe: async ({ durationMs, signal }) => {
@@ -205,7 +215,7 @@ describe("the whole path with the declared simulator and real FFmpeg", () => {
     expect(page.project.status).toBe("READY");
     // Simulated text is never charged: the estimate says so.
     expect(page.estimate).toMatchObject({ minutes: 1, transcriptionCredits: 0 });
-    expect(page.provider).toEqual({ id: "simulated", simulated: true });
+    expect(page.provider).toMatchObject({ id: "simulated", simulated: true, external: false });
 
     await requestTranscription(deps, ctx, projectId, { language: null, requestKey: "r1" });
     // A double click is the same request, and a second request is refused.
@@ -473,6 +483,9 @@ describe("uploads", () => {
     });
     const source = await system.creatorSource.findUniqueOrThrow({ where: { id: sourceId } });
     expect(source).toMatchObject({ status: "REJECTED", rejectionCode: "unsupported_format" });
+    // Queued for deletion with the rejection, removed by the storage sweep.
+    expect(storage.objects.has(source.storageKey)).toBe(true);
+    expect(await processStorageDeletions(deps, system)).toMatchObject({ deleted: 1, failed: 0 });
     expect(storage.objects.has(source.storageKey)).toBe(false);
     expect((await getProject(deps, ctx, projectId)).project.status).toBe("FAILED");
 
@@ -502,6 +515,7 @@ describe("uploads", () => {
     expect(await cleanupExpiredUploads(deps, system)).toBe(1);
     const source = await system.creatorSource.findUniqueOrThrow({ where: { id: sourceId } });
     expect(source.status).toBe("EXPIRED");
+    await processStorageDeletions(deps, system);
     expect(storage.objects.has(source.storageKey)).toBe(false);
     expect(await cleanupExpiredUploads(deps, system)).toBe(0);
   });

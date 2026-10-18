@@ -5,18 +5,23 @@ import { redirect } from "next/navigation";
 
 import { DEFAULT_LOCALE, isLocale } from "@/i18n/config";
 import {
+  abortUploadAction,
   cancelJobAction,
   completeUploadAction,
   createClipAction,
   createProjectAction,
+  deleteProjectAction,
   requestExportAction,
   requestTranscriptionAction,
   requestTranslationAction,
   retryJobAction,
   reviewClipAction,
+  signUploadPartAction,
+  startMultipartUploadAction,
   startUploadAction,
   updateClipAction,
   updateSegmentAction,
+  uploadStatusAction,
 } from "@/server/creator/creator-actions";
 import type { ActionResult } from "@/server/http/action-handler";
 
@@ -69,13 +74,47 @@ export async function submitCreateProject(
   redirect(`${studioPath(locale, slug)}/${result.data.id}`);
 }
 
-/** Step 1 of an upload: a short-lived signed URL for exactly this type and size. */
+/** A small file in one PUT: a short-lived signed URL for exactly this type, size and hash. */
 export async function beginUpload(
+  slug: string,
+  projectId: string,
+  file: {
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly size: number;
+    readonly sha256: string;
+  },
+) {
+  return startUploadAction({ slug, projectId, ...file });
+}
+
+/** A large file in parts (resumable): the server fixes the part size. */
+export async function beginMultipartUpload(
   slug: string,
   projectId: string,
   file: { readonly fileName: string; readonly contentType: string; readonly size: number },
 ) {
-  return startUploadAction({ slug, projectId, ...file });
+  return startMultipartUploadAction({ slug, projectId, ...file });
+}
+
+/** A signed URL for one part, after declaring its size and SHA-256. */
+export async function signPart(
+  slug: string,
+  sourceId: string,
+  part: { readonly partNumber: number; readonly size: number; readonly sha256: string },
+) {
+  return signUploadPartAction({ slug, sourceId, ...part });
+}
+
+/** The parts storage already holds (to resume after a lost connection). */
+export async function partsUploaded(slug: string, sourceId: string) {
+  return uploadStatusAction({ slug, sourceId });
+}
+
+export async function cancelUpload(slug: string, locale: string, sourceId: string) {
+  const result = await abortUploadAction({ slug, sourceId });
+  if (result.ok) refresh(locale, slug);
+  return result.ok ? { ok: true as const } : { ok: false as const, error: result.error };
 }
 
 /** Step 2: the bytes are in storage; the analysis job checks them. */
@@ -98,6 +137,7 @@ export async function submitTranscription(
     projectId,
     ...(values.language === "" ? {} : { language: values.language }),
     requestKey: text(formData, "requestKey"),
+    externalProcessing: formData.get("externalProcessing") === "on",
   });
   return settle(result, values, locale, slug);
 }
@@ -115,6 +155,7 @@ export async function submitTranslation(
     transcriptId,
     targetLanguage: values.targetLanguage,
     requestKey: text(formData, "requestKey"),
+    externalProcessing: formData.get("externalProcessing") === "on",
   });
   return settle(result, values, locale, slug);
 }
@@ -239,4 +280,18 @@ export async function submitRetryJob(
   _previous: MarketingFormState,
 ): Promise<MarketingFormState> {
   return settle(await retryJobAction({ slug, jobId }), {}, locale, slug);
+}
+
+export async function submitDeleteProject(
+  slug: string,
+  locale: string,
+  projectId: string,
+  _previous: MarketingFormState,
+  formData: FormData,
+): Promise<MarketingFormState> {
+  const values = { confirmName: text(formData, "confirmName") };
+  const result = await deleteProjectAction({ slug, projectId, confirmName: values.confirmName });
+  if (!result.ok) return { error: result.error, values };
+  refresh(locale, slug);
+  redirect(studioPath(locale, slug));
 }

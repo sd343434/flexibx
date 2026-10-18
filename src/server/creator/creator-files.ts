@@ -4,8 +4,16 @@ import { parseStorageDriver } from "../env-schema";
 import { AppError } from "../errors/app-error";
 import { requireWorkspaceAccess } from "../tenancy/access";
 
+import type { MemoryStorageService } from "../storage/memory-storage";
+
 import { UPLOAD_TTL_SECONDS } from "./config";
-import { exportFile, receiveAppUpload, subtitleFile } from "./project-service";
+import {
+  exportFile,
+  exportProjectData,
+  receiveAppPart,
+  receiveAppUpload,
+  subtitleFile,
+} from "./project-service";
 import { getCreatorDeps } from "./runtime";
 
 // The Creator Studio's file routes (src/app/api/w/[workspaceSlug]/studio/…). Access is
@@ -67,4 +75,40 @@ export async function transcriptSubtitles(
 ) {
   const ctx = await requireWorkspaceAccess(workspace, "content.view");
   return subtitleFile(getCreatorDeps(), ctx, transcriptId, format);
+}
+
+/** The test transport of one multipart part (STORAGE_DRIVER=test-memory only; else 404). */
+export async function receiveTestPart(
+  workspace: string,
+  sourceId: string,
+  partNumber: number,
+  request: Request,
+): Promise<string> {
+  if (parseStorageDriver(process.env) !== "test-memory") {
+    throw new AppError("NOT_FOUND", { metadata: { resource: "route" } });
+  }
+  const ctx = await requireWorkspaceAccess(workspace, "content.create");
+  const deps = getCreatorDeps();
+  const announced = Number(request.headers.get("content-length") ?? "-1");
+  if (!Number.isInteger(announced) || announced <= 0 || announced > 256 * 1024 * 1024) {
+    throw new AppError("PAYLOAD_TOO_LARGE", { metadata: { contentLength: announced } });
+  }
+  const body = new Uint8Array(await request.arrayBuffer());
+  let etag = "";
+  await receiveAppPart(deps, ctx, sourceId, partNumber, body, (storage, uploadId, expected) => {
+    // Duck-typed: the store is a process-wide singleton created from another bundle of
+    // the server (server actions), so `instanceof` does not hold across them.
+    const memory = storage as Partial<Pick<MemoryStorageService, "putPart">>;
+    if (typeof memory.putPart !== "function") {
+      throw new AppError("NOT_FOUND", { metadata: { resource: "route" } });
+    }
+    etag = memory.putPart(uploadId, partNumber, body, expected);
+  });
+  return etag;
+}
+
+/** A project's data as one JSON document (content.edit; another workspace's id is a 404). */
+export async function projectData(workspace: string, projectId: string) {
+  const ctx = await requireWorkspaceAccess(workspace, "content.edit");
+  return exportProjectData(getCreatorDeps(), ctx, projectId);
 }

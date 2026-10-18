@@ -187,6 +187,7 @@ describe("legacy objects and required provider", () => {
       // An export has no file until it is READY; a CHECK requires the provider then.
       { table_name: "creator_exports", column_default: null, is_nullable: "YES" },
       { table_name: "creator_sources", column_default: null, is_nullable: "NO" },
+      { table_name: "creator_storage_deletions", column_default: null, is_nullable: "NO" },
       { table_name: "generated_video_files", column_default: null, is_nullable: "NO" },
       { table_name: "media_assets", column_default: null, is_nullable: "NO" },
     ]);

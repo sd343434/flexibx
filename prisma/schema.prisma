@@ -125,65 +125,67 @@ model Workspace {
   invitations WorkspaceInvitation[]
 
   // Marketing Core (Phase 3). Changed only through their own guarded models.
-  brand                 Brand?
-  audiences             Audience[]
-  marketingGoals        MarketingGoal[]
-  contentPillars        ContentPillar[]
-  campaigns             Campaign[]
-  campaignGoals         CampaignGoal[]
-  campaignPillars       CampaignPillar[]
-  contentItems          ContentItem[]
-  contentReviews        ContentReview[]
-  mediaAssets           MediaAsset[]
-  contentItemAssets     ContentItemAsset[]
-  aiGenerations         AiGeneration[]
-  generatedVideos       GeneratedVideo[]
-  generatedVideoFiles   GeneratedVideoFile[]
-  videoJobs             VideoGenerationJob[]
-  videoAttempts         VideoGenerationAttempt[]
-  usageLedgerEntries    UsageLedgerEntry[]
-  automationPolicy      AutomationPolicy?
-  agentRuns             AgentRun[]
-  agentTasks            AgentTask[]
-  agentTaskApprovals    AgentTaskApproval[]
-  adOAuthStates         AdOAuthState[]
-  adConnections         AdConnection[]
-  adAccounts            AdAccount[]
-  adPlans               AdPlan[]
-  whatsappSnapshots     WhatsAppSnapshot[]
-  whatsappEvents        WhatsAppWebhookEvent[]
-  adExecutionSteps      AdExecutionStep[]
-  adSpendLimits         AdSpendLimit[]
-  whatsappContacts      WhatsAppContact[]
-  whatsappMessages      WhatsAppMessage[]
-  whatsappConsentEvents WhatsAppConsentEvent[]
-  creditAccount         CreditAccount?
-  creditHolds           CreditHold[]
-  creditLedgerEntries   CreditLedgerEntry[]
-  creditRecharges       CreditRecharge[]
-  socialChannels        SocialChannel[]
-  socialAgents          SocialAgent[]
-  socialInteractions    SocialInteraction[]
-  socialReplies         SocialReply[]
-  socialLessons         SocialLesson[]
-  socialAutoReplyClaims SocialAutoReplyClaim[]
-  socialPosts           SocialPost[]
-  campaignPlans         CampaignPlan[]
-  campaignPlanItems     CampaignPlanItem[]
-  metricImports         MetricImport[]
-  metricObservations    MetricObservation[]
-  recommendations       MarketingRecommendation[]
-  insightsSources       InsightsSource[]
-  insightsSyncRuns      InsightsSyncRun[]
-  creatorProjects       CreatorProject[]
-  creatorSources        CreatorSource[]
-  creatorJobs           CreatorJob[]
-  creatorJobSteps       CreatorJobStep[]
-  creatorTranscripts    CreatorTranscript[]
-  creatorSegments       CreatorTranscriptSegment[]
-  creatorClips          CreatorClip[]
-  creatorExports        CreatorExport[]
-  creatorEvents         CreatorProjectEvent[]
+  brand                   Brand?
+  audiences               Audience[]
+  marketingGoals          MarketingGoal[]
+  contentPillars          ContentPillar[]
+  campaigns               Campaign[]
+  campaignGoals           CampaignGoal[]
+  campaignPillars         CampaignPillar[]
+  contentItems            ContentItem[]
+  contentReviews          ContentReview[]
+  mediaAssets             MediaAsset[]
+  contentItemAssets       ContentItemAsset[]
+  aiGenerations           AiGeneration[]
+  generatedVideos         GeneratedVideo[]
+  generatedVideoFiles     GeneratedVideoFile[]
+  videoJobs               VideoGenerationJob[]
+  videoAttempts           VideoGenerationAttempt[]
+  usageLedgerEntries      UsageLedgerEntry[]
+  automationPolicy        AutomationPolicy?
+  agentRuns               AgentRun[]
+  agentTasks              AgentTask[]
+  agentTaskApprovals      AgentTaskApproval[]
+  adOAuthStates           AdOAuthState[]
+  adConnections           AdConnection[]
+  adAccounts              AdAccount[]
+  adPlans                 AdPlan[]
+  whatsappSnapshots       WhatsAppSnapshot[]
+  whatsappEvents          WhatsAppWebhookEvent[]
+  adExecutionSteps        AdExecutionStep[]
+  adSpendLimits           AdSpendLimit[]
+  whatsappContacts        WhatsAppContact[]
+  whatsappMessages        WhatsAppMessage[]
+  whatsappConsentEvents   WhatsAppConsentEvent[]
+  creditAccount           CreditAccount?
+  creditHolds             CreditHold[]
+  creditLedgerEntries     CreditLedgerEntry[]
+  creditRecharges         CreditRecharge[]
+  socialChannels          SocialChannel[]
+  socialAgents            SocialAgent[]
+  socialInteractions      SocialInteraction[]
+  socialReplies           SocialReply[]
+  socialLessons           SocialLesson[]
+  socialAutoReplyClaims   SocialAutoReplyClaim[]
+  socialPosts             SocialPost[]
+  campaignPlans           CampaignPlan[]
+  campaignPlanItems       CampaignPlanItem[]
+  metricImports           MetricImport[]
+  metricObservations      MetricObservation[]
+  recommendations         MarketingRecommendation[]
+  insightsSources         InsightsSource[]
+  insightsSyncRuns        InsightsSyncRun[]
+  creatorProjects         CreatorProject[]
+  creatorSources          CreatorSource[]
+  creatorJobs             CreatorJob[]
+  creatorJobSteps         CreatorJobStep[]
+  creatorTranscripts      CreatorTranscript[]
+  creatorSegments         CreatorTranscriptSegment[]
+  creatorClips            CreatorClip[]
+  creatorExports          CreatorExport[]
+  creatorEvents           CreatorProjectEvent[]
+  creatorSourceParts      CreatorSourcePart[]
+  creatorStorageDeletions CreatorStorageDeletion[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -2642,6 +2644,9 @@ enum CreatorProjectStatus {
   COMPLETED
   /// The last job failed; the project can be retried (nothing is lost).
   FAILED
+  /// Deletion requested: no new work starts; its files are being removed from storage,
+  /// after which the project row itself is purged.
+  DELETING
 
   @@map("creator_project_status")
 }
@@ -2729,6 +2734,8 @@ model CreatorProject {
   status          CreatorProjectStatus @default(DRAFT)
   createdByUserId String?              @map("created_by_user_id") @db.Uuid
   version         Int                  @default(1)
+  /// When deletion was requested (status DELETING); null otherwise.
+  deletedAt       DateTime?            @map("deleted_at") @db.Timestamptz(3)
   createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -2760,6 +2767,14 @@ model CreatorSource {
   originalName        String              @map("original_name") @db.VarChar(200)
   declaredContentType String              @map("declared_content_type") @db.VarChar(100)
   declaredBytes       Int                 @map("declared_bytes")
+  /// `single` (one signed PUT) or `multipart` (resumable, in parts).
+  uploadMode          String              @default("single") @map("upload_mode") @db.VarChar(20)
+  /// The storage's multipart upload id while a multipart upload is open.
+  multipartUploadId   String?             @map("multipart_upload_id") @db.VarChar(1024)
+  partSizeBytes       Int?                @map("part_size_bytes")
+  partCount           Int?                @map("part_count")
+  /// SHA-256 (hex) the browser computed for a single-PUT upload; checked by the worker.
+  declaredSha256      String?             @map("declared_sha256") @db.VarChar(64)
   uploadExpiresAt     DateTime            @map("upload_expires_at") @db.Timestamptz(3)
   uploadedAt          DateTime?           @map("uploaded_at") @db.Timestamptz(3)
   verifiedAt          DateTime?           @map("verified_at") @db.Timestamptz(3)
@@ -2787,11 +2802,64 @@ model CreatorSource {
   jobs        CreatorJob[]
   transcripts CreatorTranscript[]
   clips       CreatorClip[]
+  parts       CreatorSourcePart[]
 
   @@index([workspaceId, projectId, createdAt(sort: Desc)])
   @@index([status, uploadExpiresAt])
   @@index([createdByUserId])
   @@map("creator_sources")
+}
+
+/// A part of a multipart (resumable) source upload. Its size and SHA-256 are declared
+/// before its signed URL is issued; storage enforces the size, the worker checks the hash
+/// of every part's bytes before the file is used.
+model CreatorSourcePart {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  sourceId    String    @map("source_id") @db.Uuid
+  partNumber  Int       @map("part_number")
+  sizeBytes   Int       @map("size_bytes")
+  sha256      String    @db.VarChar(64)
+  /// The storage's ETag once the browser reported the part uploaded (checked on completion).
+  etag        String?   @db.VarChar(200)
+  uploadedAt  DateTime? @map("uploaded_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source    CreatorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, partNumber])
+  @@index([workspaceId])
+  @@map("creator_source_parts")
+}
+
+/// A stored object (or an open multipart upload) to remove from private storage: files
+/// of deleted projects, abandoned uploads, rejected sources. Retried with backoff until
+/// storage confirms; kept afterwards as the record of what was deleted (keys only — no
+/// content, no names). `projectId` is not a foreign key: the project row is purged once
+/// its files are gone.
+model CreatorStorageDeletion {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  projectId         String          @map("project_id") @db.Uuid
+  reason            String          @db.VarChar(40)
+  storageProvider   StorageProvider @map("storage_provider")
+  storageKey        String          @unique @map("storage_key") @db.VarChar(300)
+  multipartUploadId String?         @map("multipart_upload_id") @db.VarChar(1024)
+  attempts          Int             @default(0)
+  lastErrorCode     String?         @map("last_error_code") @db.VarChar(60)
+  /// Not attempted before this time (a worker that lost its job may still be writing).
+  nextAttemptAt     DateTime        @map("next_attempt_at") @db.Timestamptz(3)
+  completedAt       DateTime?       @map("completed_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([completedAt, nextAttemptAt])
+  @@index([workspaceId, projectId])
+  @@map("creator_storage_deletions")
 }
 
 /// One unit of background work, claimed by a worker with a lease. Every write a worker
@@ -2842,24 +2910,36 @@ model CreatorJob {
 /// One step of a job. A succeeded step is never run again; its credit hold (if any) is
 /// recorded here so a retried attempt never holds twice.
 model CreatorJobStep {
-  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String           @map("workspace_id") @db.Uuid
-  jobId       String           @map("job_id") @db.Uuid
-  stage       String           @db.VarChar(40)
-  position    Int
-  state       CreatorStepState @default(PENDING)
-  attempts    Int              @default(0)
-  holdId      String?          @map("hold_id") @db.Uuid
-  provider    String?          @db.VarChar(40)
-  model       String?          @db.VarChar(120)
-  simulated   Boolean          @default(false)
+  id                   String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String           @map("workspace_id") @db.Uuid
+  jobId                String           @map("job_id") @db.Uuid
+  stage                String           @db.VarChar(40)
+  position             Int
+  state                CreatorStepState @default(PENDING)
+  attempts             Int              @default(0)
+  holdId               String?          @map("hold_id") @db.Uuid
+  provider             String?          @db.VarChar(40)
+  model                String?          @db.VarChar(120)
+  simulated            Boolean          @default(false)
   /// What the step measured (durations, counts, codes) — never user content.
-  output      Json             @default("{}")
-  errorCode   String?          @map("error_code") @db.VarChar(60)
-  startedAt   DateTime?        @map("started_at") @db.Timestamptz(3)
-  finishedAt  DateTime?        @map("finished_at") @db.Timestamptz(3)
-  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  output               Json             @default("{}")
+  /// Cost accounting, kept apart: work done on our own workers (FFmpeg, ms) and what an
+  /// external provider was asked to process (audio seconds, tokens) with the estimated
+  /// provider cost in micro-USD. Credits charged to the workspace are on the hold.
+  localProcessingMs    Int?             @map("local_processing_ms")
+  providerAudioSeconds Int?             @map("provider_audio_seconds")
+  providerInputTokens  Int?             @map("provider_input_tokens")
+  providerOutputTokens Int?             @map("provider_output_tokens")
+  providerCostMicroUsd Int?             @map("provider_cost_micro_usd")
+  /// Provider results already paid for by an attempt of this step (transcribed audio
+  /// pieces, translated batches), reused by the next attempt instead of being bought
+  /// again. Cleared when the step succeeds.
+  checkpoint           Json?
+  errorCode            String?          @map("error_code") @db.VarChar(60)
+  startedAt            DateTime?        @map("started_at") @db.Timestamptz(3)
+  finishedAt           DateTime?        @map("finished_at") @db.Timestamptz(3)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   job       CreatorJob @relation(fields: [jobId], references: [id], onDelete: Cascade)

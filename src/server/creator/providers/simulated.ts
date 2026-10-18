@@ -32,6 +32,10 @@ export function createSimulatedTranscription(): TranscriptionProvider {
     id: SIMULATED_PROVIDER_ID,
     model: "simulator-v1",
     simulated: true,
+    external: false,
+    region: null,
+    chunkMs: null,
+    costMicroUsdPerAudioSecond: null,
     maxDurationMs: 4 * 3_600_000,
     supportsLanguage: (language) => language === "ar" || language === "en",
     transcribe: ({ durationMs, languageHint, signal }) => {
@@ -59,16 +63,20 @@ export function createSimulatedTranslation(): TranslationProvider {
     id: SIMULATED_PROVIDER_ID,
     model: "simulator-v1",
     simulated: true,
+    external: false,
+    region: null,
+    batchSize: 10_000,
     supportsLanguage: (language) => ["ar", "en", "fr", "es", "tr", "ur"].includes(language),
     translate: ({ segments, to, signal }) => {
       if (signal.aborted) return Promise.reject(new Error("aborted"));
       // Not a translation: the original line, marked as a simulated one in the target.
-      return Promise.resolve(
-        segments.map((segment) => ({
+      return Promise.resolve({
+        segments: segments.map((segment) => ({
           ...segment,
           text: `[simulated ${to}] ${segment.text}`.slice(0, 2000),
         })),
-      );
+        usage: null,
+      });
     },
   };
 }

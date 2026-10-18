@@ -1,8 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { Page } from "@playwright/test";
 
 import { expect, newClientPage, signUpVerifiedAndSignIn, test, uniqueEmail } from "./fixtures";
 
-// Pass 8 end to end, through the real pages, server actions, upload route and database:
+// Pass 8–9 end to end, through the real pages, server actions, upload routes and database:
 // a project is created, a file is uploaded with progress through the short-lived upload
 // URL and handed to analysis; the simulator is announced as such; another workspace sees
 // none of it (page, export and subtitle routes). The media pipeline itself (FFmpeg cut,
@@ -128,4 +132,81 @@ test("the studio in English is left-to-right and signed-out visitors are sent to
   await visitor.goto(`${base}/studio`);
   await expect(visitor).toHaveURL(/\/en\/sign-in/);
   await visitor.close();
+});
+
+test("a large file is uploaded in parts, paused, resumed after a reload; data export and deletion", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const slug = `studio-mp-${tag()}`;
+  const base = await workspace(page, "en", slug);
+  await page.goto(`${base}/studio`);
+  await page.fill("#studio-create-form-name", "Webinar");
+  await page.getByTestId("studio-create-form-submit").click();
+  await expect(page).toHaveURL(new RegExp(`${base}/studio/[0-9a-f-]{36}$`));
+  const projectId = new URL(page.url()).pathname.split("/").at(-1) ?? "";
+
+  // 70 MiB (above the single-upload size): sent as five 16 MiB parts, each hashed first.
+  const dir = mkdtempSync(join(tmpdir(), "studio-e2e-"));
+  const path = join(dir, "webinar.mp4");
+  writeFileSync(path, Buffer.concat([fakeMp4(), Buffer.alloc(70 * 1024 * 1024, 7)]));
+  try {
+    // Slow the part transfers down so the person can pause in the middle.
+    let parts = 0;
+    await page.route("**/studio/uploads/*/parts/*", async (route) => {
+      parts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await route.continue();
+    });
+    await page.getByTestId("studio-upload-input").setInputFiles(path);
+    await expect(page.getByTestId("studio-upload-uploading")).toBeVisible({ timeout: 60_000 });
+    await expect.poll(() => parts, { timeout: 60_000 }).toBeGreaterThanOrEqual(1);
+    await page.getByTestId("studio-upload-pause").click();
+    await expect(page.getByTestId("studio-upload-paused")).toBeVisible();
+
+    // The tab is reloaded: the unfinished upload is remembered; choosing the same file again
+    // resumes with only the parts storage does not hold yet.
+    await page.reload();
+    await expect(page.getByTestId("studio-source-pending")).toBeVisible();
+    const before = parts;
+    await page.getByTestId("studio-upload-input").setInputFiles(path);
+    await expect(page.getByTestId("studio-source-checking")).toBeVisible({ timeout: 90_000 });
+    expect(parts - before).toBeLessThan(5);
+    await expect(page.getByTestId("studio-source-status-UPLOADED")).toBeVisible();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  // The project's data as JSON, for its editors only.
+  const data = await page.request.get(`/api/w/${slug}/studio/projects/${projectId}/data`);
+  expect(data.status()).toBe(200);
+  expect(await data.json()).toMatchObject({
+    format: "flexibx.creator-project.v1",
+    project: { id: projectId, name: "Webinar" },
+  });
+  const other = await newClientPage(browser);
+  const otherBase = await workspace(other, "en", `studio-mpx-${tag()}`);
+  const otherSlug = otherBase.split("/").at(-1) ?? "";
+  expect(
+    (await other.request.get(`/api/w/${otherSlug}/studio/projects/${projectId}/data`)).status(),
+  ).toBe(404);
+  expect(
+    (await other.request.get(`/api/w/${slug}/studio/projects/${projectId}/data`)).status(),
+  ).toBe(404);
+  await other.close();
+
+  // Deleting needs the project's name; then the project shows its deletion in progress
+  // (the files are removed by the worker's storage sweep, which this run does not start).
+  await page.fill("#studio-delete-form-confirmName", "Wrong name");
+  await page.getByTestId("studio-delete-form-submit").click();
+  await expect(page.getByTestId("form-error")).toBeVisible();
+  await page.fill("#studio-delete-form-confirmName", "Webinar");
+  await page.getByTestId("studio-delete-form-submit").click();
+  await expect(page).toHaveURL(`${base}/studio`);
+  await expect(page.getByTestId("studio-project-status-DELETING")).toBeVisible();
+  await page.goto(`${base}/studio/${projectId}`);
+  await expect(page.getByTestId("studio-deletion")).toBeVisible();
+  await expect(page.getByTestId("studio-deletion-pending")).toContainText("1 file still to delete");
+  await expect(page.getByTestId("studio-upload")).toHaveCount(0);
 });

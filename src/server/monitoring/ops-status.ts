@@ -57,6 +57,18 @@ export const INSIGHTS_RUNS_WARNING = 3;
 export const INSIGHTS_SOURCE_FAILURES_WARNING = 3;
 /** Failed video attempts per day that suggest a provider problem. */
 export const VIDEO_FAILURES_WARNING = 5;
+/** Creator Studio: a queued job waiting this long means the workers do not keep up. */
+export const CREATOR_QUEUE_AGE_WARNING_SECONDS = 15 * 60;
+/** Creator Studio: no worker heartbeat for this long while work waits — none is running. */
+export const CREATOR_WORKER_STALE_SECONDS = 10 * 60;
+/** Creator Studio: provider failures per day that suggest a provider problem. */
+export const CREATOR_PROVIDER_FAILURES_WARNING = 5;
+/** Creator Studio: failed exports per day worth a look. */
+export const CREATOR_EXPORTS_FAILED_WARNING = 5;
+/** Creator Studio: a queued storage deletion still open this long is not being processed. */
+export const CREATOR_DELETION_OVERDUE_MS = HOUR_MS;
+/** Creator Studio: an object storage keeps refusing to delete (attempts). */
+export const CREATOR_DELETION_ATTEMPTS_CRITICAL = 6;
 
 function count(name: string, value: number, threshold: number, level: CheckLevel): OpsCheck {
   return { name, value, threshold, level: value >= threshold ? level : "ok" };
@@ -132,6 +144,25 @@ function runningCheck(
   };
 }
 
+/**
+ * The media worker's heartbeat: its age, a warning only while work waits for it (a
+ * deployment that does not use the Creator Studio runs no worker and is not warned).
+ */
+function creatorWorkerCheck(
+  heartbeat: { lastSucceededAt: Date | null; lastStatus: string | null } | null,
+  queued: number,
+  now: Date,
+): OpsCheck {
+  const age = ageSeconds(now, heartbeat?.lastSucceededAt);
+  const stale = age === null || age >= CREATOR_WORKER_STALE_SECONDS;
+  return {
+    name: "creator_worker_last_seen_age_seconds",
+    value: age,
+    threshold: CREATOR_WORKER_STALE_SECONDS,
+    level: queued > 0 && stale ? "warning" : heartbeat?.lastStatus === "failed" ? "warning" : "ok",
+  };
+}
+
 export async function collectOpsStatus(
   system: PrismaClient,
   now: Date,
@@ -160,6 +191,17 @@ export async function collectOpsStatus(
     insightsRunsFailed,
     insightsRunsPartial,
     insightsSourcesFailing,
+    creatorWorker,
+    creatorQueued,
+    creatorOldestQueued,
+    creatorLeasesExpired,
+    creatorPastDeadline,
+    creatorExportsFailed,
+    creatorProviderFailures,
+    creatorOutcomeUnknown,
+    creatorUploadsUncleaned,
+    creatorDeletionsOverdue,
+    creatorDeletionsFailing,
   ] = await Promise.all([
     system.systemHeartbeat.findUnique({ where: { name: "automation-tick" } }),
     system.creditHold.count({ where: { status: "HELD", createdAt: { lt: ago(STUCK_HOLD_MS) } } }),
@@ -218,6 +260,37 @@ export async function collectOpsStatus(
     system.insightsSource.count({
       where: { enabled: true, failureCount: { gte: INSIGHTS_SOURCE_FAILURES_WARNING } },
     }),
+    // Creator Studio (Pass 9): the media worker, its queue and the storage sweep.
+    system.systemHeartbeat.findUnique({ where: { name: "creator-worker" } }),
+    system.creatorJob.count({ where: { state: "QUEUED", runAfter: { lte: now } } }),
+    system.creatorJob.findFirst({
+      where: { state: "QUEUED", runAfter: { lte: now } },
+      orderBy: { runAfter: "asc" },
+      select: { runAfter: true },
+    }),
+    system.creatorJob.count({
+      where: { state: "RUNNING", leaseExpiresAt: { lt: ago(LEASE_OVERDUE_MS) } },
+    }),
+    system.creatorJob.count({
+      where: { state: { in: ["QUEUED", "RUNNING"] }, deadlineAt: { lt: ago(LEASE_OVERDUE_MS) } },
+    }),
+    system.creatorExport.count({ where: { status: "FAILED", updatedAt: { gte: ago(DAY_MS) } } }),
+    system.creatorJobStep.count({
+      where: { errorCode: { startsWith: "provider_" }, updatedAt: { gte: ago(DAY_MS) } },
+    }),
+    system.creatorJobStep.count({
+      where: { errorCode: "provider_outcome_unknown", updatedAt: { gte: ago(DAY_MS) } },
+    }),
+    // Expired an hour ago and still open: the upload cleanup is not running.
+    system.creatorSource.count({
+      where: { status: "PENDING_UPLOAD", uploadExpiresAt: { lt: ago(HOUR_MS) } },
+    }),
+    system.creatorStorageDeletion.count({
+      where: { completedAt: null, createdAt: { lt: ago(CREATOR_DELETION_OVERDUE_MS) } },
+    }),
+    system.creatorStorageDeletion.count({
+      where: { completedAt: null, attempts: { gte: CREATOR_DELETION_ATTEMPTS_CRITICAL } },
+    }),
   ]);
 
   const succeededAt = tick?.lastSucceededAt ?? null;
@@ -273,6 +346,35 @@ export async function collectOpsStatus(
     count("insights_sync_runs_failed_24h", insightsRunsFailed, INSIGHTS_RUNS_WARNING, "warning"),
     count("insights_sync_runs_partial_24h", insightsRunsPartial, INSIGHTS_RUNS_WARNING, "warning"),
     count("insights_sources_failing", insightsSourcesFailing, 1, "warning"),
+    creatorWorkerCheck(creatorWorker, creatorQueued, now),
+    count("creator_jobs_queued", creatorQueued, Number.MAX_SAFE_INTEGER, "warning"),
+    {
+      name: "creator_oldest_queued_job_age_seconds",
+      value: ageSeconds(now, creatorOldestQueued?.runAfter) ?? 0,
+      threshold: CREATOR_QUEUE_AGE_WARNING_SECONDS,
+      level:
+        (ageSeconds(now, creatorOldestQueued?.runAfter) ?? 0) >= CREATOR_QUEUE_AGE_WARNING_SECONDS
+          ? "warning"
+          : "ok",
+    },
+    count("creator_jobs_lease_expired", creatorLeasesExpired, 1, "critical"),
+    count("creator_jobs_past_deadline", creatorPastDeadline, 1, "warning"),
+    count(
+      "creator_exports_failed_24h",
+      creatorExportsFailed,
+      CREATOR_EXPORTS_FAILED_WARNING,
+      "warning",
+    ),
+    count(
+      "creator_provider_failures_24h",
+      creatorProviderFailures,
+      CREATOR_PROVIDER_FAILURES_WARNING,
+      "warning",
+    ),
+    count("creator_provider_outcome_unknown_24h", creatorOutcomeUnknown, 1, "warning"),
+    count("creator_uploads_not_cleaned", creatorUploadsUncleaned, 1, "warning"),
+    count("creator_storage_deletions_overdue", creatorDeletionsOverdue, 1, "warning"),
+    count("creator_storage_deletions_failing", creatorDeletionsFailing, 1, "critical"),
     ...ledgerChecks(
       ledger,
       now,

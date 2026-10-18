@@ -92,6 +92,9 @@ export const AUDIT_ACTIONS = [
   "creator.processing_requested",
   "creator.export_requested",
   "creator.job_cancelled",
+  "creator.project_deletion_requested",
+  "creator.project_purged",
+  "creator.project_data_exported",
   // Orchestration (AI Marketing Manager). Metadata: run/task ids and keys, workflow,
   // states, failure codes, policy field names, counts and content ids — never prompts or
   // generated text.

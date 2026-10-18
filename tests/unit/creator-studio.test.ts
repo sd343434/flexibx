@@ -221,7 +221,8 @@ describe("the simulator never passes for a real provider", () => {
       to: "ar",
       signal: new AbortController().signal,
     });
-    expect(translated.every((s) => s.text.startsWith("[simulated ar]"))).toBe(true);
+    expect(translated.usage).toBeNull();
+    expect(translated.segments.every((s) => s.text.startsWith("[simulated ar]"))).toBe(true);
   });
   it("is refused in production", () => {
     const production = { NODE_ENV: "production", APP_URL: "https://app.example.com" };
@@ -245,7 +246,8 @@ describe("the simulator never passes for a real provider", () => {
       }).CREATOR_AI_PROVIDER,
     ).toBe("simulated");
     expect(creatorEnvSchema.parse({ NODE_ENV: "production" }).CREATOR_AI_PROVIDER).toBe("disabled");
-    expect(creatorEnvSchema.safeParse({ CREATOR_MAX_UPLOAD_MB: "501" }).success).toBe(false);
+    expect(creatorEnvSchema.safeParse({ CREATOR_MAX_UPLOAD_MB: "2000" }).success).toBe(true);
+    expect(creatorEnvSchema.safeParse({ CREATOR_MAX_UPLOAD_MB: "2001" }).success).toBe(false);
   });
 });
 
