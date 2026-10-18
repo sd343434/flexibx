@@ -663,6 +663,13 @@ describe("reading Meta", () => {
     expect(partial.status).toBe("PARTIAL");
     const run = await system.insightsSyncRun.findFirstOrThrow({ where: { sourceId } });
     expect(run.issues).toContainEqual({ code: "post_unavailable", ref: must(posts[1]).postId });
+    // A post gone from Meta: partly read, said so; it is not retried hourly (it stays gone).
+    const gone = must(
+      (await getSourceOverview(s.deps, s.owner)).channels.find((c) => c.channelId === s.page.id)
+        ?.source,
+    );
+    expect(gone).toMatchObject({ status: "partial", lastErrorCode: "post_unavailable" });
+    expect(must(gone.nextSyncAt).getTime() - clock.now.getTime()).toBe(24 * 3_600_000);
 
     const t = await setup();
     await publishedPosts(t.owner, t.page.id, 3);
@@ -679,6 +686,14 @@ describe("reading Meta", () => {
       calls: 5,
     });
     expect(budgeted.accepted).toBeGreaterThan(0);
+    // Part-read is never shown as up to date: the card says what is missing, and the
+    // scheduler resumes soon.
+    const card = must(
+      (await getSourceOverview(t.deps, t.owner)).channels.find((c) => c.channelId === t.page.id)
+        ?.source,
+    );
+    expect(card).toMatchObject({ status: "partial", lastErrorCode: "call_budget_reached" });
+    expect(must(card.nextSyncAt).getTime() - clock.now.getTime()).toBe(3_600_000);
   });
 });
 

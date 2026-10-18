@@ -348,6 +348,18 @@ residency and legal review, pilot approval.
   - **Mutation checks.** Fifteen mutants of the critical rules each fail a test.
   - **Migration.** `20261019090000_meta_insights_sync` was applied to disposable
     databases only, with no schema drift.
+- **Hardening review (after the first Pass 6 commit), with tests written first:**
+  - A run that read only part of what was due (a limit hit after some reads, or a
+    published post gone from Meta) showed as "up to date". It now shows as "partly read"
+    with its reason. A gone post is not retried hourly.
+  - The pause before a retry could take a run up to 8 s past its 90 s deadline. The pause
+    now ends at the deadline.
+  - Separate from Pass 6: an existing two-factor integration test
+    (`tests/integration/admin-mfa.test.ts`) failed when a 30-second TOTP boundary fell
+    between enrollment and sign-in. It recomputed "the enrollment code" from the clock,
+    which then yields a different, never-used code that rightly signs in. This was
+    reproduced deterministically with a pinned clock. The test now keeps and replays the
+    exact code used to enroll. The sign-in and replay-refusal behaviour is unchanged.
 - **Never exercised against real Meta.** No Meta app, token or account was used. The
   metric names follow Meta's 2025 changes as reported by secondary sources, because
   Meta's documentation site could not be reached from the build environment. Confirm

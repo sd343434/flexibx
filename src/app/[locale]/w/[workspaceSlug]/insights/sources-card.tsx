@@ -24,6 +24,7 @@ const STATUS_TONES: Readonly<Record<SourceStatus, BadgeTone>> = {
   running: "accent",
   never_synced: "outline",
   failed: "danger",
+  partial: "accent",
   stale: "accent",
   ready: "soft",
 };

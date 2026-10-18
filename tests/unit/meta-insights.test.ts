@@ -121,6 +121,32 @@ describe("Meta insights client", () => {
     expect(sleeps).toEqual([250, 500]);
   });
 
+  it("stops waiting for a retry when the run's deadline passes", async () => {
+    const controller = new AbortController();
+    let resolveSleep: (() => void) | undefined;
+    const client = createMetaInsightsClient({
+      appSecret: "s".repeat(32),
+      version: "v26.0",
+      fetch: () => Promise.resolve(fail(4)),
+      // A pause that only ends when told to: the deadline must end the wait itself.
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resolveSleep = resolve;
+        }),
+      random: () => 0,
+    });
+    const pending = client.postLifetime(
+      "T",
+      "1_2",
+      META_METRIC_CATALOG.post[0],
+      createCallBudget(10, controller.signal),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "deadline_reached" });
+    resolveSleep?.();
+  });
+
   it("does not retry what a retry cannot fix, and never puts Meta's message in the error", async () => {
     for (const [code, expected] of [
       [190, "token_expired"],
@@ -248,6 +274,18 @@ describe("timing", () => {
     expect(
       sourceStatus({ ...base, lastErrorCode: "rate_limited", lastAttemptAt: now }, "ready", now),
     ).toBe("failed");
+    // Stored part of what was due (a limit hit after some reads): partial, not ready.
+    expect(
+      sourceStatus(
+        {
+          ...base,
+          lastErrorCode: "deadline_reached",
+          lastAttemptAt: new Date(base.lastSuccessAt.getTime() - 60_000),
+        },
+        "ready",
+        now,
+      ),
+    ).toBe("partial");
     expect(
       sourceStatus(
         { ...base, lastSuccessAt: new Date(now.getTime() - STALE_AFTER_MS - 1) },

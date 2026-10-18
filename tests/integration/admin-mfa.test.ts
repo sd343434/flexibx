@@ -147,12 +147,16 @@ const restore = (jar: Map<string, string>) => {
 async function enroll(account?: { id: string; admin: boolean }) {
   const started = await submitStartEnrollment(null, form({ password: PASSWORD }));
   if (started === null || !("status" in started)) throw new Error(JSON.stringify(started));
+  // The code used to confirm, kept: a test that later replays it must replay this exact
+  // code, not recompute "the current code" (after a 30-second boundary that is a different,
+  // never-used code that rightly signs in).
+  const enrollmentCode = totp(started.manualKey);
   const confirmed = await outcome(
-    submitConfirmEnrollment("en", null, form({ code: totp(started.manualKey) })),
+    submitConfirmEnrollment("en", null, form({ code: enrollmentCode })),
   );
   expect(redirectTarget(confirmed)).toBe("/en/account/security?mfa=enabled");
   if (account?.admin === true) await grantPlatformAdminForTest(system, account.id);
-  return started;
+  return { ...started, enrollmentCode };
 }
 
 describe("platform admin MFA gate", () => {
@@ -246,7 +250,7 @@ describe("platform admin MFA gate", () => {
   it("password alone creates no session; TOTP or a single-use backup code completes sign-in", async () => {
     const admin = await newAccount({ admin: true });
     await passwordStep(admin.email);
-    const { manualKey, backupCodes } = await enroll(admin);
+    const { manualKey, backupCodes, enrollmentCode } = await enroll(admin);
     await system.session.deleteMany({ where: { userId: admin.id } });
 
     expect(await passwordStep(admin.email)).toBe("/en/sign-in/two-factor");
@@ -279,7 +283,7 @@ describe("platform admin MFA gate", () => {
     // Nor does the code used for enrollment.
     await passwordStep(admin.email);
     expect(
-      await submitTwoFactor("en", null, form({ method: "totp", code: totp(manualKey) })),
+      await submitTwoFactor("en", null, form({ method: "totp", code: enrollmentCode })),
     ).toEqual({ messageKey: "auth.twoFactor.errors.invalidCode" });
     expect(await system.session.count({ where: { userId: admin.id } })).toBe(sessionsBefore);
 

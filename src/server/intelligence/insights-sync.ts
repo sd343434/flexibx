@@ -734,7 +734,9 @@ async function finish(
       data: {
         leaseRunId: null,
         leaseUntil: null,
-        lastErrorCode: input.errorCode,
+        // A run that read only part of what was due says so even without a fatal error
+        // (a post gone from Meta), so its source is never shown as up to date.
+        lastErrorCode: input.errorCode ?? (input.status === "PARTIAL" ? "post_unavailable" : null),
         failureCount: failures,
         ...(failed ? {} : { lastSuccessAt: finishedAt }),
         ...(input.coverage === null
@@ -846,7 +848,14 @@ export type { CallBudget, InsightsFailure };
 // ── Read side ────────────────────────────────────────────────────────────────
 
 export type SourceStatus =
-  "disabled" | "needs_reauth" | "running" | "never_synced" | "failed" | "stale" | "ready";
+  | "disabled"
+  | "needs_reauth"
+  | "running"
+  | "never_synced"
+  | "failed"
+  | "partial"
+  | "stale"
+  | "ready";
 
 /** What a source's card says, from its stored state (pure). */
 export function sourceStatus(
@@ -872,12 +881,12 @@ export function sourceStatus(
   if (source.lastSuccessAt === null) {
     return source.lastErrorCode === null ? "never_synced" : "failed";
   }
-  if (
-    source.lastErrorCode !== null &&
-    source.lastAttemptAt !== null &&
-    source.lastAttemptAt > source.lastSuccessAt
-  ) {
-    return "failed";
+  if (source.lastErrorCode !== null) {
+    // The last attempt stored nothing (failed), or stored only part of what was due (a
+    // limit hit, a post gone): never shown as up to date.
+    return source.lastAttemptAt !== null && source.lastAttemptAt > source.lastSuccessAt
+      ? "failed"
+      : "partial";
   }
   if (now.getTime() - source.lastSuccessAt.getTime() > STALE_AFTER_MS) return "stale";
   return "ready";

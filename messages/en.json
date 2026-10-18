@@ -1150,6 +1150,7 @@
           "running": "Syncing…",
           "never_synced": "Not synced yet",
           "failed": "Last sync failed",
+          "partial": "Partly read",
           "stale": "May be out of date",
           "ready": "Up to date"
         },
@@ -1197,7 +1198,8 @@
           "not_connected": "Meta is not connected.",
           "not_configured": "Meta Insights is not enabled on this server.",
           "internal_error": "Something went wrong on our side. It will be tried again later.",
-          "lease_expired": "The sync stopped before finishing; the next one continues."
+          "lease_expired": "The sync stopped before finishing; the next one continues.",
+          "post_unavailable": "A post published by Flexibx is no longer on Meta; its numbers cannot be read."
         }
       },
       "lastImport": "Last successful import: {date}",

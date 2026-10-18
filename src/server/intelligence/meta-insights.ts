@@ -155,6 +155,26 @@ export interface CallBudget {
   readonly signal: AbortSignal;
 }
 
+/**
+ * A retry's pause, cut short when the run's deadline passes (deadline_reached): waiting
+ * never takes a run past its time limit.
+ */
+async function pauseWithin(pause: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new InsightsProviderError("deadline_reached");
+  let onAbort: (() => void) | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      reject(new InsightsProviderError("deadline_reached"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([pause, deadline]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
+
 /** Read through a function: the signal can be aborted while a call is awaited. */
 const isAborted = (budget: CallBudget) => budget.signal.aborted;
 
@@ -323,8 +343,7 @@ export function createMetaInsightsClient(config: MetaInsightsConfig): MetaInsigh
       } catch (error) {
         if (!(error instanceof InsightsProviderError) || !error.retryable) throw error;
         if (attempt >= retry.attempts) throw error;
-        await sleep(backoffDelay(attempt, retry, random));
-        if (isAborted(budget)) throw new InsightsProviderError("deadline_reached");
+        await pauseWithin(sleep(backoffDelay(attempt, retry, random)), budget.signal);
       }
     }
   }

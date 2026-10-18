@@ -1035,7 +1035,8 @@ nothing is written to Meta, published, sent or spent.
   - Up to three attempts with exponential backoff and equal jitter (500 ms base, 8 s
     cap) for rate limits (4, 17, 32, 613, 80000–80014, HTTP 429), Meta-side errors
     (1, 2, 5xx), network errors and timeouts (15 s per request). An expired token (190)
-    or a missing permission (10, 200–299) is never retried.
+    or a missing permission (10, 200–299) is never retried. The pause before a retry ends
+    when the run's deadline passes, so retries never take a run past its time limit.
   - A metric Meta rejects (100) is "unsupported", a value that is absent is "missing",
     and only a value of 0 is zero.
 - **What is read, and what it is linked to** (`insights-sync.ts`):
@@ -1100,7 +1101,9 @@ nothing is written to Meta, published, sent or spent.
     - the connection's state: not configured, not connected, needs reconnection, or
       ready, with the missing permissions per kind;
     - each channel's status: off (with the reason), needs reconnection, syncing, not
-      synced yet, failed, may be out of date (no success for 48 h), or up to date;
+      synced yet, failed, partly read (a limit was hit after some reads, or a published
+      post is gone from Meta — never shown as up to date), may be out of date (no success
+      for 48 h), or up to date;
     - last success, last attempt and next sync; the days covered; the metrics Meta does
       not offer;
     - the account-level totals of the last 28 covered days, marked "Read from Meta" and
