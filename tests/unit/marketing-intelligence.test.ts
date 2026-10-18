@@ -62,6 +62,7 @@ const obs = (over: Partial<Observation> = {}): Observation => ({
   value: 100n,
   currency: null,
   sourceRef: `ref-${String(++ref)}`,
+  observedAt: new Date("2026-10-16T00:00:00Z"),
   ...over,
 });
 
@@ -228,13 +229,21 @@ describe("totals and series", () => {
     ]);
   });
 
-  it("build a daily series of one count metric", () => {
+  it("build a daily series of one count metric from single-day numbers only", () => {
+    const on = (iso: string) => new Date(`${iso}T00:00:00Z`);
     const series = dailySeries(
       [
-        obs({ periodStart: new Date("2026-10-02T00:00:00Z"), value: 5n }),
-        obs({ periodStart: new Date("2026-10-01T00:00:00Z"), value: 3n }),
-        obs({ periodStart: new Date("2026-10-01T00:00:00Z"), contentItemId: ITEMS[0], value: 9n }),
-        obs({ metric: "CLICKS", value: 7n }),
+        obs({ periodStart: on("2026-10-02"), periodEnd: on("2026-10-02"), value: 5n }),
+        obs({ periodStart: on("2026-10-01"), periodEnd: on("2026-10-01"), value: 3n }),
+        obs({
+          periodStart: on("2026-10-01"),
+          periodEnd: on("2026-10-01"),
+          contentItemId: ITEMS[0],
+          value: 9n,
+        }),
+        // A week's total is not a day's value: not plotted.
+        obs({ value: 700n }),
+        obs({ metric: "CLICKS", periodStart: on("2026-10-01"), periodEnd: on("2026-10-01") }),
       ],
       "IMPRESSIONS",
     );
@@ -244,12 +253,14 @@ describe("totals and series", () => {
     ]);
   });
 
-  it("compute content rates and periods", () => {
+  it("compute content rates and the days observed", () => {
     const [result] = contentResults(contentRows(ITEMS[0], 1000n, 50n));
     expect(result).toMatchObject({
       impressions: 2000n,
       engagements: 100n,
-      periods: 2,
+      exposureMetric: "IMPRESSIONS",
+      exposure: 2000n,
+      days: 14,
       engagementRate: 0.05,
     });
     expect(
@@ -303,8 +314,16 @@ describe("campaignFindings", () => {
     expect(kinds(campaignFindings(campaign(), fewImpressions, TODAY))).toEqual([
       "MORE_DATA_NEEDED",
     ]);
-    const onePeriod = fiveItems(5n).filter((row) => row.periodStart.getUTCDate() === 8);
-    expect(kinds(campaignFindings(campaign(), onePeriod, TODAY))).toEqual(["MORE_DATA_NEEDED"]);
+    // Observed on a single day: not yet enough time to judge (a week-long period counts
+    // its seven days).
+    const oneDay = fiveItems(5n)
+      .filter((row) => row.periodStart.getUTCDate() === 8)
+      .map((row) => ({
+        ...row,
+        periodStart: new Date("2026-10-15T00:00:00Z"),
+        periodEnd: new Date("2026-10-15T00:00:00Z"),
+      }));
+    expect(kinds(campaignFindings(campaign(), oneDay, TODAY))).toEqual(["MORE_DATA_NEEDED"]);
   });
 
   it("ignores simulated rows entirely", () => {

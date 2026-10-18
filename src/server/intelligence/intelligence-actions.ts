@@ -12,6 +12,8 @@ import { can } from "../tenancy/permissions";
 
 import { DEFAULT_RULES } from "./analysis";
 import { importManualCsv, voidImport } from "./ingestion";
+import { getInsightsDeps } from "./insights-runtime";
+import { disableSource, enableSource, getSourceOverview, syncSourceNow } from "./insights-sync";
 import {
   actOnRecommendation,
   decideRecommendation,
@@ -102,6 +104,45 @@ export const actOnRecommendationAction = withAction({
   },
 });
 
+// Meta Insights sources (Pass 6): choosing them needs social.manage (the same people who
+// manage the workspace's Meta channels); a person's "Sync now" needs campaign.manage. The
+// services re-check both, and every id is resolved inside the caller's workspace.
+
+export const enableInsightsSourceAction = withAction({
+  name: "insights.source_enable",
+  input: z.strictObject({ slug, channelId: z.uuid() }),
+  handler: async ({ slug: workspace, channelId }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "social.manage");
+    return enableSource(getInsightsDeps(), ctx, channelId);
+  },
+});
+
+export const disableInsightsSourceAction = withAction({
+  name: "insights.source_disable",
+  input: z.strictObject({ slug, sourceId: z.uuid() }),
+  handler: async ({ slug: workspace, sourceId }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "social.manage");
+    await disableSource(getDb(), ctx, sourceId);
+  },
+});
+
+export const syncInsightsSourceAction = withAction({
+  name: "insights.sync",
+  input: z.strictObject({ slug, sourceId: z.uuid() }),
+  handler: async ({ slug: workspace, sourceId }) => {
+    const ctx = await requireWorkspaceAccess(workspace, "campaign.manage");
+    const outcome = await syncSourceNow(getInsightsDeps(), ctx, sourceId);
+    // Counts and codes only (never what Meta answered).
+    return {
+      status: outcome.status,
+      errorCode: outcome.errorCode,
+      accepted: outcome.accepted,
+      revised: outcome.revised,
+      duplicates: outcome.duplicates,
+    };
+  },
+});
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const day = (value: string | undefined) => {
   if (value === undefined || !DATE.test(value)) return null;
@@ -131,7 +172,7 @@ export function parseInsightFilters(
 export async function getInsightsPage(workspaceSlug: string, filters: InsightFilters) {
   const ctx = await requireWorkspaceAccess(workspaceSlug, "analytics.view");
   const db = getDb();
-  const [insights, campaigns] = await Promise.all([
+  const [insights, campaigns, sources] = await Promise.all([
     getInsights(db, ctx, filters, new Date(), DEFAULT_RULES),
     db.campaign.findMany({
       where: { workspaceId: ctx.workspaceId, status: { not: "ARCHIVED" } },
@@ -139,6 +180,7 @@ export async function getInsightsPage(workspaceSlug: string, filters: InsightFil
       take: 200,
       select: { id: true, name: true },
     }),
+    getSourceOverview(getInsightsDeps(), ctx),
   ]);
   if (filters.campaignId !== null && !campaigns.some((row) => row.id === filters.campaignId)) {
     throw notFound("campaign");
@@ -146,10 +188,13 @@ export async function getInsightsPage(workspaceSlug: string, filters: InsightFil
   return {
     ...insights,
     campaignOptions: campaigns,
+    sources,
     now: new Date(),
     can: {
       manage: can(ctx.role, "campaign.manage"),
       createContent: can(ctx.role, "content.create"),
+      manageSources: can(ctx.role, "social.manage"),
+      connectMeta: can(ctx.role, "ads.manage"),
     },
   };
 }

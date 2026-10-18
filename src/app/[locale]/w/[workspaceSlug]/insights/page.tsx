@@ -30,6 +30,7 @@ import {
   submitVoidImport,
 } from "./actions";
 import { ImportForm } from "./import-form";
+import { SourcesCard } from "./sources-card";
 
 // Marketing intelligence dashboard (Pass 5). Every number shows where it came from;
 // simulated test data is shown apart and never added to recorded results; nothing is
@@ -77,6 +78,21 @@ export default async function InsightsRoute({
   const totalText = (total: Total) =>
     total.currency === null ? count(total.value) : money(total.value, total.currency);
   const metricName = (metric: string) => t(`enums.metric.${metric}` as never);
+  // Where a campaign's recorded numbers came from (read from Meta, entered by a person).
+  const recordedSources = new Map(
+    data.campaigns.map((entry) => [
+      entry.campaign.id,
+      [...new Set(entry.providers.map((provider) => provider.split(":")[0] ?? ""))].filter(
+        (source) => source === "VERIFIED" || source === "MANUAL",
+      ),
+    ]),
+  );
+  const sourceBadges = (campaignId: string) =>
+    (recordedSources.get(campaignId) ?? []).map((source) => (
+      <Badge key={source} tone="soft" testId={`insights-source-${source}`}>
+        {t(`enums.metricSource.${source}` as never)}
+      </Badge>
+    ));
   const latest = data.freshness.latestPeriodEnd;
   const stale =
     latest !== null &&
@@ -115,7 +131,7 @@ export default async function InsightsRoute({
         return t("insights.kind.WEAK_CONTENT.explain", {
           rate: rate(v.engagementRate),
           median: rate(v.campaignMedianRate),
-          periods: Number(v.periods ?? 0),
+          days: Number(v.days ?? 0),
           compared: Number(v.comparedItems ?? 0),
         });
       case "STRONG_FORMAT":
@@ -221,6 +237,8 @@ export default async function InsightsRoute({
         </form>
       </Card>
 
+      <SourcesCard locale={locale} slug={workspace.slug} sources={data.sources} can={data.can} />
+
       <Card title={t("insights.freshnessTitle")} testId="insights-freshness">
         <ul className="space-y-1 text-sm">
           <li>
@@ -283,7 +301,7 @@ export default async function InsightsRoute({
                     <Badge tone={rec.evidence.sufficiency === "sufficient" ? "soft" : "accent"}>
                       {t(`insights.sufficiency.${rec.evidence.sufficiency}` as never)}
                     </Badge>
-                    <Badge>{t("enums.metricSource.MANUAL")}</Badge>
+                    {sourceBadges(rec.campaignId)}
                   </div>
                   <p className="text-sm">{explain(rec)}</p>
                   <p className="text-xs text-muted-foreground">
@@ -456,7 +474,7 @@ export default async function InsightsRoute({
                   <section className="space-y-2">
                     <h3 className="flex flex-wrap items-center gap-2 text-sm font-medium">
                       {t("insights.recordedTitle")}
-                      <Badge tone="soft">{t("enums.metricSource.MANUAL")}</Badge>
+                      {sourceBadges(campaign.id)}
                     </h3>
                     {recorded.length === 0 ? (
                       <p className="text-sm text-muted-foreground">{t("insights.noRecorded")}</p>
@@ -557,6 +575,7 @@ export default async function InsightsRoute({
         title={t("insights.trendTitle", { metric: metricName(filters.metric) })}
         testId="insights-trend"
       >
+        <p className="text-xs text-muted-foreground">{t("insights.trendNote")}</p>
         {data.series.recorded.length === 0 ? (
           <EmptyState message={t("insights.trendEmpty")} testId="insights-trend-empty" />
         ) : (
@@ -617,13 +636,13 @@ export default async function InsightsRoute({
             <table className="w-full min-w-[36rem] text-sm">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
-                  {(
-                    ["content", "type", "impressions", "engagements", "rate", "periods"] as const
-                  ).map((col) => (
-                    <th key={col} scope="col" className="py-2 text-start font-medium">
-                      {t(`insights.col.${col}`)}
-                    </th>
-                  ))}
+                  {(["content", "type", "exposure", "engagements", "rate", "days"] as const).map(
+                    (col) => (
+                      <th key={col} scope="col" className="py-2 text-start font-medium">
+                        {t(`insights.col.${col}`)}
+                      </th>
+                    ),
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -646,7 +665,14 @@ export default async function InsightsRoute({
                         ? ""
                         : t(`enums.contentType.${row.content.type}` as never)}
                     </td>
-                    <td className="tabular-nums">{count(row.impressions)}</td>
+                    <td className="tabular-nums">
+                      {row.exposureMetric === null ? "—" : count(row.exposure)}
+                      {row.exposureMetric === null ? null : (
+                        <span className="ms-1 text-xs text-muted-foreground">
+                          {metricName(row.exposureMetric)}
+                        </span>
+                      )}
+                    </td>
                     <td className="tabular-nums">{count(row.engagements)}</td>
                     <td className="tabular-nums">
                       {row.engagementRate === null
@@ -656,7 +682,7 @@ export default async function InsightsRoute({
                             maximumFractionDigits: 1,
                           })}
                     </td>
-                    <td className="tabular-nums">{row.periods}</td>
+                    <td className="tabular-nums">{row.days}</td>
                   </tr>
                 ))}
               </tbody>

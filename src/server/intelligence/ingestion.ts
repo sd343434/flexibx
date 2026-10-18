@@ -1,6 +1,6 @@
-import type { MarketingChannel, MetricSource } from "@/generated/prisma/enums";
+import type { MarketingChannel, MetricSource, PerformanceMetric } from "@/generated/prisma/enums";
 
-import { recordAudit } from "../audit/audit-log";
+import { recordAudit, type AuditScope } from "../audit/audit-log";
 import type { GuardedPrismaClient } from "../db/prisma";
 import type { GuardedTransactionClient } from "../db/types";
 import { conflict, notFound } from "../marketing/common";
@@ -239,6 +239,180 @@ async function storeBatch(
       rejected,
       repeated: false,
       issues,
+    };
+  });
+}
+
+/** One number read from a connected source, already normalized by the sync. */
+export interface ProviderObservation {
+  /** Identity at the source; a later value with the same identity is a revision. */
+  readonly sourceRef: string;
+  readonly metric: PerformanceMetric;
+  readonly periodStart: Date;
+  readonly periodEnd: Date;
+  readonly value: bigint;
+  readonly channel: MarketingChannel;
+  /** Null for an account-level number (it belongs to no campaign). */
+  readonly campaignId: string | null;
+  readonly contentItemId: string | null;
+}
+
+export interface ProviderImportResult {
+  readonly importId: string | null;
+  readonly accepted: number;
+  readonly revised: number;
+  readonly duplicates: number;
+  readonly repeated: boolean;
+}
+
+/**
+ * Stores what one run of a connected source read (VERIFIED). Same lock and batch identity
+ * as every import. Unlike a person's numbers, a provider revises its own: a post's
+ * lifetime views grow, and Meta corrects recent days. So a different value for an
+ * identity already recorded is stored as a REVISION (a new row with a later observedAt;
+ * the latest one counts, the earlier ones stay as history and the import says how many
+ * rows were revisions) — never as an overwrite. The same value again is a duplicate and
+ * stores nothing. A row whose content left its campaign since the read is dropped.
+ */
+export async function storeProviderBatch(
+  db: GuardedPrismaClient,
+  actor: AuditScope & { readonly workspaceId: string },
+  batch: {
+    readonly provider: "meta";
+    readonly insightsSourceId: string;
+    readonly externalId: string;
+    readonly observedAt: Date;
+    readonly rows: readonly ProviderObservation[];
+  },
+): Promise<ProviderImportResult> {
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey(actor.workspaceId)}))`;
+    const previous = await tx.metricImport.findFirst({
+      where: {
+        workspaceId: actor.workspaceId,
+        provider: batch.provider,
+        externalId: batch.externalId,
+      },
+      select: { id: true, rowsAccepted: true, rowsDuplicate: true, rowsRevised: true },
+    });
+    if (previous !== null) {
+      return {
+        importId: previous.id,
+        accepted: previous.rowsAccepted,
+        revised: previous.rowsRevised,
+        duplicates: previous.rowsDuplicate,
+        repeated: true,
+      };
+    }
+    // Content must still sit in the campaign the row names (the read took time).
+    const pairs = batch.rows.flatMap((row) =>
+      row.contentItemId === null || row.campaignId === null
+        ? []
+        : [{ id: row.contentItemId, campaignId: row.campaignId }],
+    );
+    const placed = new Set(
+      (
+        await tx.contentItem.findMany({
+          where: { workspaceId: actor.workspaceId, id: { in: pairs.map((pair) => pair.id) } },
+          select: { id: true, campaignId: true },
+        })
+      ).map((row) => `${row.id}|${row.campaignId ?? ""}`),
+    );
+    const rows = batch.rows.filter(
+      (row) =>
+        row.contentItemId === null || placed.has(`${row.contentItemId}|${row.campaignId ?? ""}`),
+    );
+    // The latest value recorded for each identity (imports that are not voided).
+    const refs = [...new Set(rows.map((row) => row.sourceRef))];
+    const latest = new Map<string, bigint>();
+    for (const row of await tx.metricObservation.findMany({
+      where: {
+        workspaceId: actor.workspaceId,
+        provider: batch.provider,
+        sourceRef: { in: refs },
+        import: { status: { not: "VOIDED" } },
+      },
+      orderBy: [{ observedAt: "asc" }, { createdAt: "asc" }],
+      select: { sourceRef: true, value: true },
+    })) {
+      latest.set(row.sourceRef, row.value);
+    }
+    const accepted: ProviderObservation[] = [];
+    const inBatch = new Set<string>();
+    let duplicates = 0;
+    let revised = 0;
+    for (const row of rows) {
+      // One identity once per batch (the sync never reads one twice; guard anyway).
+      if (inBatch.has(row.sourceRef)) continue;
+      inBatch.add(row.sourceRef);
+      const earlier = latest.get(row.sourceRef);
+      if (earlier === row.value) {
+        duplicates += 1;
+        continue;
+      }
+      if (earlier !== undefined) revised += 1;
+      accepted.push(row);
+    }
+    if (accepted.length === 0 && duplicates === 0) {
+      return { importId: null, accepted: 0, revised: 0, duplicates: 0, repeated: false };
+    }
+    const created = await tx.metricImport.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        provider: batch.provider,
+        source: "VERIFIED",
+        externalId: batch.externalId,
+        insightsSourceId: batch.insightsSourceId,
+        status: "SUCCEEDED",
+        rowsReceived: accepted.length + duplicates,
+        rowsAccepted: accepted.length,
+        rowsDuplicate: duplicates,
+        rowsRejected: 0,
+        rowsRevised: revised,
+        importedByUserId: actor.userId,
+      },
+      select: { id: true },
+    });
+    if (accepted.length > 0) {
+      await tx.metricObservation.createMany({
+        data: accepted.map((row) => ({
+          workspaceId: actor.workspaceId,
+          importId: created.id,
+          campaignId: row.campaignId,
+          contentItemId: row.contentItemId,
+          insightsSourceId: batch.insightsSourceId,
+          channel: row.channel,
+          provider: batch.provider,
+          source: "VERIFIED" as const,
+          metric: row.metric,
+          periodStart: row.periodStart,
+          periodEnd: row.periodEnd,
+          value: row.value,
+          currency: null,
+          sourceRef: row.sourceRef,
+          observedAt: batch.observedAt,
+        })),
+      });
+    }
+    await recordAudit(tx, actor, {
+      action: "metrics.imported",
+      entityType: "insights_source",
+      entityId: batch.insightsSourceId,
+      metadata: {
+        importId: created.id,
+        provider: batch.provider,
+        source: "VERIFIED",
+        accepted: accepted.length,
+        revised,
+        duplicates,
+      },
+    });
+    return {
+      importId: created.id,
+      accepted: accepted.length,
+      revised,
+      duplicates,
+      repeated: false,
     };
   });
 }

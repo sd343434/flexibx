@@ -996,3 +996,117 @@ a real analytics provider yet.
     the rules and metric definitions.
   - The campaign page links to it.
   - Arabic and English; CSV and provider ids are shown left-to-right.
+
+## 22. Meta Insights integration (Pass 6)
+
+The workspace's own Meta connection read for insights into the existing imports,
+observations, Insights page and recommendations — not a parallel system. Read-only:
+nothing is written to Meta, published, sent or spent.
+
+- **Connection** (reuses § 18's advertising connection, one per workspace):
+  - With `META_INSIGHTS_ENABLED=true`, the existing Facebook Login asks for
+    `pages_show_list`, `pages_read_engagement` and `read_insights` (Pages), and
+    `instagram_basic` and `instagram_manage_insights` (Instagram professional accounts).
+    With `META_CONFIG_ID`, the login configuration's permissions apply instead. The
+    permissions actually granted are checked per kind of source.
+  - The OAuth state stays as it was: stored as a hash, single use, ten minutes, bound to
+    the person, workspace and platform.
+  - The user token stays encrypted (AES-256-GCM, bound to the workspace and platform;
+    the key is `ENCRYPTION_KEY`, outside the database). Page tokens are fetched from
+    `/me/accounts` for each run and never stored.
+  - The connection still requires `ads_read` (the advertising adapter's requirement), so
+    an insights-only grant is refused. Recorded as a gap.
+- **Sources** (`insights_sources`, migration `20261019090000_meta_insights_sync`):
+  - A source is one of the workspace's `social_channels` (a Page or an Instagram
+    account discovered from its grant by the Social Manager's Page sync), turned on by a
+    person with `social.manage`.
+  - The database keeps a source in its channel's workspace and never lets it change
+    account.
+  - Disconnecting Meta, Meta's deauthorize callback and its data-deletion callback turn
+    every source off with the reason. The numbers already read stay, as history.
+  - A run that finds the Page gone from the grant turns that source off (`access_lost`).
+    So does a run that finds the Instagram account no longer linked to its Page.
+- **Client** (`meta-insights.ts`, pure, `fetch` injected):
+  - The Graph version is `META_GRAPH_VERSION`, configured in one place, and the metric
+    names live in one catalog.
+  - GET requests only, one metric per request, each with `appsecret_proof`. Answers are
+    validated with zod.
+  - Meta's error codes are mapped to codes; Meta's message is never kept.
+  - Up to three attempts with exponential backoff and equal jitter (500 ms base, 8 s
+    cap) for rate limits (4, 17, 32, 613, 80000–80014, HTTP 429), Meta-side errors
+    (1, 2, 5xx), network errors and timeouts (15 s per request). An expired token (190)
+    or a missing permission (10, 200–299) is never retried.
+  - A metric Meta rejects (100) is "unsupported", a value that is absent is "missing",
+    and only a value of 0 is zero.
+- **What is read, and what it is linked to** (`insights-sync.ts`):
+  - **Account level, daily:** a Page's `page_media_view`, `page_total_media_view_unique`
+    and `page_post_engagements` (one request over the window), and an Instagram
+    account's `views`, `reach` and `total_interactions` (`metric_type=total_value`, one
+    day per request).
+    - These are stored without a campaign (`campaign_id` NULL, `insights_source_id` set).
+      They are shown on the source's card and never counted in a campaign's results or
+      used by its recommendations.
+    - A day is Meta's reporting day: the day before `end_time`.
+  - **Posts:** each Facebook Page post Flexibx published for content in a campaign
+    (`social_posts.external_post_id`, a reliable link) gets its lifetime
+    `post_media_view`, `post_total_media_view_unique` and `post_clicks`. Its interactions
+    are reactions + comments + shares as the post reports them.
+    - Linked to that content and campaign, so they count in the campaign's results and
+      recommendations.
+    - Covers up to 25 posts published within 60 days.
+  - **Not linked:** Instagram media (Flexibx does not publish to Instagram) and ad spend
+    (an ad plan is not tied to a campaign). Nothing is attributed by guess.
+- **Runs** (`insights_sync_runs`):
+  - Triggered by a person's "Sync now" (`campaign.manage`, at most once per five
+    minutes per source) or by the scheduled tick's `insights` phase (due sources of
+    workspaces with a usable grant, five per tick, daily). The tick's external trigger
+    is still not configured (§ 18).
+  - A run claims its source with a five-minute lease. The database also allows only one
+    RUNNING run per source.
+  - A run whose runner died is marked ABANDONED by the next run, which resumes from the
+    stored coverage.
+  - Each run is bounded:
+    - 14 account days per run, starting 3 days before the coverage end, because Meta
+      revises recent days;
+    - 28 days on the first run, never older than 90 days, and only complete days;
+    - 200 calls and 90 seconds.
+  - Outcomes: SUCCEEDED (with the metrics Meta does not offer listed), PARTIAL (a post
+    gone, or a limit hit — what was read is stored) or FAILED, always with a code.
+  - Retries after a failure: 1 h, then 2 h, 4 h … up to 24 h. Token and permission
+    problems wait for a person; an expired token marks the connection EXPIRED.
+  - Audit: `insights.source_enabled|source_disabled|synced|sync_failed|access_revoked`,
+    with counts and codes only.
+- **Storage** (`storeProviderBatch`):
+  - Same workspace lock and batch identity as every import: the batch id is
+    `run:{runId}`, source VERIFIED, provider `meta`. The database refuses VERIFIED for
+    any other provider, and any `meta` row without its source.
+  - The same value again is a duplicate. A different value is a revision: a new row with
+    a later `observed_at`; the import counts `rows_revised`.
+  - Summaries count the latest revision of each identity once.
+- **Analysis changes:**
+  - **One source per item and metric.** For one content item and metric, Meta's numbers
+    replace a person's; the two are never added together.
+  - **Views or impressions, never mixed.** Content is compared by impressions or, when
+    an item has none, by views, and only within the larger group.
+  - **Days, not periods.** The rule "observed over at least 2 days"
+    (`minDaysPerContent`) replaces "2 periods", because a lifetime number is one period
+    spanning many days.
+  - **New metric.** `VIEWS` is a metric of its own, never added to `IMPRESSIONS`.
+  - **Trend.** The trend plots single-day numbers only. A total over a longer period (a
+    weekly import, a post's lifetime views) is not a day's value; it stays in the
+    summaries, and the page says so.
+- **UI:**
+  - A "Connected sources (Meta)" card on the Insights page shows:
+    - the connection's state: not configured, not connected, needs reconnection, or
+      ready, with the missing permissions per kind;
+    - each channel's status: off (with the reason), needs reconnection, syncing, not
+      synced yet, failed, may be out of date (no success for 48 h), or up to date;
+    - last success, last attempt and next sync; the days covered; the metrics Meta does
+      not offer;
+    - the account-level totals of the last 28 covered days, marked "Read from Meta" and
+      "not a campaign's result";
+    - the last five runs with their codes;
+    - "Sync now" and the source switches, for those allowed.
+  - Recorded numbers carry their source badges ("Read from Meta", "Entered by a
+    person").
+  - Arabic and English; permission names and ids are shown left to right.

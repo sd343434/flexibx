@@ -70,6 +70,8 @@ model User {
   contentReviews            ContentReview[]
   campaignPlansApproved     CampaignPlan[]
   metricImports             MetricImport[]
+  insightsSourcesCreated    InsightsSource[]          @relation("InsightsSourceCreator")
+  insightsRunsRequested     InsightsSyncRun[]         @relation("InsightsRunRequester")
   recommendationsDecided    MarketingRecommendation[]
   mediaUploaded             MediaAsset[]
   aiGenerations             AiGeneration[]
@@ -165,6 +167,8 @@ model Workspace {
   metricImports         MetricImport[]
   metricObservations    MetricObservation[]
   recommendations       MarketingRecommendation[]
+  insightsSources       InsightsSource[]
+  insightsSyncRuns      InsightsSyncRun[]
 
   @@index([parentWorkspaceId])
   @@map("workspaces")
@@ -2019,10 +2023,11 @@ model SocialChannel {
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  agent        SocialAgent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  interactions SocialInteraction[]
-  posts        SocialPost[]
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent          SocialAgent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  interactions   SocialInteraction[]
+  posts          SocialPost[]
+  insightsSource InsightsSource?
 
   @@unique([workspaceId, platform, externalId])
   @@index([platform, externalId])
@@ -2304,6 +2309,9 @@ model AlertThrottle {
 /// (minor units + ISO 4217 currency).
 enum PerformanceMetric {
   IMPRESSIONS
+  /// Times content was shown or played, as Meta now reports it ("views" replaced
+  /// "impressions" in Page and Instagram insights). Never added to IMPRESSIONS.
+  VIEWS
   REACH
   ENGAGEMENTS
   CLICKS
@@ -2356,15 +2364,23 @@ model MetricImport {
   /// Row-level problems: [{ row, code }] (at most 50; codes only).
   issues           Json               @default("[]")
   importedByUserId String?            @map("imported_by_user_id") @db.Uuid
+  /// The connected account a provider sync read (Pass 6); null for people's imports.
+  insightsSourceId String?            @map("insights_source_id") @db.Uuid
+  /// Accepted rows that are a newer value of an observation already recorded (a provider
+  /// revised its number); the earlier value stays as history.
+  rowsRevised      Int                @default(0) @map("rows_revised")
   voidedAt         DateTime?          @map("voided_at") @db.Timestamptz(3)
   createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importedBy   User?               @relation(fields: [importedByUserId], references: [id], onDelete: SetNull)
-  observations MetricObservation[]
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importedBy     User?               @relation(fields: [importedByUserId], references: [id], onDelete: SetNull)
+  insightsSource InsightsSource?     @relation(fields: [insightsSourceId], references: [id], onDelete: Cascade)
+  observations   MetricObservation[]
+  syncRuns       InsightsSyncRun[]
 
   @@unique([workspaceId, provider, externalId])
+  @@index([insightsSourceId])
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([importedByUserId])
   @@map("metric_imports")
@@ -2374,28 +2390,37 @@ model MetricImport {
 /// period, from one source. Never edited: a wrong import is voided as a whole, and a
 /// different value for the same key is refused as a conflict, not overwritten.
 model MetricObservation {
-  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId   String            @map("workspace_id") @db.Uuid
-  importId      String            @map("import_id") @db.Uuid
-  campaignId    String            @map("campaign_id") @db.Uuid
-  contentItemId String?           @map("content_item_id") @db.Uuid
-  channel       MarketingChannel
-  provider      String            @db.VarChar(40)
-  source        MetricSource
-  metric        PerformanceMetric
-  periodStart   DateTime          @map("period_start") @db.Date
-  periodEnd     DateTime          @map("period_end") @db.Date
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String            @map("workspace_id") @db.Uuid
+  importId         String            @map("import_id") @db.Uuid
+  /// Null only for an account-level number of a connected source (a Page's daily
+  /// views): it belongs to no campaign and never counts in campaign results.
+  campaignId       String?           @map("campaign_id") @db.Uuid
+  contentItemId    String?           @map("content_item_id") @db.Uuid
+  /// The connected account the number was read from (provider syncs only).
+  insightsSourceId String?           @map("insights_source_id") @db.Uuid
+  channel          MarketingChannel
+  provider         String            @db.VarChar(40)
+  source           MetricSource
+  metric           PerformanceMetric
+  periodStart      DateTime          @map("period_start") @db.Date
+  periodEnd        DateTime          @map("period_end") @db.Date
   /// Whole count, or money in minor units of `currency`.
-  value         BigInt
-  currency      String?           @db.Char(3)
+  value            BigInt
+  currency         String?           @db.Char(3)
   /// Identity of this observation at its source; with `provider`, unique in a workspace.
-  sourceRef     String            @map("source_ref") @db.VarChar(200)
-  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  sourceRef        String            @map("source_ref") @db.VarChar(200)
+  /// When the value was read at its source. A provider may revise a number (a post's
+  /// lifetime views grow; Meta corrects recent days): each revision is a new row with a
+  /// later observedAt, and the latest one counts. Earlier ones stay as history.
+  observedAt       DateTime          @default(now()) @map("observed_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  import      MetricImport @relation(fields: [importId], references: [id], onDelete: Cascade)
-  campaign    Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contentItem ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  import         MetricImport    @relation(fields: [importId], references: [id], onDelete: Cascade)
+  campaign       Campaign?       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contentItem    ContentItem?    @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  insightsSource InsightsSource? @relation(fields: [insightsSourceId], references: [id], onDelete: Cascade)
 
   /// Within one import a source identity appears once. Across imports, duplicates are
   /// refused by the import service under a per-workspace lock (only observations of
@@ -2407,6 +2432,7 @@ model MetricObservation {
   @@index([importId])
   @@index([campaignId])
   @@index([contentItemId])
+  @@index([insightsSourceId, metric, periodStart])
   @@map("metric_observations")
 }
 
@@ -2469,4 +2495,121 @@ model MarketingRecommendation {
   @@index([contentItemId])
   @@index([decidedByUserId])
   @@map("marketing_recommendations")
+}
+
+// ── Meta Insights integration (Pass 6) ──
+// A workspace chooses which of its Meta channels (a Facebook Page or an Instagram
+// professional account, discovered through its own Meta grant — see SocialChannel) are
+// read for insights. Reading uses the workspace's encrypted user token (AdConnection,
+// META) and a Page token fetched for the call and never stored. Each sync is one run
+// with a lease on its source (no two syncs of one source at once), bounded in days,
+// calls and time; its numbers are stored as one VERIFIED import (metric_imports).
+
+enum InsightsSourceKind {
+  FACEBOOK_PAGE
+  INSTAGRAM_ACCOUNT
+
+  @@map("insights_source_kind")
+}
+
+enum InsightsRunStatus {
+  RUNNING
+  /// Every requested metric was read (metrics the account does not offer are listed).
+  SUCCEEDED
+  /// Some reads failed (a post, a metric); what was read is stored.
+  PARTIAL
+  FAILED
+  /// The runner stopped without finishing (its lease expired); a later run resumes.
+  ABANDONED
+
+  @@map("insights_run_status")
+}
+
+enum InsightsRunTrigger {
+  MANUAL
+  SCHEDULED
+
+  @@map("insights_run_trigger")
+}
+
+model InsightsSource {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String             @map("workspace_id") @db.Uuid
+  /// The channel this source reads (its Page / Instagram account and name).
+  socialChannelId    String             @unique @map("social_channel_id") @db.Uuid
+  provider           String             @default("meta") @db.VarChar(40)
+  kind               InsightsSourceKind
+  /// Page id or Instagram professional account id (copied from the channel).
+  externalId         String             @map("external_id") @db.VarChar(64)
+  /// The Page whose token reads this source (an Instagram account's Page).
+  pageId             String             @map("page_id") @db.VarChar(64)
+  name               String             @db.VarChar(200)
+  enabled            Boolean            @default(true)
+  /// Why it was turned off by the system: access_lost, disconnected, deauthorized,
+  /// data_deleted (null while enabled, or when a person turned it off).
+  disabledReason     String?            @map("disabled_reason") @db.VarChar(40)
+  /// The run holding the source, and until when (a dead runner's lease expires).
+  leaseRunId         String?            @map("lease_run_id") @db.Uuid
+  leaseUntil         DateTime?          @map("lease_until") @db.Timestamptz(3)
+  lastAttemptAt      DateTime?          @map("last_attempt_at") @db.Timestamptz(3)
+  lastSuccessAt      DateTime?          @map("last_success_at") @db.Timestamptz(3)
+  /// A code, never a provider message.
+  lastErrorCode      String?            @map("last_error_code") @db.VarChar(60)
+  /// Failed runs in a row (spaces out scheduled retries).
+  failureCount       Int                @default(0) @map("failure_count")
+  /// Days read so far (the account-level daily numbers), in Meta's reporting days.
+  coveredFrom        DateTime?          @map("covered_from") @db.Date
+  coveredTo          DateTime?          @map("covered_to") @db.Date
+  /// When the scheduler should read it next (null: only by hand).
+  nextSyncAt         DateTime?          @map("next_sync_at") @db.Timestamptz(3)
+  /// Metrics this account does not offer (as Meta answered on the last run).
+  unsupportedMetrics String[]           @default([]) @map("unsupported_metrics")
+  createdByUserId    String?            @map("created_by_user_id") @db.Uuid
+  version            Int                @default(1)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  socialChannel SocialChannel       @relation(fields: [socialChannelId], references: [id], onDelete: Cascade)
+  createdBy     User?               @relation("InsightsSourceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  imports       MetricImport[]
+  observations  MetricObservation[]
+  runs          InsightsSyncRun[]
+
+  @@unique([workspaceId, kind, externalId])
+  @@index([enabled, nextSyncAt])
+  @@index([createdByUserId])
+  @@map("insights_sources")
+}
+
+/// One sync of one source: when it ran, how it ended, what it stored (codes only).
+model InsightsSyncRun {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  sourceId          String             @map("source_id") @db.Uuid
+  trigger           InsightsRunTrigger
+  status            InsightsRunStatus  @default(RUNNING)
+  requestedByUserId String?            @map("requested_by_user_id") @db.Uuid
+  /// The account-level days this run asked for.
+  windowFrom        DateTime?          @map("window_from") @db.Date
+  windowTo          DateTime?          @map("window_to") @db.Date
+  importId          String?            @map("import_id") @db.Uuid
+  calls             Int                @default(0)
+  rowsStored        Int                @default(0) @map("rows_stored")
+  errorCode         String?            @map("error_code") @db.VarChar(60)
+  /// [{ code, metric?, ref? }] — codes and Graph metric names only (at most 50).
+  issues            Json               @default("[]")
+  startedAt         DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime?          @map("finished_at") @db.Timestamptz(3)
+
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source      InsightsSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  requestedBy User?          @relation("InsightsRunRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  import      MetricImport?  @relation(fields: [importId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, startedAt(sort: Desc)])
+  @@index([sourceId, startedAt(sort: Desc)])
+  @@index([requestedByUserId])
+  @@index([importId])
+  @@map("insights_sync_runs")
 }

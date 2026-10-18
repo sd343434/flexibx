@@ -7,7 +7,10 @@ import type { ErrorResponseBody } from "@/server/errors/http";
 import {
   actOnRecommendationAction,
   decideRecommendationAction,
+  disableInsightsSourceAction,
+  enableInsightsSourceAction,
   importMetricsAction,
+  syncInsightsSourceAction,
   voidImportAction,
 } from "@/server/intelligence/intelligence-actions";
 
@@ -103,6 +106,48 @@ export async function submitRecommendationDraft(
   _previous: MarketingFormState,
 ): Promise<MarketingFormState> {
   const result = await actOnRecommendationAction({ slug, fingerprint, version });
+  if (!result.ok) return { error: result.error, values: {} };
+  refresh(locale, slug);
+  return { done: true, at: Date.now() };
+}
+
+/** Starts reading a Meta channel's insights (the server checks the grant's permissions). */
+export async function submitEnableSource(
+  slug: string,
+  locale: string,
+  channelId: string,
+  _previous: MarketingFormState,
+): Promise<MarketingFormState> {
+  const result = await enableInsightsSourceAction({ slug, channelId });
+  if (!result.ok) return { error: result.error, values: {} };
+  refresh(locale, slug);
+  return { done: true, at: Date.now() };
+}
+
+export async function submitDisableSource(
+  slug: string,
+  locale: string,
+  sourceId: string,
+  _previous: MarketingFormState,
+): Promise<MarketingFormState> {
+  const result = await disableInsightsSourceAction({ slug, sourceId });
+  if (!result.ok) return { error: result.error, values: {} };
+  refresh(locale, slug);
+  return { done: true, at: Date.now() };
+}
+
+/**
+ * "Sync now". The run's outcome (also a failed run, with its reason) is shown on the
+ * source's card after the refresh; only a refusal (running, too soon, no permission)
+ * comes back as an error here.
+ */
+export async function submitSyncSource(
+  slug: string,
+  locale: string,
+  sourceId: string,
+  _previous: MarketingFormState,
+): Promise<MarketingFormState> {
+  const result = await syncInsightsSourceAction({ slug, sourceId });
   if (!result.ok) return { error: result.error, values: {} };
   refresh(locale, slug);
   return { done: true, at: Date.now() };

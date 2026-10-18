@@ -116,6 +116,8 @@ export interface ScheduledTickSummary {
   readonly creditHoldsReleased: number;
   /** Video jobs whose runner stopped, resumed on this tick (0 when video is not configured). */
   readonly videoJobsResumed: number;
+  /** Meta Insights sources read on this tick, and how many of those runs failed. */
+  readonly insightsSyncs: { readonly started: number; readonly failed: number };
   /** Phases that failed on this tick (logged); the others still ran. */
   readonly failedPhases: readonly string[];
   /**
@@ -141,6 +143,8 @@ export interface TickPhases {
   social(now: Date): Promise<ScheduledTickSummary["social"]>;
   credits(now: Date): Promise<number>;
   video(): Promise<number>;
+  /** Due Meta Insights sources (absent: nothing to read on this tick). */
+  insights?(): Promise<{ readonly started: number; readonly failed: number }>;
 }
 
 export const DEFAULT_TICK_PHASES: TickPhases = {
@@ -160,6 +164,13 @@ export const DEFAULT_TICK_PHASES: TickPhases = {
     const { getVideoGenerationDeps } = await import("../videos/generation/runtime");
     const { recoverVideoJobs } = await import("../videos/generation/video-generation-service");
     return (await recoverVideoJobs({ ...getVideoGenerationDeps(), system: getSystemDb() })).resumed;
+  },
+  // Meta Insights: due sources of workspaces with a usable Meta grant (nothing when
+  // META_INSIGHTS_ENABLED is off — the client does not exist then).
+  insights: async () => {
+    const { getInsightsDeps } = await import("../intelligence/insights-runtime");
+    const { runDueInsightsSyncs } = await import("../intelligence/insights-sync");
+    return runDueInsightsSyncs(getInsightsDeps(), getSystemDb());
   },
 };
 
@@ -280,6 +291,7 @@ export async function runScheduledAutomationTick(
     social: EMPTY_SOCIAL,
     creditHoldsReleased: 0,
     videoJobsResumed: 0,
+    insightsSyncs: { started: 0, failed: 0 },
     failedPhases: [],
     status: "skipped",
     skippedPhases: [],
@@ -390,6 +402,11 @@ async function runTickPhases(
   const social = await phase("social", EMPTY_SOCIAL, () => phases.social(now()));
   const creditHoldsReleased = await phase("credits", 0, () => phases.credits(now()));
   const videoJobsResumed = await phase("video", 0, () => phases.video());
+  const noSyncs = { started: 0, failed: 0 };
+  const insightsSyncs =
+    phases.insights === undefined
+      ? noSyncs
+      : await phase("insights", noSyncs, () => phases.insights?.() ?? Promise.resolve(noSyncs));
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
     const key =
@@ -414,6 +431,7 @@ async function runTickPhases(
     social,
     creditHoldsReleased,
     videoJobsResumed,
+    insightsSyncs,
     failedPhases,
     status: skippedPhases.length > 0 ? "partial" : "completed",
     skippedPhases,

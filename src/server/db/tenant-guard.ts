@@ -74,6 +74,9 @@ export const TENANT_MODELS = {
   MetricImport: { workspaceId: "required", appendOnly: false },
   MetricObservation: { workspaceId: "required", appendOnly: true },
   MarketingRecommendation: { workspaceId: "required", appendOnly: false },
+  // Meta Insights (Pass 6): the accounts read and the record of each sync.
+  InsightsSource: { workspaceId: "required", appendOnly: false },
+  InsightsSyncRun: { workspaceId: "required", appendOnly: false },
 } as const satisfies Record<string, { workspaceId: "required" | "nullable"; appendOnly: boolean }>;
 
 /** The tenant root. Reads/updates must target one workspace by `id`; hard deletes are blocked. */
@@ -138,6 +141,8 @@ export const TENANT_ROOT_RELATIONS = [
   "metricImports",
   "metricObservations",
   "recommendations",
+  "insightsSources",
+  "insightsSyncRuns",
 ] as const;
 
 /**
@@ -156,6 +161,7 @@ export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> 
   ContentItem: ["reviews", "observations"],
   MetricImport: ["observations"],
   Campaign: ["observations"],
+  InsightsSource: ["observations"],
 };
 
 /**
@@ -202,6 +208,8 @@ export const GLOBAL_MODEL_TENANT_RELATIONS: Readonly<Record<string, readonly str
     "campaignPlansApproved",
     "metricImports",
     "recommendationsDecided",
+    "insightsSourcesCreated",
+    "insightsRunsRequested",
   ],
 };
 

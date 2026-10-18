@@ -15,6 +15,7 @@ import {
   parseMetaSignedRequest,
   type MetaSignedRequest,
 } from "./meta-signed-request";
+import { revokeInsightsSources } from "../intelligence/insights-access";
 import { revokeSocialAccess } from "../social/channel-access";
 
 // Meta's two account-lifecycle callbacks (both required for App Review), for the Meta app
@@ -99,6 +100,7 @@ export async function forgetMetaUser(
           : { count: 0 };
       if (revoked.count === 0 && erased.count === 0) return false;
       let channelsDisabled = 0;
+      let sourcesDisabled = 0;
       if (revoked.count > 0) {
         await tx.adAccount.updateMany({
           where: { workspaceId, connectionId: connection.id },
@@ -108,6 +110,11 @@ export async function forgetMetaUser(
         // replying and publishing, and give up their automatic-reply claims.
         if (connection.platform === "META") {
           channelsDisabled = await revokeSocialAccess(tx, workspaceId);
+          sourcesDisabled = await revokeInsightsSources(
+            tx,
+            workspaceId,
+            kind === "deauthorize" ? "deauthorized" : "data_deleted",
+          );
         }
       }
       await recordAudit(
@@ -122,6 +129,7 @@ export async function forgetMetaUser(
             platform: connection.platform,
             revoked: revoked.count > 0,
             socialChannelsDisabled: channelsDisabled,
+            insightsSourcesDisabled: sourcesDisabled,
           },
         },
       );

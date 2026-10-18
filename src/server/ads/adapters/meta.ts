@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+import { ALL_META_INSIGHTS_SCOPES } from "../../intelligence/meta-insights";
 import { graphFailureKind } from "../../meta/graph-errors";
 import {
   AdPlatformError,
@@ -65,6 +66,11 @@ export interface MetaAdapterConfig {
    * never needs them; a connection without them simply cannot create campaigns.
    */
   readonly requestWriteAccess?: boolean;
+  /**
+   * Also ask for the read-only insights permissions (META_INSIGHTS_SCOPES) at sign-in:
+   * only when this server enables Meta Insights (META_INSIGHTS_ENABLED).
+   */
+  readonly requestInsightsAccess?: boolean;
   /**
    * Facebook Login for Business configuration id (META_CONFIG_ID). When set, the dialog
    * uses it instead of `scope`; the permissions actually granted are checked either way.
@@ -287,7 +293,10 @@ export function createMetaAdapter(config: MetaAdapterConfig): AdPlatformAdapter 
         [
           ...META_REQUIRED_SCOPES,
           ...(config.requestWriteAccess === true ? META_WRITE_SCOPES : []),
-        ].join(","),
+          ...(config.requestInsightsAccess === true ? ALL_META_INSIGHTS_SCOPES : []),
+        ]
+          .filter((scope, index, all) => all.indexOf(scope) === index)
+          .join(","),
       );
       return url.toString();
     },

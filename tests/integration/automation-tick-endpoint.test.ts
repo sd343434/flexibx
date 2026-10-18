@@ -84,6 +84,8 @@ describe("POST /api/internal/automation-tick", () => {
       social: { published: 0, drafted: 0, sent: 0, uncertain: 0, reviewed: 0 },
       creditHoldsReleased: 0,
       videoJobsResumed: 0,
+      // Meta Insights is not enabled here: nothing to read.
+      insightsSyncs: { started: 0, failed: 0 },
       failedPhases: [],
       status: "completed",
       skippedPhases: [],

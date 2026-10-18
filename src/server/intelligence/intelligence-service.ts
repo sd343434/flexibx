@@ -64,13 +64,16 @@ const observationSelect = {
   value: true,
   currency: true,
   sourceRef: true,
+  observedAt: true,
 } as const;
 
 async function loadObservations(db: Db, ctx: TenantContext, filters: InsightFilters) {
   const where: Prisma.MetricObservationWhereInput = {
     workspaceId: ctx.workspaceId,
     import: { status: { not: "VOIDED" } },
-    ...(filters.campaignId === null ? {} : { campaignId: filters.campaignId }),
+    // Campaign numbers only: a source's account-level numbers belong to no campaign and
+    // are never added to one (see getSourceOverview).
+    campaignId: filters.campaignId ?? { not: null },
     ...(filters.channel === null ? {} : { channel: filters.channel }),
     ...(filters.from === null ? {} : { periodStart: { gte: filters.from } }),
     ...(filters.to === null ? {} : { periodEnd: { lte: filters.to } }),
@@ -81,7 +84,10 @@ async function loadObservations(db: Db, ctx: TenantContext, filters: InsightFilt
     take: OBSERVATION_LIMIT,
     select: observationSelect,
   });
-  return { rows: rows as Observation[], truncated: rows.length === OBSERVATION_LIMIT };
+  const campaignRows = rows.flatMap((row): Observation[] =>
+    row.campaignId === null ? [] : [{ ...row, campaignId: row.campaignId }],
+  );
+  return { rows: campaignRows, truncated: rows.length === OBSERVATION_LIMIT };
 }
 
 async function loadCampaigns(db: Db, ctx: TenantContext, campaignId: string | null) {
@@ -232,7 +238,7 @@ export async function getInsights(
   const content = contentResults(recorded)
     .map((result) => ({ ...result, content: titles.get(result.contentItemId) ?? null }))
     .filter((result) => result.content !== null)
-    .sort((a, b) => Number(b.impressions - a.impressions));
+    .sort((a, b) => Number(b.exposure - a.exposure));
 
   // Findings come from recorded evidence of the whole campaign (not the date filter), so
   // a narrow view never hides or invents a recommendation.

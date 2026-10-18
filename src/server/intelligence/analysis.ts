@@ -31,8 +31,8 @@ import { isMoneyMetric } from "./metrics";
 export const rulesSchema = z.strictObject({
   /** A content item is compared only with at least this many impressions in the period. */
   minImpressionsPerContent: z.number().int().min(1).max(1_000_000),
-  /** …and observations on at least this many separate periods. */
-  minPeriodsPerContent: z.number().int().min(1).max(90),
+  /** …observed over at least this many days (a lifetime number counts the days it spans). */
+  minDaysPerContent: z.number().int().min(1).max(90),
   /** At least this many comparable content items before any of them is judged. */
   minComparableContent: z.number().int().min(3).max(100),
   /** Weak: engagement rate below this share of the campaign's median rate. */
@@ -54,7 +54,7 @@ export type Rules = z.output<typeof rulesSchema>;
 
 export const DEFAULT_RULES: Rules = rulesSchema.parse({
   minImpressionsPerContent: 500,
-  minPeriodsPerContent: 2,
+  minDaysPerContent: 2,
   minComparableContent: 4,
   weakRatio: 0.5,
   strongRatio: 1.5,
@@ -83,6 +83,8 @@ export interface Observation {
   readonly value: bigint;
   readonly currency: string | null;
   readonly sourceRef: string;
+  /** When the value was read; of several values of one identity, the latest counts. */
+  readonly observedAt: Date;
 }
 
 export interface CampaignFacts {
@@ -114,15 +116,41 @@ export interface CampaignFacts {
 const DAY_MS = 24 * 3_600_000;
 const day = (at: Date) => Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate());
 
-/** Each identity once, in the given order. */
+/**
+ * Each identity once: its latest value (the most recent observedAt; on a tie, the first
+ * given). A provider's revised number replaces the earlier one here — the earlier rows
+ * stay stored as history — so nothing is counted twice. Order: first appearance.
+ */
 export function distinctObservations(rows: readonly Observation[]): Observation[] {
-  const seen = new Set<string>();
-  return rows.filter((row) => {
+  const latest = new Map<string, Observation>();
+  for (const row of rows) {
     const key = `${row.provider}\u0000${row.sourceRef}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const kept = latest.get(key);
+    if (kept === undefined || row.observedAt.getTime() > kept.observedAt.getTime()) {
+      latest.set(key, row);
+    }
+  }
+  return [...latest.values()];
+}
+
+/**
+ * One source per content item and metric: when a provider read the item's numbers
+ * (VERIFIED), a person's numbers for the same item and metric are set aside — the two
+ * describe the same views or clicks, and adding them would count them twice. Rows without
+ * content (campaign-level) are kept as they are.
+ */
+export function preferVerified(rows: readonly Observation[]): Observation[] {
+  const verified = new Set(
+    rows
+      .filter((row) => row.source === "VERIFIED" && row.contentItemId !== null)
+      .map((row) => `${row.contentItemId ?? ""}|${row.metric}`),
+  );
+  return rows.filter(
+    (row) =>
+      row.contentItemId === null ||
+      row.source === "VERIFIED" ||
+      !verified.has(`${row.contentItemId}|${row.metric}`),
+  );
 }
 
 export interface Total {
@@ -142,7 +170,7 @@ export interface Total {
  */
 export function campaignTotals(rows: readonly Observation[]): Total[] {
   const groups = new Map<string, Observation[]>();
-  for (const row of distinctObservations(rows)) {
+  for (const row of distinctObservations(preferVerified(rows))) {
     const key = `${row.metric}|${row.currency ?? ""}`;
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
@@ -167,14 +195,20 @@ export function campaignTotals(rows: readonly Observation[]): Total[] {
   );
 }
 
-/** Daily totals of one count metric (each day: campaign-level rows if any, else content rows). */
+/**
+ * Daily totals of one count metric (each day: campaign-level rows if any, else content
+ * rows). Only single-day numbers are plotted: a number over a longer period (a weekly
+ * import, a post's lifetime views) is not a day's value and would show as a false spike on
+ * its first day; it stays in the summaries.
+ */
 export function dailySeries(
   rows: readonly Observation[],
   metric: PerformanceMetric,
 ): { readonly day: Date; readonly value: bigint }[] {
   const byDay = new Map<number, Observation[]>();
-  for (const row of distinctObservations(rows)) {
+  for (const row of distinctObservations(preferVerified(rows))) {
     if (row.metric !== metric || row.currency !== null) continue;
+    if (day(row.periodStart) !== day(row.periodEnd)) continue;
     const key = day(row.periodStart);
     byDay.set(key, [...(byDay.get(key) ?? []), row]);
   }
@@ -187,21 +221,34 @@ export function dailySeries(
     });
 }
 
+/** What a content item's engagement rate is measured against. */
+export type ExposureMetric = "IMPRESSIONS" | "VIEWS";
+
 export interface ContentResult {
   readonly contentItemId: string;
+  /**
+   * IMPRESSIONS when the item has any (people's imports), else VIEWS (Meta reports views
+   * now); null without either. Items are only compared with items of the same measure.
+   */
+  readonly exposureMetric: ExposureMetric | null;
+  readonly exposure: bigint;
   readonly impressions: bigint;
+  readonly views: bigint;
   readonly engagements: bigint;
   readonly clicks: bigint;
-  /** Distinct periods with impressions recorded. */
-  readonly periods: number;
-  /** Engagements per impression; null without impressions. */
+  /** Distinct days covered by the exposure numbers. */
+  readonly days: number;
+  /** Engagements per exposure; null without exposure. */
   readonly engagementRate: number | null;
 }
+
+/** At most this many days are counted per observation (its longest allowed period). */
+const MAX_COVERED_DAYS = 92;
 
 /** Per-content totals of the count metrics used for comparisons. */
 export function contentResults(rows: readonly Observation[]): ContentResult[] {
   const byContent = new Map<string, Observation[]>();
-  for (const row of distinctObservations(rows)) {
+  for (const row of distinctObservations(preferVerified(rows))) {
     if (row.contentItemId === null) continue;
     byContent.set(row.contentItemId, [...(byContent.get(row.contentItemId) ?? []), row]);
   }
@@ -209,19 +256,35 @@ export function contentResults(rows: readonly Observation[]): ContentResult[] {
     const sum = (metric: PerformanceMetric) =>
       group.filter((row) => row.metric === metric).reduce((total, row) => total + row.value, 0n);
     const impressions = sum("IMPRESSIONS");
+    const views = sum("VIEWS");
     const engagements = sum("ENGAGEMENTS");
-    const periods = new Set(
-      group
-        .filter((row) => row.metric === "IMPRESSIONS")
-        .map((row) => `${String(day(row.periodStart))}-${String(day(row.periodEnd))}`),
-    ).size;
+    const exposureMetric: ExposureMetric | null = group.some((row) => row.metric === "IMPRESSIONS")
+      ? "IMPRESSIONS"
+      : group.some((row) => row.metric === "VIEWS")
+        ? "VIEWS"
+        : null;
+    const exposure = exposureMetric === "IMPRESSIONS" ? impressions : views;
+    const covered = new Set<number>();
+    for (const row of group) {
+      if (row.metric !== exposureMetric) continue;
+      const span = Math.min(
+        (day(row.periodEnd) - day(row.periodStart)) / DAY_MS + 1,
+        MAX_COVERED_DAYS,
+      );
+      for (let offset = 0; offset < span; offset += 1) {
+        covered.add(day(row.periodStart) + offset * DAY_MS);
+      }
+    }
     return {
       contentItemId,
+      exposureMetric,
+      exposure,
       impressions,
+      views,
       engagements,
       clicks: sum("CLICKS"),
-      periods,
-      engagementRate: impressions === 0n ? null : Number(engagements) / Number(impressions),
+      days: covered.size,
+      engagementRate: exposure === 0n ? null : Number(engagements) / Number(exposure),
     };
   });
 }
@@ -264,8 +327,10 @@ export function campaignFindings(
   rules: Rules = DEFAULT_RULES,
 ): Finding[] {
   const rows = distinctObservations(
-    allRows.filter(
-      (row) => row.campaignId === campaign.id && evidenceClass(row.source) === "recorded",
+    preferVerified(
+      allRows.filter(
+        (row) => row.campaignId === campaign.id && evidenceClass(row.source) === "recorded",
+      ),
     ),
   );
   const findings: Finding[] = [];
@@ -398,13 +463,19 @@ export function campaignFindings(
 
   // Content comparisons: only between items with enough impressions over enough periods.
   const types = new Map(campaign.content.map((item) => [item.id, item.type]));
-  const eligible = contentResults(rows).filter(
+  const qualified = contentResults(rows).filter(
     (result) =>
       result.engagementRate !== null &&
-      result.impressions >= BigInt(rules.minImpressionsPerContent) &&
-      result.periods >= rules.minPeriodsPerContent &&
+      result.exposure >= BigInt(rules.minImpressionsPerContent) &&
+      result.days >= rules.minDaysPerContent &&
       types.has(result.contentItemId),
   );
+  // Only items measured the same way are compared: the larger group (impressions on a
+  // tie). Views and impressions are different counts and are never mixed.
+  const byImpressions = qualified.filter((result) => result.exposureMetric === "IMPRESSIONS");
+  const byViews = qualified.filter((result) => result.exposureMetric === "VIEWS");
+  const eligible = byViews.length > byImpressions.length ? byViews : byImpressions;
+  const exposureMetric: ExposureMetric = eligible === byViews ? "VIEWS" : "IMPRESSIONS";
   const rates = eligible.map((result) => result.engagementRate ?? 0);
   const contentSample = (ids: readonly string[]) =>
     rows.filter((row) => row.contentItemId !== null && ids.includes(row.contentItemId)).length;
@@ -421,8 +492,9 @@ export function campaignFindings(
           values: {
             engagementRate: Math.round(rate * 10_000) / 10_000,
             campaignMedianRate: Math.round(middle * 10_000) / 10_000,
-            impressions: result.impressions.toString(),
-            periods: result.periods,
+            exposureMetric,
+            exposure: result.exposure.toString(),
+            days: result.days,
             comparedItems: eligible.length,
             weakRatio: rules.weakRatio,
           },
@@ -446,6 +518,7 @@ export function campaignFindings(
           sufficiency: "sufficient",
           values: {
             contentType: type,
+            exposureMetric,
             formatMedianRate: Math.round(typeMedian * 10_000) / 10_000,
             campaignMedianRate: Math.round(middle * 10_000) / 10_000,
             itemsOfFormat: group.length,
@@ -465,7 +538,7 @@ export function campaignFindings(
         comparableItems: eligible.length,
         minComparableContent: rules.minComparableContent,
         minImpressionsPerContent: rules.minImpressionsPerContent,
-        minPeriodsPerContent: rules.minPeriodsPerContent,
+        minDaysPerContent: rules.minDaysPerContent,
       },
     });
   }

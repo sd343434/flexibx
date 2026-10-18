@@ -72,6 +72,12 @@ test("results import, dashboard, recommendations and a draft in /en", async ({ p
   await expect(page.getByTestId("insights-provenance")).toBeVisible();
   await expect(page.getByTestId("insights-empty")).toBeVisible();
   await expect(page.getByTestId("insights-recommendation")).toHaveCount(0);
+  // Meta Insights is not enabled on this server: the page says so and offers no sync — it
+  // never pretends a connection exists.
+  await expect(page.getByTestId("insights-sources-not_configured")).toContainText(
+    "not enabled on this server",
+  );
+  await expect(page.getByTestId("insights-source-sync")).toHaveCount(0);
 
   // 3. An import with one bad row: valid rows are stored, the bad one is named.
   await page.selectOption("#metrics-import-campaign", campaignId);
@@ -157,6 +163,9 @@ test("Arabic RTL: an import with errors and a dismissed recommendation in /ar", 
   await page.goto(`${base}/insights`);
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
   await expect(page.getByTestId("insights-empty")).toBeVisible();
+  await expect(page.getByTestId("insights-sources-not_configured")).toContainText(
+    "غير مفعّلة على هذا الخادم",
+  );
 
   // A file without the header is refused as a whole, in Arabic.
   await page.selectOption("#metrics-import-campaign", campaignId);

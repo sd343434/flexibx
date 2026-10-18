@@ -50,6 +50,12 @@ export const VALIDATION_CODES = [
   "metrics_import_not_voidable",
   "recommendation_changed",
   "recommendation_not_actionable",
+  "insights_channel_unavailable",
+  "insights_not_configured",
+  "insights_not_connected",
+  "insights_permission_missing",
+  "insights_source_disabled",
+  "insights_sync_running",
   // AI Marketing Engine (Phase 4).
   "ai_not_configured",
   "ai_timeout",

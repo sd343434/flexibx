@@ -119,6 +119,13 @@ const SAMPLE_PARAMS = {
   rejected: 1,
   row: 4,
   problem: "Unknown metric",
+  // Meta Insights (Pass 6).
+  kind: "Facebook Page",
+  permissions: "read_insights, pages_read_engagement",
+  metrics: "page_media_view",
+  trigger: "Scheduled",
+  calls: 12,
+  rows: 40,
 };
 
 describe("locale configuration", () => {

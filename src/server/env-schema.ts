@@ -416,6 +416,11 @@ export const adsEnvSchema = z
     WHATSAPP_SENDING_ENABLED: optional(z.enum(["true", "false"])),
     // AI Social Manager: replies, Page messages and Page publishing (see social-runtime).
     SOCIAL_SENDING_ENABLED: optional(z.enum(["true", "false"])),
+    // Meta Insights (Pass 6): reading Page and Instagram insights (read-only). "true" also
+    // asks for the insights permissions at Meta sign-in (pages_read_engagement,
+    // read_insights, instagram_basic, instagram_manage_insights — App Review for customer
+    // accounts). Off unless "true".
+    META_INSIGHTS_ENABLED: optional(z.enum(["true", "false"])),
     TIKTOK_AUTHORIZE_URL: optional(
       z.url({ protocol: /^https$/, hostname: /^(?:business-api|ads)\.tiktok\.com$/ }),
     ),

@@ -486,7 +486,13 @@
     "metrics_csv_invalid": "The CSV needs the header line period_start,period_end,metric,value,currency,content_id (at most 500 rows, 200 KB).",
     "metrics_import_not_voidable": "Only a successful import can be withdrawn.",
     "recommendation_changed": "This recommendation changed or no longer applies. Refresh the page.",
-    "recommendation_not_actionable": "A draft can't be created from this recommendation."
+    "recommendation_not_actionable": "A draft can't be created from this recommendation.",
+    "insights_sync_running": "A sync of this account is already running.",
+    "insights_source_disabled": "Reading this account is turned off.",
+    "insights_permission_missing": "Your Meta connection lacks the insights permissions for this account. Reconnect Meta and grant them.",
+    "insights_not_connected": "Connect Meta first.",
+    "insights_not_configured": "Meta Insights is not enabled on this server.",
+    "insights_channel_unavailable": "This Page or account is no longer in your Meta connection. Sync your Pages again."
   },
   "marketing": {
     "common": {
@@ -601,6 +607,7 @@
       },
       "metric": {
         "IMPRESSIONS": "Impressions",
+        "VIEWS": "Views",
         "REACH": "Reach",
         "ENGAGEMENTS": "Engagements",
         "CLICKS": "Clicks",
@@ -609,7 +616,7 @@
         "SPEND": "Spend"
       },
       "metricSource": {
-        "VERIFIED": "Verified by provider",
+        "VERIFIED": "Read from Meta",
         "MANUAL": "Entered by a person",
         "SIMULATED": "Simulated (not real)"
       }
@@ -970,7 +977,12 @@
         "recommendation_reviewed": "reviewed a recommendation",
         "recommendation_dismissed": "dismissed a recommendation",
         "recommendation_snoozed": "snoozed a recommendation",
-        "recommendation_acted": "created a draft from a recommendation"
+        "recommendation_acted": "created a draft from a recommendation",
+        "insights_access_revoked": "lost access to an account's insights",
+        "insights_sync_failed": "had an insights sync fail",
+        "insights_synced": "synced insights from Meta",
+        "insights_source_disabled": "stopped reading an account's insights",
+        "insights_source_enabled": "started reading an account's insights"
       },
       "systemActor": "Flexibx"
     },
@@ -1091,7 +1103,7 @@
       "title": "Insights",
       "description": "Recorded results of your campaigns, where each number came from, and evidence-based next steps.",
       "provenanceTitle": "Where the numbers come from",
-      "provenance": "No analytics provider is connected yet. Numbers here were imported by people from their platforms' exports (marked “Entered by a person”). Simulated test data, if any, is shown apart and never added to real results. Flexibx does not estimate or invent results.",
+      "provenance": "Numbers come from two places: read directly from Meta for the Pages and Instagram accounts you connect (marked “Read from Meta”), or imported by people from their platforms' exports (marked “Entered by a person”). Simulated test data, if any, is shown apart and never added to real results. Flexibx does not estimate or invent results.",
       "filtersTitle": "Filters",
       "filter": {
         "campaign": "Campaign",
@@ -1105,6 +1117,89 @@
         "reset": "Reset"
       },
       "freshnessTitle": "Data freshness",
+      "sources": {
+        "title": "Connected sources (Meta)",
+        "intro": "Flexibx reads insights from the Facebook Pages and Instagram professional accounts your Meta connection manages. Account numbers (daily views, reach, interactions) are shown here per account and never count as a campaign's result. The numbers of posts Flexibx published for a campaign's content are added to that content and campaign. Nothing is written to Meta.",
+        "permissions": "Permissions it uses: {permissions}",
+        "state": {
+          "not_configured": "Meta Insights is not enabled on this server. It needs the Meta app (with App Review for customer accounts) and META_INSIGHTS_ENABLED. Nothing is shown in its place.",
+          "not_connected": "Meta is not connected for this workspace.",
+          "needs_reauth": "The Meta connection needs to be renewed: it expired, or it lacks the insights permissions.",
+          "ready": "Meta is connected."
+        },
+        "connectLink": "Connect or reconnect Meta in Integrations",
+        "socialLink": "Sync your Pages in the Social Manager",
+        "noChannels": "No Pages or Instagram accounts yet. After connecting Meta, sync your Pages in the Social Manager.",
+        "missing": "Missing for {kind}: {permissions}",
+        "kind": {
+          "FACEBOOK_PAGE": "Facebook Page",
+          "INSTAGRAM_ACCOUNT": "Instagram account"
+        },
+        "platform": {
+          "FACEBOOK": "Facebook Page",
+          "INSTAGRAM": "Instagram account"
+        },
+        "channelUnavailable": "No longer in your Meta connection",
+        "notRead": "Insights are not read for this account.",
+        "enable": "Read insights",
+        "disable": "Stop reading",
+        "syncNow": "Sync now",
+        "status": {
+          "disabled": "Off",
+          "needs_reauth": "Needs reconnection",
+          "running": "Syncing…",
+          "never_synced": "Not synced yet",
+          "failed": "Last sync failed",
+          "stale": "May be out of date",
+          "ready": "Up to date"
+        },
+        "disabledReason": {
+          "access_lost": "Turned off: this account left your Meta connection.",
+          "disconnected": "Turned off: Meta was disconnected.",
+          "deauthorized": "Turned off: the Flexibx app was removed in Meta.",
+          "data_deleted": "Turned off: a data deletion request was received from Meta."
+        },
+        "lastSuccess": "Last successful sync: {date}",
+        "lastSuccessNever": "No successful sync yet",
+        "lastAttempt": "Last attempt: {date}",
+        "nextSync": "Next scheduled sync: {date}",
+        "nextSyncNone": "No scheduled sync: a person needs to act first.",
+        "coverage": "Account days read: {from} – {to} (Meta's reporting days)",
+        "totals": "Account level, {from} – {to} — not a campaign's result",
+        "totalDays": "{days, plural, one {# day with a value} other {# days with a value}}",
+        "noTotals": "No account numbers read yet.",
+        "unsupported": "Not offered by Meta for this account: {metrics}",
+        "lastError": "Last problem: {reason}",
+        "runsTitle": "Recent syncs",
+        "run": "{trigger} · {status} · {date}",
+        "runCounts": "{rows} numbers stored · {calls} calls",
+        "trigger": {
+          "MANUAL": "By a person",
+          "SCHEDULED": "Scheduled"
+        },
+        "runStatus": {
+          "RUNNING": "Running",
+          "SUCCEEDED": "Succeeded",
+          "PARTIAL": "Partly read",
+          "FAILED": "Failed",
+          "ABANDONED": "Interrupted"
+        },
+        "error": {
+          "token_expired": "Meta no longer accepts the connection. Reconnect Meta.",
+          "permission_missing": "The connection lacks a permission Meta requires. Reconnect Meta and grant it.",
+          "rate_limited": "Meta is limiting requests. It will be tried again later.",
+          "provider_unavailable": "Meta did not answer. It will be tried again later.",
+          "provider_timeout": "Meta took too long to answer. It will be tried again later.",
+          "provider_malformed": "Meta's answer could not be read. Nothing was guessed.",
+          "call_budget_reached": "Stopped at this run's request limit; the rest is read on the next run.",
+          "deadline_reached": "Stopped at this run's time limit; the rest is read on the next run.",
+          "access_lost": "This account is no longer in your Meta connection.",
+          "not_connected": "Meta is not connected.",
+          "not_configured": "Meta Insights is not enabled on this server.",
+          "internal_error": "Something went wrong on our side. It will be tried again later.",
+          "lease_expired": "The sync stopped before finishing; the next one continues."
+        }
+      },
       "lastImport": "Last successful import: {date}",
       "lastImportNever": "No successful import yet.",
       "lastFailure": "Last failed attempt: {date}",
@@ -1128,6 +1223,7 @@
       "goalNoMetric": "Goal “{goal}” has no target metric: set one on the goal to compare results.",
       "trendTitle": "Daily {metric}",
       "trendEmpty": "No recorded daily values for this metric.",
+      "trendNote": "Only numbers for a single day are plotted. Totals over longer periods (weekly imports, a post's lifetime numbers) are in the summaries above.",
       "trendDay": "Day",
       "trendValue": "Value",
       "contentTitle": "Content comparison (recorded)",
@@ -1135,10 +1231,11 @@
       "col": {
         "content": "Content",
         "type": "Type",
+        "exposure": "Impressions / views",
         "impressions": "Impressions",
         "engagements": "Engagements",
         "rate": "Engagement rate",
-        "periods": "Periods"
+        "days": "Days"
       },
       "recsTitle": "Recommendations",
       "recsEmpty": "No recommendations: either nothing needs attention, or there is not enough recorded data yet.",
@@ -1183,7 +1280,7 @@
         },
         "WEAK_CONTENT": {
           "title": "Content engaging less than the rest",
-          "explain": "Engagement rate {rate} against the campaign median of {median}, over {periods} periods ({compared} items compared).",
+          "explain": "Engagement rate {rate} against the campaign median of {median}, over {days} days ({compared} items compared).",
           "action": "Review the post; consider a revised version.",
           "limits": "An association within this campaign, not a cause: timing, audience and format differ between posts."
         },
@@ -1217,8 +1314,8 @@
       "historyTitle": "Earlier decisions",
       "rulesTitle": "How recommendations are made",
       "rules": {
-        "minImpressionsPerContent": "Content compared only with at least {value} impressions",
-        "minPeriodsPerContent": "…over at least {value} separate periods",
+        "minImpressionsPerContent": "Content compared only with at least {value} impressions (or views, when Meta reports views)",
+        "minDaysPerContent": "…observed over at least {value} days",
         "minComparableContent": "At least {value} comparable items before any is judged",
         "weakRatio": "Weak: engagement rate below {value}× the campaign median",
         "strongRatio": "Strong format: median rate at least {value}× the campaign median",
@@ -1231,6 +1328,7 @@
       "definitionsTitle": "Metric definitions",
       "definitions": {
         "IMPRESSIONS": "Times the content was shown (count).",
+        "VIEWS": "Times the content was shown or played, as Meta now reports it (Meta replaced impressions with views). Never added to impressions.",
         "REACH": "Distinct people it was shown to in each period, as the platform reports it. Totals add periods together, so one person can be counted more than once.",
         "ENGAGEMENTS": "Reactions, comments, shares and saves (count).",
         "CLICKS": "Link clicks (count).",
