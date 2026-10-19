@@ -1,7 +1,8 @@
 # Production-readiness gap register
 
-Status reviewed in Pass 3.2 (2026-10-17) at HEAD `8820d9e` plus the Pass 3.2 fix; first
-written in Pass 2.4. This register lists what still stands
+Status reviewed in Pass 3.3 (2026-10-17) at HEAD `4c38dd3`; the Pass 3.3 change (§ 5.5) was
+completed and committed in Pass 11 (2026-10-19); later passes add §§ 9–15. First written
+in Pass 2.4. This register lists what still stands
 between the current code and a production launch, with the evidence for each item. It
 does not mark anything complete on the strength of documentation: an item closes only
 with the verification named in its row. Infrastructure decisions are kept in
@@ -40,7 +41,7 @@ mail outbox) — never evidence that the real provider works.
 | Meta: Page publishing (text and photo), replies, ads      | **Mocked only** (stand-in Graph API); photo caption reconciliation assumes Meta lists photo posts in `published_posts` with the caption as message (unverified)                                                                                                                                                                                                        | Meta app in development mode with test Pages; then App Review for customer Pages                                                    | Supervised publish of a text and a photo post to a test Page; lose an answer on purpose (network cut) and resolve it | Private pilot (test Pages), supervised pilot (App Review) |
 | AI and video providers                                    | **Mocked only** (fake providers refused in production)                                                                                                                                                                                                                                                                                                                 | Choose providers; set spend caps                                                                                                    | Supervised calls on staging with caps                                                                                | Supervised pilot                                          |
 | Monitoring and alert destination, on-call (A6)            | **Implemented** (alert sink, ops status); destination not connected; payload review open (D.3 R9)                                                                                                                                                                                                                                                                      | Choose the destination and on-call names                                                                                            | Trigger a test alert from staging                                                                                    | Supervised pilot                                          |
-| Restore drill on managed database                         | **Documented, not exercised** (scripts tested with fakes and local throwaway databases)                                                                                                                                                                                                                                                                                | Staging database and custodians                                                                                                     | Drill per `BACKUP_RESTORE.md` §§ 4–5, timed and recorded                                                             | Supervised pilot                                          |
+| Restore drill on managed database                         | **Documented, not exercised** (scripts tested with fakes and local throwaway databases; post-restore check covers all guard triggers since Pass 3.3, § 5.5)                                                                                                                                                                                                            | Staging database and custodians                                                                                                     | Drill per `BACKUP_RESTORE.md` §§ 4–5, timed and recorded                                                             | Supervised pilot                                          |
 | Data residency and legal review (A1)                      | **Blocked** on legal advice                                                                                                                                                                                                                                                                                                                                            | Legal review of residency, terms, privacy notice                                                                                    | Signed-off decision record                                                                                           | Supervised pilot                                          |
 | Pilot go/no-go (A8)                                       | **Blocked** on owner decision                                                                                                                                                                                                                                                                                                                                          | Named approver                                                                                                                      | Decision record                                                                                                      | Supervised pilot                                          |
 | Payments and subscriptions                                | **Not implemented** (credits are provisional; no payment provider)                                                                                                                                                                                                                                                                                                     | Choose a payment provider and pricing                                                                                               | —                                                                                                                    | GA (pilots use admin credit grants)                       |
@@ -209,6 +210,55 @@ Still open from 3.0: publishing is only as timely as the external scheduler.
   `ContentItem.reviews` relation; immutable by trigger); content status changes only there
   and in the publisher after a confirmed outcome; provider ids are rendered
   left-to-right-isolated everywhere they appear (publishing card, ads, WhatsApp).
+
+### 5.5 Pass 3.3: restore verification checks every guard trigger
+
+- **Problem:** `db-verify.sh` (via `scripts/ops/sql/integrity.sql`) checked only the 3
+  credit-ledger triggers, and counted a trigger set to `ENABLE REPLICA` (it never fires for
+  the application) as present. The migrations create 83 guard triggers: immutable review
+  decisions (`content_reviews_immutable`), the append-only usage ledger and WhatsApp consent
+  history, same-workspace and workspace-immutable rows (social posts, ads, videos), the
+  platform-admin grant guard, video and credit-hold state transitions. `pg_dump` keeps a
+  trigger's disabled state, so a backup taken while any of them was switched off restored
+  without it and still verified as `VERIFIED`. Risk: tenant isolation, review history and
+  admin-grant enforcement silently lost after a recovery.
+- **Fix:** new check `guard_triggers_inactive`: every trigger in an explicit list must
+  exist on its table and fire (`tgenabled` `O` or `A`); a missing table counts all its
+  triggers. The ledger check now also requires firing triggers.
+- **Evidence (local only, disposable databases `flexibx_p33_*`, dropped afterwards):**
+  integration tests in `tests/integration/ops-integrity-sql.test.ts`, each in a rolled-back
+  transaction: the list equals the migrated schema's non-internal triggers; dropped,
+  disabled, replica-only and renamed-table cases count; `ENABLE ALWAYS` does not; the
+  ledger replica case. Four mutants of the SQL (accept any non-disabled state, drop a list
+  entry, the old ledger condition, skip missing tables) each fail a test. End-to-end drill
+  with the real scripts: a backup taken with `content_reviews_immutable` disabled restored
+  and failed verification (`guard_triggers_inactive 1`, exit 1), while the previous
+  `integrity.sql` reported every check 0 on the same restore. A clean backup verified (59
+  tables, 32 migrations, exit 0).
+- **Limits:** the check proves the triggers exist and fire, not that their function bodies
+  are unchanged (functions come from the dump; migration checksums are checked
+  separately). It does not cover `SECURITY DEFINER` function ownership or grants
+  (`DATABASE_ROLES.md`). A new guard trigger must be added to the list; the integration
+  test fails until it is. Never run against managed PostgreSQL: the staging drill (§ 5.1)
+  stays open. CI has not run this change (GitHub Actions jobs blocked before execution
+  since run 43).
+- **Completed in Pass 11 (2026-10-19):** the list had fallen behind the schema: the 30
+  Creator Studio triggers of Passes 8–9 (same-workspace, workspace-immutable, same-project,
+  active-project, the append-only event log and the deletion record) were missing, so the
+  list test failed and a restore that lost one of them still verified. The list now has
+  all 132 non-internal triggers of the migrated schema (37 migrations), each checked to be a
+  BEFORE guard trigger. New test cases: a disabled, a replica-only and a dropped Creator
+  Studio guard, and a renamed Creator Studio table (4 guards). Four mutants of the SQL
+  (drop an entry, accept any non-disabled state, list one trigger twice, accept a missing
+  table) each fail a test. Drill with the real scripts on disposable databases
+  (`flexibx_p11_*`, dropped afterwards; seed data, 77 tables): clean backup → restore →
+  `VERIFIED` (502 indexes and constraints, 37 migrations); a backup taken with
+  `creator_jobs_project_active` disabled restored with the trigger still disabled and
+  failed verification (`guard_triggers_inactive 1`, exit 1), while the incomplete list
+  reported `VERIFIED` on the same restore; a tampered manifest (`CHECKSUM MISMATCH`), a
+  tampered dump (restore `REFUSED`, target left empty), a restore over a non-empty
+  database (refused) and a dropped index (`schema_objects MISMATCH`) all failed as
+  intended.
 
 ## 6. Decisions that block staging (none assumed)
 

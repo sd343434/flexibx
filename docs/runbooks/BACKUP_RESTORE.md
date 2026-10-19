@@ -136,7 +136,17 @@ Checks (each prints a count; all must be 0 / "match"):
   then re-applied is history, not a failure);
 - `credit_balance_vs_ledger` — every credit account equals its last ledger entry;
 - `credit_held_vs_open_holds` — held credits equal the open holds;
-- `ledger_guard_triggers_missing` — the ledger's append-only / same-workspace triggers exist;
+- `ledger_guard_triggers_missing` — the ledger's append-only / same-workspace triggers exist
+  and fire;
+- `guard_triggers_inactive` — every guard trigger the migrations create (132 at the time of
+  writing: immutable review decisions, append-only ledgers and consent history,
+  same-workspace and workspace-immutable rows, the platform-admin grant guard, state
+  transitions, the Creator Studio's same-project, active-project, append-only event and
+  deletion-record guards) exists under its table and fires. Missing, `DISABLE`d and `ENABLE REPLICA`
+  triggers count (a replica-only trigger does not fire for the application's sessions).
+  `pg_dump` keeps a trigger's disabled state, so a backup taken while a guard was switched
+  off restores without that guard and every other check still passes; the list in
+  `integrity.sql` is tested to equal the migrated schema's triggers;
 - `constraints_not_validated` — no constraint restored as NOT VALID;
 - `orphan_sessions`, `orphan_two_factors`;
 - `prisma_migrations` — checked in SQL against `_prisma_migrations` (Prisma is not run:
@@ -163,6 +173,14 @@ workspace, check its credit balance and the last audit entries match expectation
   fresh backup exists.
 - A failed drill (any verification check non-zero): treat the backup set as unusable until
   the cause is understood.
+- `guard_triggers_inactive` non-zero: do not let the application write to that database.
+  List the triggers that do not fire (`pg_trigger` rows with `NOT tgisinternal` and
+  `tgenabled NOT IN ('O', 'A')`) and any listed trigger that is absent, then check the
+  SOURCE database the same way: a guard switched off there (an
+  incident fix never reverted) is an incident of its own. Re-enable with
+  `ALTER TABLE … ENABLE TRIGGER …` (a missing trigger: restore again from a clean backup —
+  never recreate it by hand), and re-run `db-verify.sh`. Rows written while the guard was
+  off were not checked by it: review them before trusting the data.
 
 ## 7. Restore drill — local result (2026-10-12)
 
