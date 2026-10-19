@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–13)
+# CI status and the GitHub Actions blocker (Passes 10–14)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -20,8 +20,9 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner                 |
 | #52                | `81cfd81` | 2026-10-19 09:56 | failure in 4 s, no runner (Pass 12 check) |
 | #53                | `99ae9c2` | 2026-10-19 11:14 | failure in 4 s, no runner (Pass 13 check) |
+| #54                | `4ef0a26` | 2026-10-19 12:46 | failure in 5 s, no runner (Pass 14 check) |
 
-For runs #50 to #53, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
+For runs #50 to #54, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
 
 - `started_at` and `completed_at` are 2 seconds apart;
@@ -65,7 +66,7 @@ page, "Annotations"), not through the API this session can use.
 ## 2. What the owner must check (outside the repository; needs the account owner)
 
 1. **Read the annotation:** open
-   [run #53](https://github.com/sd343434/flexibx/actions/runs/39243153960), select a failed
+   [run #54](https://github.com/sd343434/flexibx/actions/runs/39254705669), select a failed
    job, and read the message under "Annotations". It names the cause, for example "The job
    was not started because your account is locked due to a billing issue".
 2. **Billing:** _Settings → Billing and licensing_ of the account `sd343434`.
@@ -112,6 +113,11 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   self-check also requires the Prisma CLI to run offline as its user; the Docker job checks
   the worker's PostgreSQL client (the staging gate needs it) and validates
   `deploy/staging/compose.yaml`.
+- **Pass 14:** the job images carry only the packages their commands load
+  (`scripts/docker/job-deps.mjs`, traced from the code at build time, `--verify` in each
+  image); `migrate` is the ops image with its command fixed; the Docker job also loads the
+  app image and enforces size budgets (`scripts/docker/check-image-size.sh`: app 500 MB,
+  worker 1400 MB, ops 1250 MB).
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.
@@ -126,7 +132,7 @@ recorded in the readiness register:
 - `build` and `e2e`;
 - gitleaks over the staged change.
 
-**Docker (Passes 11–13, local):**
+**Docker (Passes 11–14, local):**
 
 - **App image** (`runner` target): built and run. It runs as uid 1001, contains no `.env`,
   keys or tests, answers liveness 200 and readiness `db: up`, and serves `/ar`; its
@@ -140,6 +146,13 @@ recorded in the readiness register:
   check passes in the build and again offline, uid 1000, `docker stop` mid-render hands
   the job back (exit 0). Ops: `check-ops-image.sh` passes offline; migrate, backup,
   restore and verify run as its user.
+- **Sizes (Pass 14, final images):** app 454 → 426 MB, worker 2.62 → 1.22 GB, ops 2.06 →
+  1.08 GB, migrate ≈2.5 GB (a copy of the build stage) → 1.08 GB (the ops image). The worker
+  keeps 67 of 553 store packages (112 MB of 1033 MB), ops 252 (380 MB, mostly the Prisma
+  CLI). What remains in the worker is FFmpeg's own dependencies from Ubuntu (460 MB, of
+  which ≈ 180 MB are Mesa/LLVM pulled in through SDL by `libavdevice`): hard package
+  dependencies, kept (removing them would break the package database and security
+  updates).
 - The local builds add this sandbox's TLS-inspecting proxy CA in a derived Dockerfile kept
   outside the repository, and pull base images from `mirror.gcr.io` (Docker Hub
   rate-limits anonymous pulls here). Neither is in the repository.

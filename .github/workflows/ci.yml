@@ -118,6 +118,7 @@ jobs:
           context: .
           target: runner
           push: false
+          load: true
           tags: flexibx:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -161,6 +162,13 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint bash \
             -e COREPACK_ENABLE_NETWORK=0 flexibx-ops:ci scripts/ops/check-ops-image.sh
+      # Pass 14: the job images carry only what their commands load (scripts/docker/job-deps.mjs).
+      # Measured 426 / 1224 / 1084 MB; a regression past the budget fails here.
+      - name: Image size budgets
+        run: |
+          scripts/docker/check-image-size.sh flexibx:ci 500
+          scripts/docker/check-image-size.sh flexibx-worker:ci 1400
+          scripts/docker/check-image-size.sh flexibx-ops:ci 1250
 
   secrets:
     name: Secret scan

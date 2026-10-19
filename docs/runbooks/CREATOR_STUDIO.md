@@ -117,7 +117,8 @@ that died frees its slot when its lease expires.
 
 **Container image:** `docker build --target worker -t flexibx-worker .` (Ubuntu 24.04 LTS
 with the Node release of the app image, FFmpeg 6.1 and the PostgreSQL 16 client from
-Ubuntu's archive, scratch volume `/work`; Pass 13). **Before the first job on a new
+Ubuntu's archive, scratch volume `/work`; Pass 13; Pass 14: 1.22 GB, only the packages
+the worker's commands load). **Before the first job on a new
 host,** run `pnpm creator:preflight` there (`STAGING_CREATOR_STUDIO.md` § 3).
 
 **At start,** the worker removes scratch directories older than 6 hours left behind by a

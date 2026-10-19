@@ -1276,5 +1276,6 @@ Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md); trial pl
   deletes).
 - **Image:** Dockerfile target `worker` (Pass 13: Ubuntu 24.04 base shared with `ops`, the
   app's Node copied in, FFmpeg 6.1 and the PostgreSQL 16 client from Ubuntu's archive;
-  `/work` scratch volume; node as PID 1); CI builds it and checks its encoders. Staging
+  `/work` scratch volume; node as PID 1; Pass 14: only the packages its commands load, traced
+  by `scripts/docker/job-deps.mjs`); CI builds it, checks its encoders and its size budget. Staging
   runs on `deploy/staging/compose.yaml` and is gated by `pnpm staging:check`.

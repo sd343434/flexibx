@@ -2,8 +2,8 @@
 #
 # Flexibx production image (Next.js standalone, non-root).
 #   docker build -t flexibx .                      → app image
-#   docker build --target migrate -t flexibx-migrate .  → one-off `prisma migrate deploy`
 #   docker build --target ops -t flexibx-ops .          → psql/pg_dump 16 + operator CLIs
+#   docker build --target migrate -t flexibx-migrate .  → the ops image running `prisma migrate deploy`
 #   docker build --target worker -t flexibx-worker .    → Creator Studio media worker (FFmpeg)
 # Runtime configuration (DATABASE_URL, APP_URL, S3_*…) is injected as environment
 # variables at run time; no secrets are baked into the image.
@@ -38,17 +38,29 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN pnpm exec prisma generate && pnpm build
+# The image is glibc (Debian): the musl builds of sharp's libvips that Next.js's output
+# tracing also copies are never loaded (-18 MB).
+RUN pnpm exec prisma generate && pnpm build \
+ && rm -rf .next/standalone/node_modules/.pnpm/@img+sharp-libvips-linuxmusl-* \
+           .next/standalone/node_modules/.pnpm/@img+sharp-linuxmusl-*
 
-# ── Migrations (run as a one-off job before rolling out the app) ────────────────
-FROM build AS migrate
-ENV NODE_ENV=production
-USER node
-CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
-
-# ── Files of the job images: the build without the Next.js output they never run ──
+# ── Files of the job images: the build without the Next.js output and node_modules ─
+# Each job image gets its own node_modules (below) with only the packages its commands
+# load, traced from their entrypoints by scripts/docker/job-deps.mjs (Pass 14: the full
+# node_modules is 1.25 GB, the worker's 0.11 GB). The app's sources stay: tsx runs them.
 FROM build AS jobs-files
-RUN rm -rf .next
+RUN rm -rf .next node_modules
+
+# Node for the job images: the runtime and corepack (pnpm), without npm/npx and the C
+# headers no job uses (-25 MB, and one package fewer to patch).
+FROM base AS node-runtime
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/include /usr/local/share/doc /usr/local/share/man \
+ && node --version && corepack --version >/dev/null
+
+FROM build AS jobs-deps
+RUN node scripts/docker/job-deps.mjs /deps/worker worker \
+ && node scripts/docker/job-deps.mjs /deps/ops ops
 
 # ── Job runtime: Ubuntu 24.04 + the Node of `base`, user `node` (uid 1000), and the
 # PostgreSQL 16 client (ops scripts; the worker image runs the staging gate, whose
@@ -59,8 +71,8 @@ ENV PNPM_HOME=/pnpm \
     COREPACK_HOME=/corepack \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
-# /usr/local of the Node image: node, npm and corepack with its pnpm shims.
-COPY --from=base /usr/local/ /usr/local/
+# /usr/local of the Node image: node and corepack with its pnpm shims (no npm).
+COPY --from=node-runtime /usr/local/ /usr/local/
 # Ubuntu's image ships a user `ubuntu` with uid 1000; the jobs run as `node` with that uid,
 # as in the Node image (volumes and the uid checks stay the same).
 RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
@@ -85,13 +97,20 @@ WORKDIR /app
 FROM jobs-base AS ops
 COPY --from=build /corepack /corepack
 COPY --from=jobs-files /app ./
+COPY --from=jobs-deps /deps/ops/node_modules ./node_modules
 # Prisma's schema engine (migrate, db execute) is chosen by the platform's OpenSSL. The
 # build stage has no `openssl` binary, so the engine fetched at install time is the
 # fallback; this image has OpenSSL 3, so its engine is fetched here, as root, at build time
 # (at run time `node` cannot write to node_modules and `migrate deploy` would fail).
-RUN pnpm exec prisma version >/dev/null
+RUN pnpm exec prisma version >/dev/null \
+ && node scripts/docker/job-deps.mjs --verify
 USER node
 CMD ["sh", "-c", "echo 'flexibx-ops: name the command to run' >&2; exit 64"]
+
+# ── Migrations (run as a one-off job before rolling out the app) ────────────────
+# The ops image with its command fixed: same Prisma CLI and engine, unprivileged user.
+FROM ops AS migrate
+CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
 
 # ── Creator Studio media worker ─────────────────────────────────────────────────
 #   docker build --target worker -t flexibx-worker .
@@ -109,6 +128,8 @@ RUN apt-get update \
  && mkdir -p /work && chown node:node /work
 COPY --from=build /corepack /corepack
 COPY --from=jobs-files /app ./
+COPY --from=jobs-deps /deps/worker/node_modules ./node_modules
+RUN node scripts/docker/job-deps.mjs --verify
 USER node
 # The build fails here unless FFmpeg >= 6 with libx264, aac, libopus and libass, ffprobe and
 # the subtitle font are present and a real (synthetic) encode with burned-in subtitles

@@ -237,3 +237,28 @@ failure or a pending / modified / unknown migration.
 
 Not tested (needs the real infrastructure): PITR, provider snapshots, object-storage
 versioning/replication restore, restore time at production size, cross-region copies.
+
+## 8. Measured times and the RTO / RPO they support (Pass 14, 2026-10-19)
+
+Measured on one machine (4 vCPU, 15 GB RAM, local PostgreSQL 16, local disk), all through
+the `ops` image (`db-backup.sh`, `db-restore.sh`, `db-verify.sh`). Not a hosted database:
+network, managed-disk throughput and the provider's own restore are not in these numbers.
+
+| Database                                  | Backup (dump)               | Restore (new database)                    | Verify (manifest, integrity, 502 objects, migrations) |
+| ----------------------------------------- | --------------------------- | ----------------------------------------- | ----------------------------------------------------- |
+| Staging after the container cycle (13 MB) | 0.6 s, 0.45 MB dump         | 1.1 s, 77 tables                          | 1.1 s, `VERIFIED`                                     |
+| Synthetic 1.08 GB (4 M rows, 3 indexes)   | 32.1 s, 354 MB dump (`-Z6`) | 20.5 s, single transaction, indexes built | not applicable (not the Flexibx schema)               |
+
+The restored staging copy had the same 132 triggers (none disabled), 300 indexes and 356
+constraints as its source. `restore-drill.sh` (with its provoked failures) passed in 13.7 s.
+
+**RTO (time to a verified, serving database), from these rates:** restore ≈ size ÷ 50 MB/s
+plus verify (seconds) plus the switch of `DATABASE_URL` and an app restart (≈ 1 minute,
+the app was healthy 6 s after start). For 10 GB that is ≈ 4–5 minutes of restore, so an
+**RTO target of 30 minutes** leaves room for the hosted disk being several times slower and
+for the operator's steps. It must be re-measured on the chosen provider with a
+production-sized copy before it is promised.
+
+**RPO:** with the daily `db-backup.sh` alone, up to **24 hours** of data. With managed
+PITR (BACKUP_RESTORE.md § 2, D-2), the provider's figure (≈ 5 minutes on RDS). PITR is not
+exercised anywhere yet: no hosted database exists.

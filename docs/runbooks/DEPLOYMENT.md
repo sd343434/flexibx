@@ -3,7 +3,7 @@
 Status (2026-10-12): documentation only. **No hosting provider has been chosen and nothing
 has been deployed.** The repository provides: a production Docker image (`Dockerfile`,
 Next.js standalone, non-root, liveness healthcheck), a separate one-off migration image
-(`--target migrate` → `prisma migrate deploy`), CI (`.github/workflows/ci.yml`: lint,
+(`--target migrate` → `prisma migrate deploy`; since Pass 14 the ops image with that command), CI (`.github/workflows/ci.yml`: lint,
 typecheck, format, unit, migrations on a clean database + `migrate status`, integration,
 build, end-to-end, Docker build, secret scan). `docker-compose.yml` is for local
 development only. **Staging (Pass 13):** `deploy/staging/compose.yaml` (app, worker,

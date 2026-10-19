@@ -1,4 +1,4 @@
-# Creator Studio — staging validation plan (Passes 10–13)
+# Creator Studio — staging validation plan (Passes 10–14)
 
 Status on 2026-10-19:
 
@@ -9,8 +9,13 @@ Status on 2026-10-19:
   run in containers on one machine.
 - **Run on one machine (Pass 12, § 9):** the plan against a staging-like stack. Repeatable
   with `scripts/staging/local-stack.sh`.
+- **Smaller images, whole cycle re-run (Pass 14, § 11):** worker 1.22 GB and ops 1.08 GB
+  (were 2.62 / 2.06 GB); the cycle re-run on them with a resumed multipart upload, burned
+  subtitles, a lease left to expire on its own, a worker outage alerted while the alert
+  destination refused, and measured backup / restore times.
 - **Not executed on hosted infrastructure:** no staging environment, bucket or
-  credentials exist yet. Nothing below has been verified there.
+  credentials exist yet (checked again in Pass 14, § 11). Nothing below has been verified
+  there.
 
 The owner must approve and provide every resource in § 1 before the trial. No paid
 resource is created by this repository.
@@ -285,3 +290,73 @@ app was healthy.
 Dockerfile, base images from `mirror.gcr.io`, host networking for a database and bucket on
 127.0.0.1, and SeaweedFS with small volumes (this session's disk). The test mail outbox
 (`FLEXIBX_TEST_PROVIDERS=allow`, local `APP_URL` only) stood in for a mail provider.
+
+## 11. Pass 14: smaller images, the cycle again, hosted launch still blocked
+
+Run on 2026-10-19 on one machine, from the Pass 14 images and `deploy/staging/compose.yaml`
+(local override: host networking for a database and bucket on 127.0.0.1). Synthetic media
+only; no AI provider was called; nothing paid was created.
+
+**Hosted launch: not possible in this pass.** Checked before starting:
+
+- no hosting credentials in the session (the AWS variables present are placeholders of the
+  session's proxy; gcloud has no account);
+- the connected Vercel account has no Flexibx project; the Supabase projects belong to
+  another product (`fofify`, `fofify-staging`) and were not touched;
+- D-2 (AWS) is decided, but no account, database, bucket or secrets were provided.
+
+What the owner provides to launch it is § 1; the launch itself is § 3 (Compose on a host,
+or the same five services on a container platform).
+
+**Images (final, measured):**
+
+| Image   | Pass 13 | Pass 14 | Budget (CI) | Notes                                                                                         |
+| ------- | ------- | ------- | ----------- | --------------------------------------------------------------------------------------------- |
+| app     | 454 MB  | 426 MB  | 500 MB      | musl builds of sharp's libvips dropped (glibc image)                                          |
+| worker  | 2.62 GB | 1.22 GB | 1400 MB     | 67 of 553 packages (112 MB); FFmpeg's Ubuntu dependencies are 460 MB of the rest              |
+| ops     | 2.06 GB | 1.08 GB | 1250 MB     | 252 packages (380 MB, mostly the Prisma CLI); no npm, no headers                              |
+| migrate | ≈2.5 GB | 1.08 GB | —           | now the ops image with `prisma migrate deploy` as its command (was a copy of the build stage) |
+
+How: `scripts/docker/job-deps.mjs` traces, with esbuild, every package the job commands
+load (through the app's code into node_modules) and copies only those, with their regular
+dependencies, from the lockfile's install; the CLIs that run commands (tsx, Prisma) keep
+their full closure. Each image runs `--verify` in its own build. Kept on purpose: ≈ 180 MB
+of Mesa/LLVM that Ubuntu's FFmpeg needs through SDL (`libavdevice`) — hard package
+dependencies; removing them by force would break the package database and security
+updates. A static FFmpeg build would drop them: a supply-chain decision for the owner.
+
+Every image: uid 1000/1001, no `.env` (only `.env.example`), no keys, dumps, media,
+tests, `.next` or docs; ops self-check passes offline; every documented command ran
+against the staging database (migrate, migrate status, tick, retention, retention report,
+`admin:mfa-reset` → `NOT_FOUND`, `admin:grant` refusing a code on the command line).
+
+**Gate:** before migrating: FAILED (database, preflight, app, ops-status). After deploy with
+the simulator configured: FAILED on `preflight.ai_provider` only — the simulator can never
+pass a staging gate. After recreating app and worker with `CREATOR_AI_PROVIDER=disabled`:
+`STAGING CHECK PASSED`, 33 checks, test alert delivered.
+
+**Cycle (against the containers):**
+
+| Step                                       | Result                                                                                                                                                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accounts                                   | Two accounts signed up and in through the pages of the app container                                                                                                                                                              |
+| Multipart upload, 47.7 MiB, 3 parts        | Part 2 cut off half way; completing refused (`CONFLICT`); storage reported `[1]`; parts 2–3 resumed; worker verified size, file and per-part SHA-256                                                                              |
+| Analysis (worker container)                | 1280×720 H.264 + audio, 12.0 s, in 2 s                                                                                                                                                                                            |
+| Transcript                                 | Declared simulator (`simulated=true`, local stack only)                                                                                                                                                                           |
+| Export, 9:16 with burned subtitles         | 720×1280 H.264 + AAC 48 kHz, 8.000 s; subtitle band 10 552 near-white pixels vs 39 in the source; SRT/VTT served                                                                                                                  |
+| Access                                     | Owner: download 303 → signed link 200. Bare object 403, tampered signature 403. Other account 404 everywhere; no session 401; PUT to upload routes 404                                                                            |
+| `docker stop` mid-render                   | 0.45 s, exit 0; job handed back (QUEUED, attempt not counted, hold released); finished after restart; one capture                                                                                                                 |
+| SIGKILL mid-render, lease left alone       | Job RUNNING with its lease until 13:19:29; ops-status `ok` until 15 min past it; at 13:35:20 the tick alerted `creator_jobs_lease_expired` (critical); new worker took over (attempt 2) and finished; one capture; next tick `ok` |
+| Worker outage + alert destination refusing | With a job waiting: stale-worker alert at 14:04 refused (500), tick unaffected, `alert_delivery_failed`; destination back → both alerts delivered at 14:06, warning cleared; worker back → waiting export done in 41 s, `ok`      |
+| Restarts                                   | App, worker and scheduler recreated: healthy in 6 s, readiness 200, gate PASSED                                                                                                                                                   |
+| Deletion                                   | 5 objects queued → bucket empty (no open uploads), no rows left, audit kept (`created`, `deletion_requested`, `purged`)                                                                                                           |
+| Logs                                       | App, worker, scheduler, alerts, gate output: no names, keys, signed links, e-mails, transcript text or bearer tokens                                                                                                              |
+
+Note: a stopped worker with nothing queued is not alerted, by design
+(`creator_worker_last_seen_age_seconds` is a warning only while jobs wait); the first job
+to arrive raises it at the next tick, because the heartbeat is already stale.
+
+**Backup / restore** through the ops image: backup 0.6 s, restore into a new database
+1.1 s, verify 1.1 s (`VERIFIED`; same 132 triggers, 300 indexes, 356 constraints); drill
+PASSED. Throughput on a 1.08 GB synthetic database: dump 32 s, restore 20.5 s. RTO / RPO:
+`BACKUP_RESTORE.md` § 8.
