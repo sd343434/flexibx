@@ -33,6 +33,7 @@
     "video:retention": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/video-retention/run.ts",
     "automation:tick": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/automation/tick.ts",
     "creator:worker": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/creator/worker.ts",
+    "staging:check": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/staging/check.ts",
     "creator:preflight": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/creator/preflight.ts",
     "creator:retention-report": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/creator/retention-report.ts",
     "admin:mfa-reset": "tsx --env-file-if-exists=.env --import ./scripts/video-retention/register.mjs scripts/admin/mfa-reset.ts",

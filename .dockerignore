@@ -20,3 +20,5 @@ docs
 e2e
 tests
 playwright.config.ts
+# Written by `next dev` for coding agents; not part of any image.
+AGENTS.md

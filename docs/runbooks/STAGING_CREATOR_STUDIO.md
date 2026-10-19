@@ -1,12 +1,14 @@
-# Creator Studio — staging validation plan (Passes 10–12)
+# Creator Studio — staging validation plan (Passes 10–13)
 
 Status on 2026-10-19:
 
-- **Prepared:** configuration, a preflight command, a worker image target, monitoring
-  and this plan.
-- **Run on one machine (Pass 12, § 9):** the whole plan against a staging-like stack — the
-  production build, a separate worker process, its own database and a private
-  S3-compatible bucket. Repeatable with `scripts/staging/local-stack.sh`.
+- **Prepared:** configuration, a preflight command, monitoring and this plan.
+- **Deployable (Pass 13, § 10):** `deploy/staging/compose.yaml` runs the app, the worker and
+  a scheduler from the three images, with migrate / check / backup jobs, and
+  `pnpm staging:check` gates the trial. All three images were built and the whole cycle
+  run in containers on one machine.
+- **Run on one machine (Pass 12, § 9):** the plan against a staging-like stack. Repeatable
+  with `scripts/staging/local-stack.sh`.
 - **Not executed on hosted infrastructure:** no staging environment, bucket or
   credentials exist yet. Nothing below has been verified there.
 
@@ -92,29 +94,37 @@ Downloads are signed links of at most 15 minutes (2 minutes for exports).
 
 ## 3. Deploy order
 
-1. Build the three images from one commit: `flexibx`, `--target migrate`,
-   `--target worker`. The worker build fails by itself unless its FFmpeg passes
-   `scripts/creator/check-media-tools.sh`: version 6 or later, libx264, aac, libopus,
-   libass, ffprobe, the subtitle font and a real smoke encode.
+On a Docker host (any container platform runs the same five services):
+`deploy/staging/compose.yaml`, environment in `deploy/staging/staging.env` (from
+`staging.env.example`; git-ignored, kept in the host's secret store).
+
+1. **Images**, all from one commit: `docker compose -f deploy/staging/compose.yaml build`
+   (app `runner`, `worker`, `ops`). The worker build fails by itself unless its FFmpeg
+   passes `scripts/creator/check-media-tools.sh` (version 6 or later, libx264, aac, libopus,
+   libass, ffprobe, the subtitle font, a real smoke encode).
 2. **Database:**
-   - confirm the target is staging (`SELECT current_database()` through the ops image);
-   - take a backup (`db-backup.sh`);
-   - run the `migrate` image once;
-   - check that `prisma migrate status` is clean;
-   - run `db-verify.sh` against the expected schema objects. Never point this at
-     production.
-3. **Worker host:**
-   - run `docker run --env-file … -v work:/work flexibx-worker pnpm creator:preflight`
-     (one-off command; the worker itself runs `node` as PID 1 so `docker stop` reaches it).
-     It writes and deletes only random probe objects under the reserved workspace
-     `00000000-0000-0000-0000-000000000000`, and never calls a provider;
-   - it must print `PREFLIGHT PASSED`. Fix every FAIL first (FFmpeg build, scratch
-     space, bucket privacy, link lifetime, multipart, CORS, lifecycle).
-4. Start the worker (one container), then the web app. Check `/api/health`.
-5. Start the scheduler. Within 5 minutes, `ops-status` shows a fresh
-   `creator_worker_last_seen_age_seconds` and the tick's checks.
-6. Run `pnpm creator:retention-report` once: it records the starting counts and deletes
-   nothing.
+   - confirm the target is the staging database, never production;
+   - take a backup: `docker compose … run --rm backup` (copy it off the host);
+   - `docker compose … run --rm migrate` (`prisma migrate deploy`, as the unprivileged
+     user);
+   - the gate below runs `db-verify.sh --no-row-counts` (migrations with checksums, the 502
+     indexes and constraints, integrity checks including disabled guard triggers).
+3. **Start:** `docker compose … up -d app worker scheduler`. The scheduler starts once the
+   app is healthy and calls the tick every 2 minutes and video retention daily.
+4. **Gate:** `docker compose … run --rm check` (`pnpm staging:check --send-test-alert` in
+   the worker image). It must print `STAGING CHECK PASSED`:
+   - environment: required variables set and the app's own startup validation (names,
+     never values);
+   - database (as above); media tools, scratch space, private bucket, signed links,
+     multipart, CORS and lifecycle (`creator:preflight`, probe objects only, never a
+     provider);
+   - app readiness; ops-status: worker heartbeat, scheduler, stuck jobs, deletions,
+     clean-up, disk, alert delivery; one test alert delivered.
+
+   Exit 1 (`FAILED`) names what is wrong; exit 2 (`INCOMPLETE`) means a check could not run
+   there — not a pass. Fix and run it again.
+
+5. Run `pnpm creator:retention-report` once (ops image): starting counts, deletes nothing.
 
 ## 4. Test script (in order; record each result)
 
@@ -177,7 +187,9 @@ WHERE action LIKE 'creator.project_%' ORDER BY created_at DESC LIMIT 10;
 
 - **App or worker misbehaves:** scale the worker to 0. Queued jobs wait, and running jobs
   are taken over when a worker returns (leases). Roll the web app back to the previous
-  image.
+  image: images are tagged per release (`FLEXIBX_TAG`); set the previous tag and run
+  `docker compose … up -d app worker scheduler` (no database change, migrations being
+  backward-compatible: DEPLOYMENT.md § 1).
 - **A migration must be undone:** migrations are forward-only. Restore the pre-deploy
   backup into a NEW database (`BACKUP_RESTORE.md`), verify it, then switch
   `DATABASE_URL`. Never restore over the live staging database.
@@ -230,3 +242,46 @@ script. The HTTP, worker-process and alert parts above were driven by hand.
 300 MB+ browser upload with pause and reload (S3), transcription with the provider the
 owner approves (the simulator is refused in production by design), and the worker image
 built by CI.
+
+## 10. Pass 13: the deployment path run in containers
+
+What ran (2026-10-19), all on one machine, synthetic media only, no AI provider, no paid
+resource. "Hosted" is still not proven: these are the production images and the Compose
+file, not the owner's infrastructure.
+
+- **Images:** app (454 MB), worker (2.6 GB) and ops (2.1 GB) built from one commit. The
+  worker build ran the media check itself (FFmpeg 6.1.1, libx264, aac, libopus,
+  subtitles, smoke encode); worker and ops run as uid 1000, contain no `.env`, keys, tests
+  or Next.js output; the ops image's own check passes offline.
+- **Gate:** before deployment it FAILED as it should (empty database, no app); after
+  migrate + start: `STAGING CHECK PASSED`, 33 checks, test alert delivered — also through
+  `docker compose run --rm check`.
+- **Database through the ops image:** migrate as the unprivileged user; `db-verify`
+  VERIFIED (37 migrations, 502 objects); backup → restore into a new database → verify
+  with the manifest: VERIFIED.
+- **Cycle against the containers:** two accounts signed up through the pages of the app
+  container; upload by signed URL; worker container verified and rendered; owner
+  download 303 → 200 (720×1280, 4.0 s), bare object 403, other account 404, no session 401.
+- **Worker stops:** `docker stop` while FFmpeg rendered: 0.15 s, exit 0, job handed back
+  (QUEUED, attempt not counted, hold released), finished after restart, one capture.
+  `docker kill` (SIGKILL) mid-render: the job kept its lease; once the lease ran out a new
+  worker took it over (attempt 2), one capture. ops-status flags a lease only 15 minutes
+  past expiry (by design; covered by the integration tests), which this run did not wait
+  for.
+- **Alerts:** destination refusing → tick still 200 in 0.2 s, `alert_delivery_failed`;
+  destination back → redelivered, warning cleared.
+- **Restarts:** app and worker restarted → readiness 200, heartbeat fresh, ops-status ok.
+- **Deletion:** the worker container's sweep removed all 6 objects; project purged; audit
+  kept. Container logs, alerts and gate output: no names, keys, links or e-mails.
+- **Compose itself:** `migrate`, `up` (app healthy in 6 s, scheduler tick and retention
+  200), `check` PASSED, `backup` OK, `stop` → worker exit 0.
+
+**Defects found and fixed in this pass:** the ops image could not run `prisma migrate` as
+its user (schema engine for its OpenSSL missing; now fetched at build time and checked by
+`check-ops-image.sh`); the app healthcheck ignored `PORT`; the scheduler started before the
+app was healthy.
+
+**Local-only adjustments (not in the repository):** the sandbox's TLS proxy CA in a derived
+Dockerfile, base images from `mirror.gcr.io`, host networking for a database and bucket on
+127.0.0.1, and SeaweedFS with small volumes (this session's disk). The test mail outbox
+(`FLEXIBX_TEST_PROVIDERS=allow`, local `APP_URL` only) stood in for a mail provider.

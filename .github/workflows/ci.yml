@@ -149,6 +149,14 @@ jobs:
           uid="$(docker run --rm --network none flexibx-worker:ci id -u)"
           echo "worker runs as uid $uid"
           test "$uid" != "0"
+          # The staging gate (pnpm staging:check) runs in this image: its database check
+          # needs the PostgreSQL 16 client.
+          docker run --rm --network none flexibx-worker:ci psql --version | grep -q " 16\."
+      - name: Validate the staging Compose file (Pass 13)
+        run: |
+          cp deploy/staging/staging.env.example deploy/staging/staging.env
+          docker compose -f deploy/staging/compose.yaml --profile jobs config --quiet
+          rm deploy/staging/staging.env
       - name: Check ops image (offline, no credentials)
         run: |
           docker run --rm --network none --entrypoint bash \

@@ -1274,5 +1274,7 @@ Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md); trial pl
   lifecycle via `S3StorageService.readBucketRules`, provider from configuration only) and
   `creator/retention.ts` (`pnpm creator:retention-report`: counts and bytes, never
   deletes).
-- **Image:** Dockerfile target `worker` (Debian trixie base for FFmpeg 7.x, `/work`
-  scratch volume, `pnpm creator:worker`); CI builds it and checks its encoders.
+- **Image:** Dockerfile target `worker` (Pass 13: Ubuntu 24.04 base shared with `ops`, the
+  app's Node copied in, FFmpeg 6.1 and the PostgreSQL 16 client from Ubuntu's archive;
+  `/work` scratch volume; node as PID 1); CI builds it and checks its encoders. Staging
+  runs on `deploy/staging/compose.yaml` and is gated by `pnpm staging:check`.

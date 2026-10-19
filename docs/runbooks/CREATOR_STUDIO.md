@@ -115,8 +115,9 @@ job with a lease, so two workers never run the same job. A workspace runs at mos
 a per-workspace advisory lock, so two workers cannot both take the last slot. A worker
 that died frees its slot when its lease expires.
 
-**Container image:** `docker build --target worker -t flexibx-worker .` (Debian trixie,
-FFmpeg from the distribution, scratch volume `/work`). **Before the first job on a new
+**Container image:** `docker build --target worker -t flexibx-worker .` (Ubuntu 24.04 LTS
+with the Node release of the app image, FFmpeg 6.1 and the PostgreSQL 16 client from
+Ubuntu's archive, scratch volume `/work`; Pass 13). **Before the first job on a new
 host,** run `pnpm creator:preflight` there (`STAGING_CREATOR_STUDIO.md` § 3).
 
 **At start,** the worker removes scratch directories older than 6 hours left behind by a

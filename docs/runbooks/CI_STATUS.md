@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–12)
+# CI status and the GitHub Actions blocker (Passes 10–13)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -19,8 +19,9 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #50                | `9941a87` | 2026-10-18 23:28 | failure in 4 s, no runner                 |
 | #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner                 |
 | #52                | `81cfd81` | 2026-10-19 09:56 | failure in 4 s, no runner (Pass 12 check) |
+| #53                | `99ae9c2` | 2026-10-19 11:14 | failure in 4 s, no runner (Pass 13 check) |
 
-For runs #50 to #52, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
+For runs #50 to #53, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
 
 - `started_at` and `completed_at` are 2 seconds apart;
@@ -64,7 +65,7 @@ page, "Annotations"), not through the API this session can use.
 ## 2. What the owner must check (outside the repository; needs the account owner)
 
 1. **Read the annotation:** open
-   [run #51](https://github.com/sd343434/flexibx/actions/runs/39226055526), select a failed
+   [run #53](https://github.com/sd343434/flexibx/actions/runs/39243153960), select a failed
    job, and read the message under "Annotations". It names the cause, for example "The job
    was not started because your account is locked due to a billing issue".
 2. **Billing:** _Settings → Billing and licensing_ of the account `sd343434`.
@@ -106,6 +107,11 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   disposable S3-compatible bucket (SeaweedFS container, private, CORS and lifecycle set)
   and the Creator Studio acceptance suite against it (`pnpm test:acceptance`). The worker
   image's command runs `node` directly, so `docker stop` reaches the worker.
+- **Pass 13:** the worker and ops images are built on Ubuntu 24.04 (FFmpeg 6.1 and the
+  PostgreSQL 16 client from Ubuntu's archive, no third-party repository); the ops image's
+  self-check also requires the Prisma CLI to run offline as its user; the Docker job checks
+  the worker's PostgreSQL client (the staging gate needs it) and validates
+  `deploy/staging/compose.yaml`.
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.
@@ -120,17 +126,23 @@ recorded in the readiness register:
 - `build` and `e2e`;
 - gitleaks over the staged change.
 
-**Docker (Pass 11, local):**
+**Docker (Passes 11–13, local):**
 
 - **App image** (`runner` target): built and run. It runs as uid 1001, contains no `.env`,
-  keys or tests, answers liveness 200 and readiness `db: up`, and serves `/ar`.
-  - The local build needed this sandbox's TLS-inspecting proxy CA added to Node in a
-    derived Dockerfile kept outside the repository. Base images came from
-    `mirror.gcr.io`, because Docker Hub rate-limits anonymous pulls here.
-- **Worker and ops images:** NOT built (rechecked in Pass 12). Their `apt-get` steps need
-  `deb.debian.org` (and `apt.postgresql.org` for the ops image); this environment's proxy
-  refuses the CONNECT with HTTP 403. They are built only by CI, once it runs, or in an
-  environment whose network policy allows those two hosts.
+  keys or tests, answers liveness 200 and readiness `db: up`, and serves `/ar`; its
+  healthcheck follows `PORT` (Pass 13).
+- **Worker and ops images: built and run (Pass 13).** Passes 11–12 could not build them:
+  their Debian `apt-get` steps needed `deb.debian.org` / `apt.postgresql.org`, which this
+  environment's proxy refuses (CONNECT 403, rechecked in Pass 13; every Debian mirror
+  tried is refused too). Ubuntu's archive is reachable, and Ubuntu 24.04 carries both
+  FFmpeg 6.1 and the PostgreSQL 16 client, so both images now use it (no third-party
+  repository; the FFmpeg is the version CI's integration job installs). Worker: the media
+  check passes in the build and again offline, uid 1000, `docker stop` mid-render hands
+  the job back (exit 0). Ops: `check-ops-image.sh` passes offline; migrate, backup,
+  restore and verify run as its user.
+- The local builds add this sandbox's TLS-inspecting proxy CA in a derived Dockerfile kept
+  outside the repository, and pull base images from `mirror.gcr.io` (Docker Hub
+  rate-limits anonymous pulls here). Neither is in the repository.
 
 **Not reproduced locally:** GitHub-hosted conditions (Ubuntu image, Node from `.nvmrc`, the
 gitleaks action).
