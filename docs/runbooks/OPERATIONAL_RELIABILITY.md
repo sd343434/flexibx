@@ -112,3 +112,37 @@ in `ops-restore-checks.test.ts` instead).
 **Not proven:** a restore of production-sized data, of a managed provider's backup or
 PITR, and any RTO/RPO figure. Those need the hosting decision (register § 6) and a staging
 drill (register § 5.1).
+
+### 3.2 Repeatable drill: `scripts/ops/restore-drill.sh` (Pass 11)
+
+The drill above as one script. It runs in CI after the integration tests (against the
+service container) and by hand against a throwaway server:
+
+```bash
+DRILL_ADMIN_URL=postgresql://user@localhost:5432/postgres scripts/ops/restore-drill.sh
+```
+
+- **Databases:** it creates and drops only `flexibx_drill_*` databases, also on failure.
+- **Remote servers:** refused unless `DRILL_ALLOW_REMOTE=yes`. Never point it at
+  production.
+- **Output:** step results and check names only.
+- **Steps:**
+  1. migrate, seed and back up a source database;
+  2. restore it into an empty database and verify (`VERIFIED`);
+  3. a restore over a non-empty database is refused;
+  4. a tampered manifest fails verification;
+  5. a tampered dump is refused and leaves the target empty;
+  6. a dropped index fails verification;
+  7. a guard trigger disabled in the SOURCE (`creator_jobs_project_active`) survives
+     backup and restore, and fails verification with `guard_triggers_inactive`.
+- **Result:** exit 0 only when every step turns out as expected.
+
+**Local results (2026-10-19, PostgreSQL 16.15, 37 migrations, seed data, 77 tables):**
+
+- All 14 expectations passed (`DRILL PASSED`).
+- With the pre-completion Pass 3.3 trigger list swapped in, step 7 failed as intended
+  (`DRILL FAILED`, 2 failures, exit 1).
+- A non-local URL without `DRILL_ALLOW_REMOTE` was refused (exit 2).
+
+**Not proven:** the same three limits as § 3.1 (production-sized data, a managed
+provider's backup or PITR, RTO/RPO).

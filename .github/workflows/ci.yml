@@ -4,6 +4,9 @@ on:
   push:
     branches: ["main", "claude/**"]
   pull_request:
+  # Manual runs (Actions tab → CI → Run workflow), e.g. after an account or billing fix:
+  # docs/runbooks/CI_STATUS.md.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -76,6 +79,15 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
       - run: pnpm test:integration
+      # Backup → restore → verify with the real ops scripts on disposable databases on the
+      # service container, including the cases that must fail (tampered dump or manifest,
+      # missing index, a guard trigger switched off before the backup).
+      - name: PostgreSQL client version (the drill needs pg_dump 16)
+        run: pg_dump --version && pg_dump --version | grep -q " 16\."
+      - name: Restore drill (disposable databases)
+        env:
+          DRILL_ADMIN_URL: postgresql://flexibx:flexibx@localhost:5432/flexibx
+        run: scripts/ops/restore-drill.sh
       - run: pnpm build
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
@@ -127,11 +139,14 @@ jobs:
           cache-from: type=gha
       # FFmpeg in the worker image: the version, encoders and subtitle filter the worker
       # needs (offline; no credentials, no storage, no provider).
-      - name: Check worker image media tools (offline)
+      # The image build already ran this check (it fails the build); run it again on the
+      # final image as the worker's user, offline, and prove the worker is not root.
+      - name: Check worker image media tools and user (offline)
         run: |
-          docker run --rm --network none flexibx-worker:ci ffmpeg -hide_banner -version | head -1
-          docker run --rm --network none flexibx-worker:ci sh -c \
-            'ffmpeg -hide_banner -encoders | grep -E " (libx264|aac|libopus) " | wc -l | grep -qx 3 && ffmpeg -hide_banner -filters | grep -q " subtitles " && ffprobe -version >/dev/null'
+          docker run --rm --network none flexibx-worker:ci sh scripts/creator/check-media-tools.sh
+          uid="$(docker run --rm --network none flexibx-worker:ci id -u)"
+          echo "worker runs as uid $uid"
+          test "$uid" != "0"
       - name: Check ops image (offline, no credentials)
         run: |
           docker run --rm --network none --entrypoint bash \

@@ -485,6 +485,50 @@ describe("tick heartbeat and alerts", () => {
     }
   }, 20_000);
 
+  it("a webhook that refuses alerts never stops the tick; ops-status reports it until one is delivered", async () => {
+    await seedProblems(); // 4 stuck-state alerts + 1 failed-phase alert
+    let answer = 500;
+    vi.stubEnv("ALERT_WEBHOOK_URL", "https://hooks.example.test/flexibx");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("refused", { status: answer }))),
+    );
+    vi.resetModules();
+    try {
+      const runtime = await import("@/server/orchestration/runtime");
+      const summary = await runtime.runScheduledAutomationTick(() => NOW, phases(["video"]));
+      // The tick finished its work and recorded it, whatever the webhook answered.
+      expect(summary.failedPhases).toEqual(["video"]);
+      expect(
+        await system.systemHeartbeat.findUniqueOrThrow({ where: { name: "automation-tick" } }),
+      ).toMatchObject({ lastStatus: "failed", failedPhases: ["video"] });
+      expect(
+        await system.opsCheckResult.findUniqueOrThrow({ where: { name: "alert-delivery" } }),
+      ).toMatchObject({ status: "error", counts: { sent: 0, failed: 5 } });
+      expect(check(await collectOpsStatus(system, NOW), "alert_delivery_failed")).toMatchObject({
+        value: 1,
+        level: "warning",
+      });
+
+      // The destination works again: the refused alerts (their slots were given back) and
+      // the delivery warning itself go out, and the warning clears.
+      answer = 200;
+      const later = new Date(NOW.getTime() + 60_000);
+      await runtime.runScheduledAutomationTick(() => later, phases(["video"]));
+      expect(
+        await system.opsCheckResult.findUniqueOrThrow({ where: { name: "alert-delivery" } }),
+      ).toMatchObject({ status: "ok", counts: { failed: 0 } });
+      expect(check(await collectOpsStatus(system, later), "alert_delivery_failed")).toMatchObject({
+        value: 0,
+        level: "ok",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubEnv("ALERT_WEBHOOK_URL", "");
+      vi.resetModules();
+    }
+  }, 30_000);
+
   it("the database throttle gives a slot back after a failed delivery, and only that slot", async () => {
     const throttle = databaseAlertThrottle(system);
     const at = new Date("2026-10-18T10:00:00Z");

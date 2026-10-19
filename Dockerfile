@@ -88,6 +88,10 @@ WORKDIR /app
 COPY --from=build /corepack /corepack
 COPY --from=build /app ./
 USER node
+# The build fails here unless FFmpeg >= 6 with libx264, aac, libopus and libass, ffprobe and
+# the subtitle font are present and a real (synthetic) encode with burned-in subtitles
+# works — run as the unprivileged user the worker runs as.
+RUN sh scripts/creator/check-media-tools.sh
 VOLUME ["/work"]
 CMD ["pnpm", "creator:worker"]
 

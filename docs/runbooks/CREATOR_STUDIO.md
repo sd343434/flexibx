@@ -419,8 +419,12 @@ whether customers are told in advance (as for generated videos).
   price were not reachable from the build environment (§ 8).
 - Nothing has run in a hosted environment: no real bucket (CORS, multipart, lifecycle
   rule), no hosted worker. The staging plan is ready (`STAGING_CREATOR_STUDIO.md`).
-- The worker image target has not been built here (containers cannot reach package
-  mirrors in this environment); CI builds and checks it once CI runs again.
+- The worker image target has not been built here. Its `apt-get` step needs
+  `deb.debian.org`, which this build environment's network policy refuses (Pass 11).
+  Since Pass 11 its build runs `scripts/creator/check-media-tools.sh` and fails without a
+  suitable FFmpeg. The script itself is tested against the real FFmpeg and against
+  deliberately broken wrappers (`media-tools-check.test.ts`). CI builds and checks the
+  image once CI runs again.
 - Retention by age (§ 11).
 - A very long file (2 hours) may need more than one 10-minute TRANSCRIBE attempt. The
   checkpoint makes the retry continue, but this has not been measured against the real

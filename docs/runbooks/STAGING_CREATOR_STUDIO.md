@@ -90,7 +90,9 @@ Downloads are signed links of at most 15 minutes (2 minutes for exports).
 ## 3. Deploy order
 
 1. Build the three images from one commit: `flexibx`, `--target migrate`,
-   `--target worker`.
+   `--target worker`. The worker build fails by itself unless its FFmpeg passes
+   `scripts/creator/check-media-tools.sh`: version 6 or later, libx264, aac, libopus,
+   libass, ffprobe, the subtitle font and a real smoke encode.
 2. **Database:**
    - confirm the target is staging (`SELECT current_database()` through the ops image);
    - take a backup (`db-backup.sh`);

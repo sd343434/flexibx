@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Pass 10)
+# CI status and the GitHub Actions blocker (Passes 10–11)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -8,7 +8,7 @@ passing CI. The local gates (below) do not replace CI.
 
 ## 1. Evidence
 
-Collected through the GitHub API (Actions runs, jobs, check runs and usage).
+Collected through the GitHub API (repository, workflow, runs, jobs, check runs and usage).
 
 | Run                | Commit    | Created (UTC)    | Result                                  |
 | ------------------ | --------- | ---------------- | --------------------------------------- |
@@ -17,9 +17,10 @@ Collected through the GitHub API (Actions runs, jobs, check runs and usage).
 | #43 (attempts 1–3) | `4c38dd3` | 2026-10-17 13:07 | failure in seconds, no runner           |
 | #44–#49            | …         | 2026-10-17/18    | failure in 2–4 s each, no runner        |
 | #50                | `9941a87` | 2026-10-18 23:28 | failure in 4 s, no runner               |
+| #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner               |
 
-For run #50, all four jobs ("Lint, typecheck, unit tests", "Integration, build, e2e",
-"Docker image builds", "Secret scan") show the same signs:
+For runs #50 and #51, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
+e2e", "Docker image builds", "Secret scan") show the same signs:
 
 - `started_at` and `completed_at` are 2 seconds apart;
 - `runner_id: 0`, with an empty `runner_name` and `runner_group_name`;
@@ -27,61 +28,103 @@ For run #50, all four jobs ("Lint, typecheck, unit tests", "Integration, build, 
 - the logs return HTTP 404, because no log was ever written;
 - `get_workflow_run_usage` reports `total_ms: 0` for every job.
 
+**Repository and workflow state (Pass 11):**
+
+- The repository `sd343434/flexibx` is **public** and not archived or disabled.
+- The `CI` workflow's state is `active`.
+- The session's GitHub access has admin permission on the repository.
+
+Two consequences:
+
+- GitHub-hosted runner minutes are free for public repositories, so "monthly minutes
+  used up" is not the cause.
+- The workflow is not disabled. Repository-level Actions _permissions_ cannot be read
+  through the tools available here.
+
 **The workflow did not cause it.** Between the last green run (#42, `8820d9e`) and the
 first blocked one (#43, `4c38dd3`), `.github/workflows/ci.yml` is identical. Run #43 is
-the same workflow on a one-commit code change, and it was attempted three times. The
-only later workflow change (the FFmpeg install step, Pass 8) came after the block began.
+the same workflow on a one-commit code change, and it was attempted three times. Later
+workflow changes (the FFmpeg install, Pass 8; the worker image, Pass 10) all came after
+the block began.
 
-A job that fails before any step runs, with no runner and zero billable time, is
-what GitHub does when Actions cannot be billed or is not allowed for the repository. The
-annotation that names the exact reason is shown only in the GitHub web UI (the run page),
-not through the API this session can use.
+**Classification of the possible causes:**
 
-## 2. What the owner must check (outside the repository)
+| Cause                                          | Evidence                                                                                                                                            | Verdict                           |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| A workflow or repository error                 | Same file as the last green run; a YAML or permission error is reported as a startup failure with an annotation, never as four jobs failing in 2 s  | Ruled out                         |
+| No runner available (labels, self-hosted)      | Jobs ask for `ubuntu-latest` (GitHub-hosted). An unavailable runner leaves jobs **queued**, not failed in seconds                                   | Ruled out                         |
+| Minutes quota                                  | Public repository: hosted minutes are free                                                                                                          | Ruled out                         |
+| Account billing lock or account restriction    | Jobs fail before a runner is assigned, with 0 billable ms on every job: the documented signature of an account that GitHub will not run Actions for | **Most likely**: owner must check |
+| Actions disabled or restricted for the account | Not readable here; would show the same signature                                                                                                    | Possible: owner must check        |
 
-On the run page of any recent run, open a failed job and read the annotation; it names the
-reason. Then check, in this order:
+The annotation that names the exact reason appears only in the GitHub web UI (the run
+page, "Annotations"), not through the API this session can use.
 
-1. **Billing and spending limit:** _Settings → Billing and plans_ of the account
-   `sd343434`, or of the organization if the repository moves.
-   - a failed payment, or an expired card;
-   - an Actions spending limit of $0 once the free minutes of a private repository are
-     used up;
-   - the month's included minutes exhausted.
-2. **Actions permissions:** _Repository → Settings → Actions → General_.
-   - "Allow all actions", or at least the actions this workflow uses:
-     `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`,
-     `docker/setup-buildx-action`, `docker/build-push-action`,
-     `actions/upload-artifact` and `gitleaks/gitleaks-action`.
-   - Actions must not be disabled for the repository.
-3. **Account status:** a flagged or restricted account cannot start hosted runners.
-   GitHub support is the only way out.
-4. **Runner labels:** the jobs ask for `ubuntu-latest` (GitHub-hosted). Nothing in the
-   repository requests self-hosted runners.
+## 2. What the owner must check (outside the repository; needs the account owner)
 
-**After the fix:** push any commit, or use "Re-run all jobs" on run #50, and confirm
-that the jobs show a runner name and step logs. Only a run whose four jobs complete
-green counts as CI passing.
+1. **Read the annotation:** open
+   [run #51](https://github.com/sd343434/flexibx/actions/runs/39226055526), select a failed
+   job, and read the message under "Annotations". It names the cause, for example "The job
+   was not started because your account is locked due to a billing issue".
+2. **Billing:** _Settings → Billing and licensing_ of the account `sd343434`.
+   - A failed payment or an expired payment method locks Actions for the whole account,
+     including public repositories.
+   - Pay or replace the payment method. The lock lifts once the payment succeeds.
+3. **Actions permissions:**
+   - _Repository → Settings → Actions → General_: "Allow all actions and reusable
+     workflows", or at least the actions this workflow uses: `actions/checkout`,
+     `pnpm/action-setup`, `actions/setup-node`, `docker/setup-buildx-action`,
+     `docker/build-push-action`, `actions/upload-artifact` and `gitleaks/gitleaks-action`.
+   - Actions must not be disabled for the repository or the account.
+4. **Account status:** a flagged or restricted account cannot start hosted runners. GitHub
+   Support is the only way out (check for e-mails from GitHub).
 
-## 3. What was changed in the repository (Pass 10)
+**After the fix:** the workflow can now be started by hand (`workflow_dispatch`, Pass 11):
+_Actions → CI → Run workflow_ on `claude/amazing-sagan-pvouqy`. Alternatively push any
+commit, or use "Re-run all jobs" on the latest run. Confirm that the jobs show a runner name
+and step logs. **Only a run whose four jobs complete green counts as CI passing.**
 
-- `pnpm lint` now runs `next typegen` before ESLint. On a fresh checkout,
-  `src/i18n/request.ts` imports `next/root-params`, whose types Next.js generates;
-  without them, ESLint reported two `no-unsafe-*` errors. CI was not affected, because
-  it runs `typecheck` (which also generates them) before `lint`. A contributor running
-  `pnpm lint` first now gets the same result as CI.
-- The workflow itself was not changed: its order (`format:check` → `typecheck` → `lint` →
-  `test`; then migrations → integration → build → e2e) is correct, and no test was
-  skipped or weakened.
+## 3. What was changed in the repository
+
+- **Pass 10:** `pnpm lint` runs `next typegen` before ESLint, so a fresh checkout lints like
+  CI.
+- **Pass 11:**
+  - **Manual trigger:** `workflow_dispatch`, for a re-run after the account fix.
+  - **Integration job:** a check that the runner's `pg_dump` is version 16, then
+    `scripts/ops/restore-drill.sh`. The drill runs backup → restore → verify on disposable
+    databases of the service container, and must also see the failures it provokes:
+    - a tampered dump;
+    - a tampered manifest;
+    - a missing index;
+    - a guard trigger switched off before the backup.
+  - **Docker job:** the worker image's own build runs `scripts/creator/check-media-tools.sh`
+    (FFmpeg ≥ 6, libx264, aac, libopus, libass, ffprobe, the subtitle font, and a real
+    smoke encode). The built image is checked again offline, and the job fails if the
+    worker runs as root.
+- **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
+  `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
+  build → e2e.
 
 ## 4. Local gates (what stands in the meantime)
 
-The exact commands of the workflow, run on disposable databases: `prisma validate`,
-`phase:validate`, `format:check`, `typecheck`, `lint`, `test`, `prisma migrate deploy`,
-`test:integration` (with FFmpeg), `build` and `e2e`, plus gitleaks over the staged
-change. The counts of each pass are recorded in the readiness register.
+The workflow's commands are run on disposable databases, with the counts of each pass
+recorded in the readiness register:
 
-Not reproduced locally:
+- `prisma validate`, `phase:validate`, `format:check`, `typecheck`, `lint` and `test`;
+- `prisma migrate deploy`, `test:integration` (with FFmpeg) and the restore drill;
+- `build` and `e2e`;
+- gitleaks over the staged change.
 
-- **The Docker image builds:** no Docker daemon in this environment.
-- **GitHub-hosted conditions:** Ubuntu image, Node from `.nvmrc`, the gitleaks action.
+**Docker (Pass 11, local):**
+
+- **App image** (`runner` target): built and run. It runs as uid 1001, contains no `.env`,
+  keys or tests, answers liveness 200 and readiness `db: up`, and serves `/ar`.
+  - The local build needed this sandbox's TLS-inspecting proxy CA added to Node in a
+    derived Dockerfile kept outside the repository. Base images came from
+    `mirror.gcr.io`, because Docker Hub rate-limits anonymous pulls here.
+- **Worker and ops images:** NOT built. Their `apt-get` steps need `deb.debian.org`, which
+  this environment's network policy refuses (HTTP 403). They are built only by CI, once
+  it runs.
+
+**Not reproduced locally:** GitHub-hosted conditions (Ubuntu image, Node from `.nvmrc`, the
+gitleaks action).
