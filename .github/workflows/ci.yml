@@ -88,6 +88,8 @@ jobs:
         env:
           DRILL_ADMIN_URL: postgresql://flexibx:flexibx@localhost:5432/flexibx
         run: scripts/ops/restore-drill.sh
+      - name: Creator Studio acceptance on a disposable S3-compatible bucket (Pass 12)
+        run: scripts/staging/local-stack.sh
       - run: pnpm build
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium

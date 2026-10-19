@@ -296,7 +296,18 @@ export async function claimNextJob(
 export type JobOutcome =
   | { readonly status: "succeeded" }
   | { readonly status: "retrying" | "failed"; readonly failure: JobFailure }
-  | { readonly status: "lease_lost" };
+  | { readonly status: "lease_lost" }
+  /** The worker is shutting down: the job went back to the queue (see handBack). */
+  | { readonly status: "interrupted" };
+
+export interface RunOptions {
+  /**
+   * The worker is stopping (SIGTERM, container stop): the running step is aborted — its
+   * FFmpeg process killed — and the job handed back to the queue at once instead of
+   * keeping its lease until a forced kill.
+   */
+  readonly shutdown?: AbortSignal;
+}
 
 interface StepRow {
   readonly id: string;
@@ -314,10 +325,18 @@ interface StepContext {
   readonly workDir: string;
 }
 
-/** Runs the claimed job's remaining steps; ends it as succeeded, retrying or failed. */
-export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise<JobOutcome> {
+/**
+ * Runs the claimed job's remaining steps; ends it as succeeded, retrying or failed — or
+ * hands it back when the worker shuts down (options.shutdown).
+ */
+export async function runClaimedJob(
+  deps: CreatorDeps,
+  job: ClaimedJob,
+  options: RunOptions = {},
+): Promise<JobOutcome> {
   const lease = new JobLease(deps, job);
   const lost = new AbortController();
+  const stopping = () => options.shutdown?.aborted === true;
   const heartbeat = setInterval(() => {
     lease.renew().then(
       (owned) => {
@@ -344,6 +363,7 @@ export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise
     });
     for (const row of steps) {
       if (row.state === "SUCCEEDED") continue;
+      if (stopping()) return await handBack(deps, lease, null);
       const step: StepRow = { ...row, attempts: row.attempts + 1 };
       await lease.write(async (tx, at) => {
         await tx.creatorJobStep.updateMany({
@@ -358,7 +378,11 @@ export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise
       const timeout = AbortSignal.timeout(
         deps.timing?.stepTimeoutMs ?? STEP_TIMEOUT_MS[row.stage] ?? 60_000,
       );
-      const signal = AbortSignal.any([lost.signal, timeout]);
+      const signal = AbortSignal.any([
+        lost.signal,
+        timeout,
+        ...(options.shutdown === undefined ? [] : [options.shutdown]),
+      ]);
       const handler = HANDLERS[row.stage];
       try {
         if (handler === undefined) throw new StepFailure("internal_error", false);
@@ -366,6 +390,11 @@ export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise
       } catch (error) {
         if (error instanceof LeaseLostError || lost.signal.aborted) return { status: "lease_lost" };
         const failure = classifyFailure(error, timeout.aborted);
+        // Shutting down: hand the job back — unless a paid provider may already have done
+        // the work (unknown outcome), which is never re-run blindly.
+        if (stopping() && failure.failure !== "provider_outcome_unknown") {
+          return await handBack(deps, lease, step);
+        }
         deps.logger?.warn(
           {
             jobId: job.id,
@@ -389,14 +418,58 @@ export async function runClaimedJob(deps: CreatorDeps, job: ClaimedJob): Promise
   }
 }
 
+/**
+ * The worker stops while it holds the job: the step's credit hold is released, the step
+ * waits again, and the job is queued for any worker at once. The claim's attempt is given
+ * back (the job did not fail); succeeded steps stay succeeded and are not run again.
+ */
+async function handBack(
+  deps: CreatorDeps,
+  lease: JobLease,
+  step: StepRow | null,
+): Promise<JobOutcome> {
+  const { job } = lease;
+  await lease.write(async (tx, now) => {
+    // Only a step still running is reset: one that recorded its result (and capture) in
+    // the same transaction before the abort landed stays succeeded and is never re-run.
+    const current =
+      step === null
+        ? null
+        : await tx.creatorJobStep.findFirst({
+            where: { id: step.id, workspaceId: job.workspaceId, state: "RUNNING" },
+            select: { holdId: true },
+          });
+    if (step !== null && current !== null) {
+      await releaseStepHold(deps, tx, job, current.holdId, now);
+      await tx.creatorJobStep.updateMany({
+        where: { id: step.id, workspaceId: job.workspaceId },
+        data: { state: "PENDING", startedAt: null },
+      });
+    }
+    await tx.creatorJob.updateMany({
+      where: { id: job.id, workspaceId: job.workspaceId },
+      data: {
+        state: "QUEUED",
+        leaseToken: null,
+        leaseExpiresAt: null,
+        runAfter: now,
+        attempts: { decrement: job.attempts > 0 ? 1 : 0 },
+      },
+    });
+  });
+  deps.logger?.info({ jobId: job.id }, "Creator job handed back: the worker is stopping");
+  return { status: "interrupted" };
+}
+
 /** Claims and runs one due job (the worker loop and tests). */
 export async function workOnce(
   deps: CreatorDeps,
   system: PrismaClient,
+  options: RunOptions = {},
 ): Promise<{ readonly jobId: string; readonly outcome: JobOutcome } | null> {
   const job = await claimNextJob(deps, system);
   if (job === null) return null;
-  return { jobId: job.id, outcome: await runClaimedJob(deps, job) };
+  return { jobId: job.id, outcome: await runClaimedJob(deps, job, options) };
 }
 
 const FILE_PROBLEMS: ReadonlySet<JobFailure> = new Set([

@@ -96,8 +96,18 @@ no automatic top-up exists.
 The web app never runs FFmpeg. Media work is done by a separate process:
 
 ```bash
-pnpm creator:worker      # tsx scripts/creator/worker.ts; SIGTERM / SIGINT stop it between jobs
+pnpm creator:worker      # tsx scripts/creator/worker.ts
 ```
+
+**Stopping (SIGTERM / SIGINT):** the job in progress is interrupted. Its FFmpeg process
+is killed, its step goes back to pending, its hold is released and the attempt is not
+counted; the job returns to the queue for the next worker. A provider call whose outcome
+cannot be known is not handed back (it keeps the usual unknown-outcome handling). A worker
+killed outright (SIGKILL, lost host) leaves the job to be taken over when its lease
+expires. The signal must reach the worker's own process: `pnpm` exits on SIGTERM without
+passing it on (measured in Pass 12), so the image runs `node` directly as PID 1. Under a
+process manager, send the signal to the process group or run the same `node` command. The
+hand-back takes well under a second; the default 10 s stop timeout is enough.
 
 **One job at a time per process.** Scale out by running more processes: each claims a
 job with a lease, so two workers never run the same job. A workspace runs at most

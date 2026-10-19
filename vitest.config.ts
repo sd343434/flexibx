@@ -42,6 +42,21 @@ export default defineConfig({
           hookTimeout: 60_000,
         },
       },
+      {
+        extends: true,
+        test: {
+          // Staging-like acceptance (Pass 12): the test database plus a REAL S3-compatible
+          // bucket (ACCEPTANCE_S3_*; scripts/staging/local-stack.sh). Not part of
+          // test:integration, which needs no bucket.
+          name: "acceptance",
+          include: ["tests/acceptance/**/*.test.ts"],
+          globalSetup: ["tests/integration/global-setup.ts"],
+          setupFiles: ["tests/integration/setup-env.ts"],
+          fileParallelism: false,
+          testTimeout: 60_000,
+          hookTimeout: 120_000,
+        },
+      },
     ],
   },
 });

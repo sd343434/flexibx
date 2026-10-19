@@ -1,11 +1,14 @@
-# Creator Studio — staging validation plan (Pass 10)
+# Creator Studio — staging validation plan (Passes 10–12)
 
 Status on 2026-10-19:
 
 - **Prepared:** configuration, a preflight command, a worker image target, monitoring
   and this plan.
-- **Not executed:** no staging environment, no bucket and no credentials exist yet.
-  Nothing below has been verified against hosted infrastructure.
+- **Run on one machine (Pass 12, § 9):** the whole plan against a staging-like stack — the
+  production build, a separate worker process, its own database and a private
+  S3-compatible bucket. Repeatable with `scripts/staging/local-stack.sh`.
+- **Not executed on hosted infrastructure:** no staging environment, bucket or
+  credentials exist yet. Nothing below has been verified there.
 
 The owner must approve and provide every resource in § 1 before the trial. No paid
 resource is created by this repository.
@@ -101,7 +104,8 @@ Downloads are signed links of at most 15 minutes (2 minutes for exports).
    - run `db-verify.sh` against the expected schema objects. Never point this at
      production.
 3. **Worker host:**
-   - run `docker run --env-file … -v work:/work flexibx-worker pnpm creator:preflight`.
+   - run `docker run --env-file … -v work:/work flexibx-worker pnpm creator:preflight`
+     (one-off command; the worker itself runs `node` as PID 1 so `docker stop` reaches it).
      It writes and deletes only random probe objects under the reserved workspace
      `00000000-0000-0000-0000-000000000000`, and never calls a provider;
    - it must print `PREFLIGHT PASSED`. Fix every FAIL first (FFmpeg build, scratch
@@ -189,3 +193,40 @@ Record the results against S1–S10 in the readiness register (`PRODUCTION_READI
 § 15). An item moves from "prepared" to "verified on staging" only with its evidence. A
 production launch still needs the decisions listed there: hosting, data region, the AI
 provider, retention, and CI running again.
+
+## 9. Pass 12: the plan run on one machine (staging-like)
+
+What ran (2026-10-19), all local, synthetic media only, no AI provider, no paid resource:
+
+- **Database:** a separate PostgreSQL 16 database, migrated from empty
+  (`prisma migrate deploy`; `migrate status` clean; `migrate diff` empty).
+- **Bucket:** SeaweedFS in Docker on 127.0.0.1, one identity limited to the bucket, no
+  anonymous access, CORS and lifecycle rules of § 2 applied and read back.
+- **Web app:** `pnpm build` with `NODE_ENV=production`, run as the standalone server.
+  Mail used `MAIL_TRANSPORT=test-outbox` with `FLEXIBX_TEST_PROVIDERS=allow`, which the
+  app honours only while `APP_URL` is local; a hosted staging needs `resend` (owner).
+- **Worker:** a separate process started with the image's command (`node` as PID 1).
+- **Scheduler and alerts:** the tick and ops-status endpoints called with their secrets; a
+  local receiver as `ALERT_WEBHOOK_URL` (plain http is accepted only for this machine).
+
+| #   | Result on the staging-like stack                                                                                                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| S1  | `pnpm creator:preflight`: PREFLIGHT PASSED, 15 checks (FFmpeg 6, scratch, private bucket, 120 s links, multipart, CORS, lifecycle)     |
+| S2  | Migrations from empty; status clean; diff empty. Restore drill: DRILL PASSED (14 checks)                                               |
+| S3  | Multipart upload cut off mid-part, then resumed: only missing parts sent (acceptance suite, 3 × 5 MiB parts). 300 MB+ by hand: not run |
+| S4  | Every part's SHA-256 verified, file VERIFIED; a part with a wrong hash rejected (`checksum_mismatch`) and removed from the bucket      |
+| S5  | Export through the app: 303 → 120 s link, 200; bare object URL 403; tampered and expired links 403                                     |
+| S6  | Another account: export and data routes 404; no session: 401; services refuse every cross-workspace call                               |
+| S7  | Cancel + retry and delete: holds released or captured once; bucket empty under the workspace prefix; project purged; audit kept        |
+| S8  | Revoked key: deletions stay open with attempts and an error code; after the key works again they complete and the project is purged    |
+| S9  | SIGTERM mid-render: FFmpeg killed, job handed back, next worker completes it, one capture. Low disk: ops-status 503 and critical alert |
+| S10 | ops-status creator checks ok at the end; ops-status, alerts and worker/app logs hold no names, file names, keys, links or e-mails      |
+
+**Repeat it:** `TEST_DATABASE_URL=… scripts/staging/local-stack.sh` runs the bucket part
+(S3–S8, S10 for the services) in about a minute and removes its container. CI runs the same
+script. The HTTP, worker-process and alert parts above were driven by hand.
+
+**Still for hosted staging:** the owner's resources (§ 1), a real alert destination, a
+300 MB+ browser upload with pause and reload (S3), transcription with the provider the
+owner approves (the simulator is refused in production by design), and the worker image
+built by CI.

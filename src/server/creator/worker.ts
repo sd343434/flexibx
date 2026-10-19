@@ -20,8 +20,10 @@ import { cleanupExpiredUploads } from "./project-service";
 // worker look dead. Each beat also checks the scratch disk: less free space than the
 // largest job needs is reported as the failed phase `disk_low`, with the clean-up phases
 // that failed since the previous beat.
-// Stops between jobs when `signal` aborts; a job in progress keeps its lease until it
-// ends or its lease expires (another worker then resumes it). Pure.
+// When `signal` aborts (SIGTERM / SIGINT, a container stop) the job in progress is
+// interrupted: its FFmpeg process is killed, its credit hold released and the job handed
+// back to the queue for the next worker (a step whose paid provider outcome is unknown
+// is not re-run: it fails as usual). Pure.
 
 export interface WorkerOptions {
   readonly signal: AbortSignal;
@@ -115,7 +117,7 @@ export async function runWorker(
     }
     let worked;
     try {
-      worked = await workOnce(deps, system);
+      worked = await workOnce(deps, system, { shutdown: options.signal });
     } catch (error) {
       deps.logger?.error(
         { error: error instanceof Error ? error.name : "unknown" },

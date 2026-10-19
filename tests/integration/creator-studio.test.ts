@@ -3,7 +3,7 @@
 // project → upload → analysis → transcription (declared simulator, and test providers
 // that behave like a paid one) → clip suggestions → review → render → private storage,
 // plus isolation, refusals, leases, retries, cancellation, timeouts and credits.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -718,6 +718,59 @@ describe("leases, retries, cancellation and credits", () => {
     });
     expect((await holds(ctx.workspaceId)).map((h) => h.status)).toEqual(["RELEASED"]);
     await expectRefusal(cancelJob(deps, ctx, jobId), "CONFLICT", "creator_job_not_active");
+  }, 60_000);
+
+  it("a worker that stops mid-step kills FFmpeg and hands the job back; charged once", async () => {
+    const ctx = await createTenant(system);
+    // An ffmpeg that hangs (as a long render would) while the marker file exists, writing
+    // its pid first; `exec` keeps that pid for the hanging process itself.
+    const marker = join(media, "hang");
+    const pidFile = join(media, "ffmpeg.pid");
+    const ffmpeg = join(media, "hanging-ffmpeg");
+    writeFileSync(
+      ffmpeg,
+      `#!/bin/sh\nif [ -f "${marker}" ]; then echo $$ > "${pidFile}"; exec sleep 60; fi\nexec ffmpeg "$@"\n`,
+    );
+    chmodSync(ffmpeg, 0o755);
+    const paid = paidTranscription();
+    const { deps } = harness({ transcription: paid.provider, tools: { ...TOOLS, ffmpeg } });
+    const { projectId } = await uploadedProject(deps, ctx);
+    await workOnce(deps, system);
+    const { jobId } = await requestTranscription(deps, ctx, projectId, {
+      language: null,
+      requestKey: "stop",
+    });
+    writeFileSync(marker, "");
+    rmSync(pidFile, { force: true });
+    const stop = new AbortController();
+    const work = workOnce(deps, system, { shutdown: stop.signal });
+    while (!existsSync(pidFile) || readFileSync(pidFile, "utf8").trim() === "") {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    stop.abort(); // SIGTERM in the worker CLI
+    expect(await work).toEqual({ jobId, outcome: { status: "interrupted" } });
+    expect(() => process.kill(pid, 0)).toThrow(); // the FFmpeg child is gone
+    expect(await system.creatorJob.findUniqueOrThrow({ where: { id: jobId } })).toMatchObject({
+      state: "QUEUED",
+      attempts: 0,
+      leaseToken: null,
+      finishedAt: null,
+      failureCode: null,
+    });
+    const steps = await system.creatorJobStep.findMany({ where: { jobId } });
+    expect(steps.map((s) => s.state)).not.toContain("RUNNING");
+    expect(steps.map((s) => s.state)).not.toContain("FAILED");
+    expect((await holds(ctx.workspaceId)).filter((h) => h.status === "HELD")).toEqual([]);
+    expect(paid.calls()).toBe(0);
+
+    // The next worker (FFmpeg working again) completes it; the work is charged once.
+    rmSync(marker);
+    expect(await workOnce(deps, system)).toEqual({ jobId, outcome: { status: "succeeded" } });
+    expect(paid.calls()).toBe(1);
+    const all = await holds(ctx.workspaceId);
+    expect(all.filter((h) => h.status === "CAPTURED")).toHaveLength(1);
+    expect(all.filter((h) => h.status === "HELD")).toEqual([]);
   }, 60_000);
 
   it("resuming a failed job never repeats a succeeded (paid) step", async () => {

@@ -93,7 +93,11 @@ USER node
 # works — run as the unprivileged user the worker runs as.
 RUN sh scripts/creator/check-media-tools.sh
 VOLUME ["/work"]
-CMD ["pnpm", "creator:worker"]
+# Node itself is PID 1, not pnpm: `docker stop` sends SIGTERM to PID 1 only, and pnpm exits
+# on it without passing it on, so the worker would be killed mid-job without handing the
+# job back. Same command as `pnpm creator:worker` (no .env in the image).
+STOPSIGNAL SIGTERM
+CMD ["node", "--import", "tsx", "--import", "./scripts/video-retention/register.mjs", "scripts/creator/worker.ts"]
 
 # ── Runtime ─────────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS runner

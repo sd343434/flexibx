@@ -5,10 +5,12 @@
 //   pnpm creator:worker
 //
 // Needs the server environment (DATABASE_URL, storage, CREATOR_*) and FFmpeg/ffprobe on
-// PATH (or CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH). SIGTERM/SIGINT stop it between
-// jobs; a job in progress finishes or, if the process is killed, is resumed by another
-// worker once its lease expires. Run it with a memory limit and a private scratch
-// directory (CREATOR_WORK_DIR): docs/runbooks/CREATOR_STUDIO.md.
+// PATH (or CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH). SIGTERM/SIGINT interrupt the job
+// in progress (its FFmpeg process is killed and the job handed back to the queue) and stop
+// the worker; if the process is killed outright, another worker resumes the job once its
+// lease expires. Signals must reach this process: pnpm does not pass SIGTERM on, so the
+// container runs node directly (Dockerfile `worker`). Run it with a memory limit and a
+// private scratch directory (CREATOR_WORK_DIR): docs/runbooks/CREATOR_STUDIO.md.
 
 import { runWorker } from "@/server/creator/worker";
 import { getCreatorDeps } from "@/server/creator/runtime";
@@ -19,7 +21,7 @@ async function main(): Promise<void> {
   const stop = new AbortController();
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.once(signal, () => {
-      logger.info({ signal }, "Creator worker stopping after the current job");
+      logger.info({ signal }, "Creator worker stopping: the job in progress is handed back");
       stop.abort();
     });
   }
