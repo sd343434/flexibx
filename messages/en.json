@@ -2943,6 +2943,7 @@
       "no_audio": "This media has no audio track to transcribe.",
       "no_video": "This media has no video track, so clips cannot be exported.",
       "provider_disabled": "AI processing is not enabled in this environment.",
+      "external_consent_missing": "The external provider changed since this was requested, or its use was not confirmed. Nothing was sent. Request it again to confirm the provider shown.",
       "unsupported_language": "This language is not supported.",
       "provider_unavailable": "The processing service is unavailable. It will be retried.",
       "provider_quota": "The processing service's quota was reached.",

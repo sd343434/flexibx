@@ -8,6 +8,8 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetBucketCorsCommand,
+  GetBucketLifecycleConfigurationCommand,
   GetObjectCommand,
   HeadBucketCommand,
   ListPartsCommand,
@@ -38,6 +40,22 @@ import {
   type StoredObjectData,
   type UploadedPart,
 } from "./storage";
+
+export interface BucketRules {
+  readonly cors:
+    | readonly {
+        readonly allowedOrigins: readonly string[];
+        readonly allowedMethods: readonly string[];
+        readonly allowedHeaders: readonly string[];
+      }[]
+    | null;
+  readonly lifecycle:
+    | readonly {
+        readonly enabled: boolean;
+        readonly abortIncompleteMultipartDays: number | null;
+      }[]
+    | null;
+}
 
 /**
  * Maps an SDK error to a failure code. Only the error's name and HTTP status are read:
@@ -282,6 +300,47 @@ export class S3StorageService implements StorageService {
     } catch (error) {
       throw new StorageAccessError(classifyAccessError(error));
     }
+  }
+
+  /**
+   * The bucket's CORS and lifecycle rules, for the staging preflight (read only; null when
+   * the bucket has none). Only the fields the preflight checks are returned.
+   */
+  async readBucketRules(options: { readonly signal?: AbortSignal } = {}): Promise<BucketRules> {
+    const read = async <T>(work: (abortSignal: AbortSignal) => Promise<T>, missing: string) => {
+      try {
+        return await withinDeadline("check", this.timeouts.accessCheckMs, options.signal, work);
+      } catch (error) {
+        if (error instanceof Error && error.name === missing) return null;
+        throw new StorageAccessError(classifyAccessError(error));
+      }
+    };
+    const cors = await read(
+      (abortSignal) =>
+        this.client.send(new GetBucketCorsCommand({ Bucket: this.bucket }), { abortSignal }),
+      "NoSuchCORSConfiguration",
+    );
+    const lifecycle = await read(
+      (abortSignal) =>
+        this.client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: this.bucket }), {
+          abortSignal,
+        }),
+      "NoSuchLifecycleConfiguration",
+    );
+    return {
+      cors:
+        cors?.CORSRules?.map((rule) => ({
+          allowedOrigins: rule.AllowedOrigins ?? [],
+          allowedMethods: rule.AllowedMethods ?? [],
+          allowedHeaders: rule.AllowedHeaders ?? [],
+        })) ?? null,
+      lifecycle:
+        lifecycle?.Rules?.map((rule) => ({
+          enabled: rule.Status === "Enabled",
+          abortIncompleteMultipartDays:
+            rule.AbortIncompleteMultipartUpload?.DaysAfterInitiation ?? null,
+        })) ?? null,
+    };
   }
 
   async getObject(key: string, options: GetObjectOptions = {}): Promise<StoredObjectData | null> {

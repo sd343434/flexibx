@@ -36,6 +36,7 @@ export const JOB_FAILURES = [
   "no_audio",
   "no_video",
   "provider_disabled",
+  "external_consent_missing",
   "unsupported_language",
   "provider_unavailable",
   "provider_quota",

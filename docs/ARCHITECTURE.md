@@ -1244,3 +1244,35 @@ Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md) §§ 4 an
   `exportProjectData` returns a versioned JSON document.
 - **Monitoring:** the worker's heartbeat (`creator-worker`) and eleven creator checks in
   `ops-status` (counts and ages only).
+
+## 25. Creator Studio staging readiness (Pass 10)
+
+Operations: [`runbooks/CREATOR_STUDIO.md`](runbooks/CREATOR_STUDIO.md); trial plan:
+[`runbooks/STAGING_CREATOR_STUDIO.md`](runbooks/STAGING_CREATOR_STUDIO.md); CI:
+[`runbooks/CI_STATUS.md`](runbooks/CI_STATUS.md). No schema change.
+
+- **Fair share of workers:** `claimNextJob` takes a per-workspace advisory lock
+  (`creator-claim:<workspace>`), counts the workspace's RUNNING jobs with live leases and
+  claims only below `CreatorLimits.maxRunningJobsPerWorkspace` (env
+  `CREATOR_MAX_RUNNING_JOBS`, default 2). Workspaces at their limit are skipped for the
+  rest of the poll.
+- **Consent scope:** external jobs record `externalProvider` and `externalRegion` with
+  `externalProcessing: "confirmed"`; `assertExternalConsent` (jobs.ts) refuses a job whose
+  confirmation does not match the configured provider and region
+  (`external_consent_missing`, not retried). The audit entry of the request carries the
+  confirmation for transcription and translation.
+- **Worker heartbeat:** written by its own timer (independent of job length) with the
+  scratch-disk check (`disk_low`) and the clean-up phases that failed. ops-status measures
+  liveness from `last_finished_at` and reports `creator_worker_disk_low`,
+  `creator_worker_cleanup_failed`, `creator_worker_disk_full_24h` and
+  `creator_project_deletions_stuck`.
+- **Alert delivery:** the tick stores the outcome of its deliveries
+  (`ops_check_results` / `alert-delivery`, `monitoring/alert-delivery.ts`); ops-status
+  reports `alert_delivery_failed` for two hours or until a later delivery succeeds.
+- **Tools:** `creator/preflight.ts` (`pnpm creator:preflight`: FFmpeg build, scratch disk,
+  private bucket, link lifetime, two-part multipart round trip with SHA-256, CORS and
+  lifecycle via `S3StorageService.readBucketRules`, provider from configuration only) and
+  `creator/retention.ts` (`pnpm creator:retention-report`: counts and bytes, never
+  deletes).
+- **Image:** Dockerfile target `worker` (Debian trixie base for FFmpeg 7.x, `/work`
+  scratch volume, `pnpm creator:worker`); CI builds it and checks its encoders.

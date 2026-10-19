@@ -4,10 +4,14 @@
 #   docker build -t flexibx .                      → app image
 #   docker build --target migrate -t flexibx-migrate .  → one-off `prisma migrate deploy`
 #   docker build --target ops -t flexibx-ops .          → psql/pg_dump 16 + operator CLIs
+#   docker build --target worker -t flexibx-worker .    → Creator Studio media worker (FFmpeg)
 # Runtime configuration (DATABASE_URL, APP_URL, S3_*…) is injected as environment
 # variables at run time; no secrets are baked into the image.
 
 ARG NODE_IMAGE=node:22.22.3-bookworm-slim
+# The media worker's base: same Node release on Debian trixie, whose FFmpeg is 7.x (bookworm
+# ships 5.1; the worker is tested with FFmpeg 6+ and its preflight requires it).
+ARG WORKER_IMAGE=node:22.22.3-trixie-slim
 
 FROM ${NODE_IMAGE} AS base
 # COREPACK_HOME: pnpm is fetched once at build time (as root) into a shared, world-readable
@@ -59,6 +63,33 @@ RUN apt-get update \
 ENV NODE_ENV=production
 USER node
 CMD ["sh", "-c", "echo 'flexibx-ops: name the command to run' >&2; exit 64"]
+
+# ── Creator Studio media worker ─────────────────────────────────────────────────
+#   docker build --target worker -t flexibx-worker .
+# The only process that runs FFmpeg (`pnpm creator:worker`), one job at a time; scale by
+# running more containers. Needs the app's DATABASE_URL and storage settings, no inbound
+# port, and a writable scratch volume at /work (about 3x the largest source per job).
+# Before a trial: `docker run … flexibx-worker pnpm creator:preflight`
+# (docs/runbooks/STAGING_CREATOR_STUDIO.md). FFmpeg, ffprobe, libass and a subtitle font
+# come from Debian; the application files are the build stage's.
+FROM ${WORKER_IMAGE} AS worker
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    COREPACK_HOME=/corepack \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production \
+    CREATOR_WORK_DIR=/work
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && corepack enable \
+ && mkdir -p /work && chown node:node /work
+WORKDIR /app
+COPY --from=build /corepack /corepack
+COPY --from=build /app ./
+USER node
+VOLUME ["/work"]
+CMD ["pnpm", "creator:worker"]
 
 # ── Runtime ─────────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS runner

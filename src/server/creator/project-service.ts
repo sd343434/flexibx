@@ -961,7 +961,13 @@ export async function requestTranscription(
       kind: "TRANSCRIBE",
       options: {
         ...(input.language === null ? {} : { language: input.language }),
-        ...(provider.external ? { externalProcessing: "confirmed" } : {}),
+        ...(provider.external
+          ? {
+              externalProcessing: "confirmed",
+              externalProvider: provider.id,
+              externalRegion: provider.region ?? "none",
+            }
+          : {}),
       },
       idempotencyKey: `transcribe:${input.requestKey}`,
       requestedByUserId: ctx.userId,
@@ -981,6 +987,10 @@ export async function requestTranscription(
           simulated: provider.simulated,
           provider: provider.id,
           external: provider.external,
+          // The confirmation (who: the audit actor; when: the entry) and its scope.
+          ...(provider.external
+            ? { externalConsent: "confirmed", region: provider.region ?? "unknown" }
+            : {}),
         },
       });
     }
@@ -1041,12 +1051,34 @@ export async function requestTranslation(
       options: {
         transcriptId: transcript.id,
         targetLanguage: target,
-        ...(provider.external ? { externalProcessing: "confirmed" } : {}),
+        ...(provider.external
+          ? {
+              externalProcessing: "confirmed",
+              externalProvider: provider.id,
+              externalRegion: provider.region ?? "none",
+            }
+          : {}),
       },
       idempotencyKey: `translate:${input.requestKey}`,
       requestedByUserId: ctx.userId,
       now: await dbNow(tx),
     });
+    if (job.created) {
+      await recordAudit(tx, ctx, {
+        action: "creator.processing_requested",
+        entityType: "creator_project",
+        entityId: transcript.projectId,
+        metadata: {
+          kind: "TRANSLATE",
+          simulated: provider.simulated,
+          provider: provider.id,
+          external: provider.external,
+          ...(provider.external
+            ? { externalConsent: "confirmed", region: provider.region ?? "unknown" }
+            : {}),
+        },
+      });
+    }
     return { jobId: job.id };
   });
 }

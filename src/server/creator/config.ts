@@ -22,19 +22,28 @@ export interface CreatorLimits {
   readonly maxActiveUploads: number;
   /** How long a resumable upload stays open. */
   readonly uploadSessionMs: number;
+  /**
+   * Jobs of one workspace that may run at the same time across all workers (default
+   * DEFAULT_MAX_RUNNING_JOBS): one busy workspace cannot take every worker.
+   */
+  readonly maxRunningJobsPerWorkspace?: number;
 }
+
+export const DEFAULT_MAX_RUNNING_JOBS = 2;
 
 export function limitsFromEnv(env: {
   readonly CREATOR_MAX_UPLOAD_MB: number;
   readonly CREATOR_MAX_DURATION_SECONDS: number;
   readonly CREATOR_MAX_ACTIVE_UPLOADS: number;
   readonly CREATOR_UPLOAD_SESSION_HOURS: number;
+  readonly CREATOR_MAX_RUNNING_JOBS: number;
 }): CreatorLimits {
   return {
     maxUploadBytes: env.CREATOR_MAX_UPLOAD_MB * MiB,
     maxDurationMs: env.CREATOR_MAX_DURATION_SECONDS * 1000,
     maxActiveUploads: env.CREATOR_MAX_ACTIVE_UPLOADS,
     uploadSessionMs: env.CREATOR_UPLOAD_SESSION_HOURS * 3_600_000,
+    maxRunningJobsPerWorkspace: env.CREATOR_MAX_RUNNING_JOBS,
   };
 }
 

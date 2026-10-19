@@ -14,6 +14,7 @@ import { buildWorkspaceKey, ObjectTooLargeError, putOrCleanUp } from "../storage
 
 import {
   billedMinutes,
+  DEFAULT_MAX_RUNNING_JOBS,
   EXPORT_MAX_BYTES,
   HEARTBEAT_MS,
   JOB_DEADLINE_MS,
@@ -202,7 +203,10 @@ class JobLease {
 /**
  * Claims the next due job: a queued one whose time has come, or a running one whose
  * lease expired (its worker stopped). Compare-and-set: of several workers, one wins.
- * A job past its attempts or its deadline is failed instead of run.
+ * A job past its attempts or its deadline is failed instead of run. A workspace already
+ * running its share of jobs (limits.maxRunningJobsPerWorkspace) is skipped: the check and
+ * the claim run under a per-workspace advisory lock, so two workers cannot both take the
+ * last slot.
  */
 export async function claimNextJob(
   deps: CreatorDeps,
@@ -220,20 +224,40 @@ export async function claimNextJob(
   const candidates = await system.creatorJob.findMany({
     where: due,
     orderBy: { runAfter: "asc" },
-    take: 10,
+    take: 25,
     select: { id: true, workspaceId: true },
   });
+  const maxRunning = deps.limits.maxRunningJobsPerWorkspace ?? DEFAULT_MAX_RUNNING_JOBS;
+  const busy = new Set<string>();
   for (const candidate of candidates) {
+    if (busy.has(candidate.workspaceId)) continue;
     const token = randomUUID();
-    const claimed = await deps.db.creatorJob.updateMany({
-      where: { id: candidate.id, workspaceId: candidate.workspaceId, ...due },
-      data: {
-        state: "RUNNING",
-        leaseToken: token,
-        leaseExpiresAt: new Date(now.getTime() + (deps.timing?.leaseMs ?? LEASE_MS)),
-        attempts: { increment: 1 },
-      },
+    const claimed = await deps.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`creator-claim:${candidate.workspaceId}`}))`;
+      // Jobs of this workspace held by a live worker (an expired lease frees its slot).
+      const running = await tx.creatorJob.count({
+        where: {
+          workspaceId: candidate.workspaceId,
+          state: "RUNNING",
+          leaseExpiresAt: { gte: now },
+          NOT: { id: candidate.id },
+        },
+      });
+      if (running >= maxRunning) return null;
+      return tx.creatorJob.updateMany({
+        where: { id: candidate.id, workspaceId: candidate.workspaceId, ...due },
+        data: {
+          state: "RUNNING",
+          leaseToken: token,
+          leaseExpiresAt: new Date(now.getTime() + (deps.timing?.leaseMs ?? LEASE_MS)),
+          attempts: { increment: 1 },
+        },
+      });
     });
+    if (claimed === null) {
+      busy.add(candidate.workspaceId);
+      continue;
+    }
     if (claimed.count !== 1) continue;
     const row = await deps.db.creatorJob.findFirst({
       where: { id: candidate.id, workspaceId: candidate.workspaceId },
@@ -607,7 +631,7 @@ async function verifiedSource(ctx: StepContext) {
 }
 
 /** Scratch space a step needs on top of the source (audio, pieces, the rendered clip). */
-const SCRATCH_MARGIN_BYTES = 256 * 1024 * 1024;
+export const SCRATCH_MARGIN_BYTES = 256 * 1024 * 1024;
 
 interface SourceFile {
   readonly storageProvider: StorageProvider;
@@ -820,7 +844,30 @@ const jobOptions = z.object({
   transcriptId: z.uuid().optional(),
   /** The requester confirmed that the media is sent to an external provider. */
   externalProcessing: z.literal("confirmed").optional(),
+  /** …to THIS provider in THIS region (what the page showed when they confirmed). */
+  externalProvider: z.string().max(60).optional(),
+  externalRegion: z.string().max(60).optional(),
 });
+
+/**
+ * Media or text goes to an external provider only with the requester's confirmation for
+ * that provider and region. A job confirmed for another provider or region (the
+ * configuration changed while it waited) is refused, never sent: a retry or a takeover
+ * by another worker cannot widen what the person agreed to.
+ */
+function assertExternalConsent(
+  provider: { readonly external: boolean; readonly id: string; readonly region: string | null },
+  options: z.infer<typeof jobOptions>,
+): void {
+  if (!provider.external) return;
+  if (
+    options.externalProcessing !== "confirmed" ||
+    options.externalProvider !== provider.id ||
+    options.externalRegion !== (provider.region ?? "none")
+  ) {
+    throw new StepFailure("external_consent_missing", false);
+  }
+}
 
 const pieceCheckpoint = z.object({
   kind: z.literal("transcription"),
@@ -860,9 +907,7 @@ async function transcribe(ctx: StepContext): Promise<void> {
   if (source.durationMs > provider.maxDurationMs) throw new StepFailure("too_long", false);
   const options = jobOptions.parse(job.options ?? {});
   // Media goes to an external service only if the requester confirmed it for this job.
-  if (provider.external && options.externalProcessing !== "confirmed") {
-    throw new StepFailure("provider_disabled", false);
-  }
+  assertExternalConsent(provider, options);
   const hint = options.language ?? null;
   if (hint !== null && !provider.supportsLanguage(hint)) {
     throw new StepFailure("unsupported_language", false);
@@ -1078,9 +1123,7 @@ async function translate(ctx: StepContext): Promise<void> {
   if (options.targetLanguage === undefined || options.transcriptId === undefined) {
     throw new StepFailure("internal_error", false);
   }
-  if (provider.external && options.externalProcessing !== "confirmed") {
-    throw new StepFailure("provider_disabled", false);
-  }
+  assertExternalConsent(provider, options);
   if (!provider.supportsLanguage(options.targetLanguage)) {
     throw new StepFailure("unsupported_language", false);
   }

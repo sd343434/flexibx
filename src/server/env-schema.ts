@@ -215,7 +215,12 @@ export function parseVideoEnv(source: EnvSource): VideoEnv {
  *   Large sources are uploaded in parts and streamed to the worker's disk, never held in
  *   memory. CREATOR_MAX_ACTIVE_UPLOADS (1–20, default 3): open uploads per workspace.
  *   CREATOR_UPLOAD_SESSION_HOURS (1–72, default 24): how long a resumable upload stays
- *   open before it is aborted and its parts removed.
+ *   open before it is aborted and its parts removed. CREATOR_MAX_RUNNING_JOBS (1–20,
+ *   default 2): jobs of one workspace running at the same time across all workers.
+ * - CREATOR_RETENTION_SOURCE_DAYS / CREATOR_RETENTION_EXPORT_DAYS (1–3650, unset = keep
+ *   until the project is deleted): the retention policy PROPOSED to the owner. Today they
+ *   only feed the read-only report (`pnpm creator:retention-report`); nothing is deleted
+ *   by age until the owner approves a policy.
  * - CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH: the binaries the worker runs (default
  *   `ffmpeg` / `ffprobe` on PATH). CREATOR_FFMPEG_THREADS (1–16, default 2) caps the
  *   threads of one FFmpeg run. CREATOR_WORK_DIR: scratch space for the worker (default
@@ -269,6 +274,18 @@ export const creatorEnvSchema = z
     CREATOR_UPLOAD_SESSION_HOURS: z.preprocess(
       emptyToUndefined,
       z.coerce.number().int().min(1).max(72).default(24),
+    ),
+    CREATOR_MAX_RUNNING_JOBS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(20).default(2),
+    ),
+    CREATOR_RETENTION_SOURCE_DAYS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(3650).optional(),
+    ),
+    CREATOR_RETENTION_EXPORT_DAYS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(3650).optional(),
     ),
     CREATOR_FFMPEG_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffmpeg")),
     CREATOR_FFPROBE_PATH: z.preprocess(emptyToUndefined, z.string().min(1).default("ffprobe")),

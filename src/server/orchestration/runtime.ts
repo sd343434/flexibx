@@ -7,6 +7,7 @@ import { releaseStaleHolds } from "../billing/credits";
 import { getDb, getSystemDb, getTickLockDb } from "../db/client";
 import { getAiEnv, getVideoEnv } from "../env";
 import { logger } from "../logger";
+import { recordAlertDelivery } from "../monitoring/alert-delivery";
 import type { Alert } from "../monitoring/alert-sink";
 import { alert } from "../monitoring/alerts";
 import { recordJobFinished, recordJobStarted } from "../monitoring/heartbeat";
@@ -289,7 +290,9 @@ async function reportTick(
   });
   // In parallel: a slow or unreachable webhook delays the tick by one delivery timeout
   // at most, whatever the number of alerts.
-  await Promise.all(alerts.map((entry) => alert(entry)));
+  const outcomes = await Promise.all(alerts.map((entry) => alert(entry)));
+  // A destination that refuses alerts is reported by ops-status (alert_delivery_failed).
+  await bestEffort("alert_delivery", () => recordAlertDelivery(getSystemDb(), outcomes, at));
 }
 
 /**

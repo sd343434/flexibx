@@ -69,6 +69,12 @@ export const CREATOR_EXPORTS_FAILED_WARNING = 5;
 export const CREATOR_DELETION_OVERDUE_MS = HOUR_MS;
 /** Creator Studio: an object storage keeps refusing to delete (attempts). */
 export const CREATOR_DELETION_ATTEMPTS_CRITICAL = 6;
+/** Creator Studio: a deleted project whose files are still not all removed after a day. */
+export const CREATOR_PROJECT_DELETION_STUCK_MS = DAY_MS;
+/** The ops_check_results row where the tick records whether its alerts were delivered. */
+export const ALERT_DELIVERY_CHECK = "alert-delivery";
+/** A failed alert delivery is reported this long (the next tick's success clears it). */
+export const ALERT_DELIVERY_FAILED_WINDOW_MS = 2 * HOUR_MS;
 
 function count(name: string, value: number, threshold: number, level: CheckLevel): OpsCheck {
   return { name, value, threshold, level: value >= threshold ? level : "ok" };
@@ -144,23 +150,53 @@ function runningCheck(
   };
 }
 
+interface WorkerHeartbeat {
+  lastFinishedAt: Date | null;
+  failedPhases: string[];
+}
+
 /**
- * The media worker's heartbeat: its age, a warning only while work waits for it (a
- * deployment that does not use the Creator Studio runs no worker and is not warned).
+ * The media worker's heartbeat (written on its own timer, also while a job runs): its age,
+ * a warning only while work waits for it (a deployment that does not use the Creator
+ * Studio runs no worker and is not warned). A beat that reports failed phases still
+ * proves the worker is alive; those phases are separate checks.
  */
-function creatorWorkerCheck(
-  heartbeat: { lastSucceededAt: Date | null; lastStatus: string | null } | null,
+function creatorWorkerChecks(
+  heartbeat: WorkerHeartbeat | null,
   queued: number,
   now: Date,
-): OpsCheck {
-  const age = ageSeconds(now, heartbeat?.lastSucceededAt);
+): OpsCheck[] {
+  const age = ageSeconds(now, heartbeat?.lastFinishedAt);
   const stale = age === null || age >= CREATOR_WORKER_STALE_SECONDS;
-  return {
-    name: "creator_worker_last_seen_age_seconds",
-    value: age,
-    threshold: CREATOR_WORKER_STALE_SECONDS,
-    level: queued > 0 && stale ? "warning" : heartbeat?.lastStatus === "failed" ? "warning" : "ok",
-  };
+  const phases = stale ? [] : (heartbeat?.failedPhases ?? []);
+  const diskLow = phases.includes("disk_low") ? 1 : 0;
+  const cleanupFailed = phases.filter((phase) => phase !== "disk_low").length;
+  return [
+    {
+      name: "creator_worker_last_seen_age_seconds",
+      value: age,
+      threshold: CREATOR_WORKER_STALE_SECONDS,
+      level: queued > 0 && stale ? "warning" : "ok",
+    },
+    // Less scratch space than the largest job needs: jobs fail with worker_disk_full.
+    count("creator_worker_disk_low", diskLow, 1, "critical"),
+    // Upload expiry or the storage-deletion sweep failed in the worker's last period.
+    count("creator_worker_cleanup_failed", cleanupFailed, 1, "warning"),
+  ];
+}
+
+/** The tick's own alert deliveries: a destination that refuses them is itself an outage. */
+function alertDeliveryCheck(
+  row: { status: string; finishedAt: Date | null } | null,
+  now: Date,
+): OpsCheck {
+  const failed =
+    row?.status === "error" &&
+    row.finishedAt !== null &&
+    now.getTime() - row.finishedAt.getTime() < ALERT_DELIVERY_FAILED_WINDOW_MS
+      ? 1
+      : 0;
+  return count("alert_delivery_failed", failed, 1, "warning");
 }
 
 export async function collectOpsStatus(
@@ -202,6 +238,9 @@ export async function collectOpsStatus(
     creatorUploadsUncleaned,
     creatorDeletionsOverdue,
     creatorDeletionsFailing,
+    creatorDiskFull,
+    creatorDeletionStuck,
+    alertDelivery,
   ] = await Promise.all([
     system.systemHeartbeat.findUnique({ where: { name: "automation-tick" } }),
     system.creditHold.count({ where: { status: "HELD", createdAt: { lt: ago(STUCK_HOLD_MS) } } }),
@@ -261,7 +300,10 @@ export async function collectOpsStatus(
       where: { enabled: true, failureCount: { gte: INSIGHTS_SOURCE_FAILURES_WARNING } },
     }),
     // Creator Studio (Pass 9): the media worker, its queue and the storage sweep.
-    system.systemHeartbeat.findUnique({ where: { name: "creator-worker" } }),
+    system.systemHeartbeat.findUnique({
+      where: { name: "creator-worker" },
+      select: { lastFinishedAt: true, failedPhases: true },
+    }),
     system.creatorJob.count({ where: { state: "QUEUED", runAfter: { lte: now } } }),
     system.creatorJob.findFirst({
       where: { state: "QUEUED", runAfter: { lte: now } },
@@ -290,6 +332,16 @@ export async function collectOpsStatus(
     }),
     system.creatorStorageDeletion.count({
       where: { completedAt: null, attempts: { gte: CREATOR_DELETION_ATTEMPTS_CRITICAL } },
+    }),
+    system.creatorJobStep.count({
+      where: { errorCode: "worker_disk_full", updatedAt: { gte: ago(DAY_MS) } },
+    }),
+    system.creatorProject.count({
+      where: { status: "DELETING", deletedAt: { lt: ago(CREATOR_PROJECT_DELETION_STUCK_MS) } },
+    }),
+    system.opsCheckResult.findUnique({
+      where: { name: ALERT_DELIVERY_CHECK },
+      select: { status: true, finishedAt: true },
     }),
   ]);
 
@@ -346,7 +398,7 @@ export async function collectOpsStatus(
     count("insights_sync_runs_failed_24h", insightsRunsFailed, INSIGHTS_RUNS_WARNING, "warning"),
     count("insights_sync_runs_partial_24h", insightsRunsPartial, INSIGHTS_RUNS_WARNING, "warning"),
     count("insights_sources_failing", insightsSourcesFailing, 1, "warning"),
-    creatorWorkerCheck(creatorWorker, creatorQueued, now),
+    ...creatorWorkerChecks(creatorWorker, creatorQueued, now),
     count("creator_jobs_queued", creatorQueued, Number.MAX_SAFE_INTEGER, "warning"),
     {
       name: "creator_oldest_queued_job_age_seconds",
@@ -375,6 +427,9 @@ export async function collectOpsStatus(
     count("creator_uploads_not_cleaned", creatorUploadsUncleaned, 1, "warning"),
     count("creator_storage_deletions_overdue", creatorDeletionsOverdue, 1, "warning"),
     count("creator_storage_deletions_failing", creatorDeletionsFailing, 1, "critical"),
+    count("creator_worker_disk_full_24h", creatorDiskFull, 1, "warning"),
+    count("creator_project_deletions_stuck", creatorDeletionStuck, 1, "warning"),
+    alertDeliveryCheck(alertDelivery, now),
     ...ledgerChecks(
       ledger,
       now,

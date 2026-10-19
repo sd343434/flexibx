@@ -1,4 +1,4 @@
-# Creator Studio — operations runbook (Passes 8 and 9)
+# Creator Studio — operations runbook (Passes 8–10)
 
 The Creator Studio turns one uploaded video or audio file into short clips:
 
@@ -58,6 +58,9 @@ Code: `src/server/creator/`. Pages: `/{locale}/w/{slug}/studio`. Architecture:
 | `CREATOR_MAX_UPLOAD_MB`              | 2000 (1–2000)             | Largest source file (multipart above 64 MiB)                                                                         |
 | `CREATOR_MAX_ACTIVE_UPLOADS`         | 3 (1–20)                  | Open uploads per workspace (and one per project)                                                                     |
 | `CREATOR_UPLOAD_SESSION_HOURS`       | 24 (1–72)                 | How long a resumable upload can be continued before it expires and its parts are removed                             |
+| `CREATOR_MAX_RUNNING_JOBS`           | 2 (1–20)                  | Jobs of one workspace running at the same time across all workers (one busy workspace cannot take every worker)      |
+| `CREATOR_RETENTION_SOURCE_DAYS`      | unset (1–3650)            | PROPOSED source retention: only reported by `pnpm creator:retention-report`, nothing is deleted by age (§ 11)        |
+| `CREATOR_RETENTION_EXPORT_DAYS`      | unset (1–3650)            | PROPOSED export retention: reported only, as above                                                                   |
 | `CREATOR_MAX_DURATION_SECONDS`       | 3600 (10–14400)           | Longest source media                                                                                                 |
 | `CREATOR_FFMPEG_PATH`                | `ffmpeg`                  | FFmpeg binary (needs libx264, AAC and libass)                                                                        |
 | `CREATOR_FFPROBE_PATH`               | `ffprobe`                 | ffprobe binary                                                                                                       |
@@ -97,14 +100,24 @@ pnpm creator:worker      # tsx scripts/creator/worker.ts; SIGTERM / SIGINT stop 
 ```
 
 **One job at a time per process.** Scale out by running more processes: each claims a
-job with a lease, so two workers never run the same job.
+job with a lease, so two workers never run the same job. A workspace runs at most
+`CREATOR_MAX_RUNNING_JOBS` jobs at once across all workers; the check and the claim share
+a per-workspace advisory lock, so two workers cannot both take the last slot. A worker
+that died frees its slot when its lease expires.
+
+**Container image:** `docker build --target worker -t flexibx-worker .` (Debian trixie,
+FFmpeg from the distribution, scratch volume `/work`). **Before the first job on a new
+host,** run `pnpm creator:preflight` there (`STAGING_CREATOR_STUDIO.md` § 3).
 
 **At start,** the worker removes scratch directories older than 6 hours left behind by a
 crashed run.
 
-**Every minute,** it records its heartbeat (`system_heartbeats`, job `creator-worker`),
-expires abandoned uploads (queueing their objects and multipart uploads for deletion) and
-runs the storage deletion sweep (§ 9).
+**Every minute,** on its own timer (also while a long job runs), it records its heartbeat
+(`system_heartbeats`, job `creator-worker`). The heartbeat checks the scratch disk: less
+free space than the largest allowed job needs (2× `CREATOR_MAX_UPLOAD_MB` + 256 MiB) is
+reported as the phase `disk_low`. Between jobs, it also expires abandoned uploads
+(queueing their objects and multipart uploads for deletion) and runs the storage
+deletion sweep (§ 9). A failure of either is reported in the next heartbeat.
 
 **Requirements for each worker host:**
 
@@ -272,6 +285,19 @@ The adapter is `src/server/creator/providers/openai.ts`:
   are retried twice with backoff (honouring `Retry-After`). 401/403 is `provider_auth`,
   other 4xx is `provider_rejected`. No key, audio or text is logged; logs carry status
   codes and failure codes only.
+- **Consent is bound to what the person saw** (Pass 10). The job records the provider
+  id and region shown when the person confirmed. The worker sends nothing when the
+  configured provider or its region differs: the job fails with
+  `external_consent_missing` and the person asks again. A retry or another worker
+  cannot widen it. The confirmation is in the audit log (`creator.processing_requested`:
+  actor, time, `externalConsent`, `region`), for transcription and translation.
+
+**Facts NOT verified from official sources (2026-10-19).** The OpenAI documentation and
+pricing domains (`platform.openai.com`, `openai.com`) do not resolve from the build
+environment. The model names, the 25 MB request limit, the Arabic support, the retention
+statement and the price below come from the adapter's design and third-party
+material. The owner must check each one on OpenAI's official pages, from a normal
+network, before approval, and record the date checked.
 
 **What the owner must decide and record before setting
 `CREATOR_EXTERNAL_PROCESSING=approved`:**
@@ -291,6 +317,18 @@ The adapter is `src/server/creator/providers/openai.ts`:
 Then, in staging first: set `CREATOR_AI_PROVIDER=openai`, `CREATOR_EXTERNAL_PROCESSING=approved`
 and `OPENAI_API_KEY`, run one short test file of the team's own (never customer media),
 and compare the recorded `provider_cost_micro_usd` with the usage dashboard.
+
+**Decision record (to fill in; nothing is enabled until it is complete):**
+
+| Item                                          | Decision | By / date |
+| --------------------------------------------- | -------- | --------- |
+| Billed OpenAI organisation and project        |          |           |
+| Monthly usage limit set on that project       |          |           |
+| DPA signed; zero data retention status        |          |           |
+| Processing region accepted                    |          |           |
+| Price per minute checked on the official page |          |           |
+| Privacy notice text published                 |          |           |
+| Staging test with the team's own file         |          |           |
 
 ## 9. Deleting a project, and data export
 
@@ -327,26 +365,63 @@ events. Media files are downloaded separately. Each export is audited
 `ops-status` (and its alerts, through the existing tick) includes counts and ages only,
 never names, ids, keys or text:
 
-| Check                                   | Level                                                                    |
-| --------------------------------------- | ------------------------------------------------------------------------ |
-| `creator_worker_last_seen_age_seconds`  | warning if work is queued and the worker has not reported for 10 minutes |
-| `creator_jobs_queued`                   | informational                                                            |
-| `creator_oldest_queued_job_age_seconds` | warning after 15 minutes                                                 |
-| `creator_jobs_lease_expired`            | critical                                                                 |
-| `creator_jobs_past_deadline`            | warning                                                                  |
-| `creator_exports_failed_24h`            | warning above the threshold                                              |
-| `creator_provider_failures_24h`         | warning above the threshold                                              |
-| `creator_provider_outcome_unknown_24h`  | warning                                                                  |
-| `creator_uploads_not_cleaned`           | warning                                                                  |
-| `creator_storage_deletions_overdue`     | warning                                                                  |
-| `creator_storage_deletions_failing`     | critical                                                                 |
+| Check                                   | Level                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `creator_worker_last_seen_age_seconds`  | warning if work is queued and the worker has not reported for 10 minutes                         |
+| `creator_jobs_queued`                   | informational                                                                                    |
+| `creator_oldest_queued_job_age_seconds` | warning after 15 minutes                                                                         |
+| `creator_jobs_lease_expired`            | critical                                                                                         |
+| `creator_jobs_past_deadline`            | warning                                                                                          |
+| `creator_exports_failed_24h`            | warning above the threshold                                                                      |
+| `creator_provider_failures_24h`         | warning above the threshold                                                                      |
+| `creator_provider_outcome_unknown_24h`  | warning                                                                                          |
+| `creator_uploads_not_cleaned`           | warning                                                                                          |
+| `creator_storage_deletions_overdue`     | warning                                                                                          |
+| `creator_storage_deletions_failing`     | critical                                                                                         |
+| `creator_worker_disk_low`               | critical: the latest heartbeat reports less free scratch space than the largest job needs        |
+| `creator_worker_cleanup_failed`         | warning: upload expiry or the deletion sweep failed since the previous heartbeat                 |
+| `creator_worker_disk_full_24h`          | warning: steps failed with `worker_disk_full` in the last day                                    |
+| `creator_project_deletions_stuck`       | warning: a deleted project whose files are not all removed after a day                           |
+| `alert_delivery_failed`                 | warning: the tick's last alert delivery was refused (2-hour window; cleared by a successful one) |
 
-## 11. Not done yet
+The worker's age is measured from its last heartbeat, whatever it reported: a beat with
+failed phases proves the worker is alive. Those phases are the separate checks above. An
+alert that cannot be delivered cannot report itself. The tick therefore stores the
+outcome (`ops_check_results` row `alert-delivery`), and an external uptime monitor polling
+`ops-status` sees `alert_delivery_failed`. A failed delivery never stops the tick or the
+worker.
 
-- The real provider has never been called (no approval, no key). Nothing has run in a
-  hosted environment: no real bucket (CORS, multipart, lifecycle rule), no hosted worker.
-- Retention for sources and exports of projects that are kept: they stay until the
-  project is deleted.
-- A very long file (2 hours) may need more than one 10-minute TRANSCRIBE attempt; the
-  checkpoint makes the retry continue, but it has not been measured against the real
+## 11. Retention (proposed, not enforced)
+
+**Today:**
+
+- Sources and exports are kept until their project is deleted.
+- The worker removes its scratch directories after 6 hours, or at the end of each job.
+- Abandoned uploads expire with their session (`CREATOR_UPLOAD_SESSION_HOURS`).
+- Deleted projects are removed as in § 9.
+
+**A retention policy by age is the owner's decision.** Until it is approved, nothing is
+deleted by age:
+
+- `CREATOR_RETENTION_SOURCE_DAYS` and `CREATOR_RETENTION_EXPORT_DAYS` feed only
+  `pnpm creator:retention-report`. It prints counts and bytes, in total and beyond the
+  proposed age, and nothing else (no ids, names or keys).
+- Enforcement will be a separate change. It will queue the objects through
+  `creator_storage_deletions` as a project deletion does, and keep the audit and ledger
+  records.
+
+To decide: how long to keep sources after the last export, how long to keep exports, and
+whether customers are told in advance (as for generated videos).
+
+## 12. Not done yet
+
+- The real provider has never been called (no approval, no key). Its documentation and
+  price were not reachable from the build environment (§ 8).
+- Nothing has run in a hosted environment: no real bucket (CORS, multipart, lifecycle
+  rule), no hosted worker. The staging plan is ready (`STAGING_CREATOR_STUDIO.md`).
+- The worker image target has not been built here (containers cannot reach package
+  mirrors in this environment); CI builds and checks it once CI runs again.
+- Retention by age (§ 11).
+- A very long file (2 hours) may need more than one 10-minute TRANSCRIBE attempt. The
+  checkpoint makes the retry continue, but this has not been measured against the real
   provider.
