@@ -4,7 +4,8 @@ import { checkStartupEnv } from "../startup-env";
 // image next to the deployed app, that answers "may the trial start?". It composes the
 // checks that already exist instead of re-implementing them:
 //   - environment: every required variable set, and the app's own startup validation;
-//   - database: scripts/ops/db-verify.sh --no-row-counts (migrations with checksums, the
+//   - database: the environment marker (scripts/ops/db-environment.sh: it is the staging
+//     database, not another one), then scripts/ops/db-verify.sh --no-row-counts (migrations with checksums, the
 //     expected indexes and constraints, integrity checks including disabled guards);
 //   - media, scratch disk, bucket privacy, signed links, multipart, CORS, lifecycle:
 //     `creator:preflight` (probe objects only, never a provider);
@@ -33,7 +34,7 @@ export interface PredeployDeps {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** Runs a repository script; `missing` when its interpreter or tool is not installed. */
   readonly run: (
-    name: "db-verify" | "preflight",
+    name: "db-environment" | "db-verify" | "preflight",
     env: Readonly<Record<string, string>>,
   ) => Promise<CommandOutcome>;
   readonly fetch: (
@@ -114,6 +115,37 @@ function environmentChecks(env: PredeployDeps["env"]): GateResult[] {
       : result("env_valid", "fail", report.errors.join("; ").replaceAll("\n", " ")),
   );
   return results;
+}
+
+/**
+ * The database is the one this gate is for (scripts/ops/db-environment.sh): its marker must
+ * say `staging` (or STAGING_CHECK_ENVIRONMENT). An unmarked or differently marked database
+ * fails — the gate never vouches for a database it cannot tell is staging.
+ */
+async function environmentMarkerCheck(deps: PredeployDeps): Promise<GateResult> {
+  const url = deps.env.DATABASE_URL;
+  if (!isSet(url)) return result("database_environment", "not_run", "DATABASE_URL is not set");
+  const wanted = isSet(deps.env.STAGING_CHECK_ENVIRONMENT)
+    ? (deps.env.STAGING_CHECK_ENVIRONMENT ?? "")
+    : "staging";
+  const outcome = await deps.run("db-environment", { DATABASE_URL: url ?? "", WANTED: wanted });
+  if (outcome.kind === "missing") {
+    return result("database_environment", "not_run", `${outcome.what} not installed`);
+  }
+  // The script prints one JSON line: database name and marker, never the URL.
+  let line: { status?: string; why?: string } = {};
+  try {
+    line = JSON.parse(outcome.stdout.trim().split("\n").at(-1) ?? "{}") as typeof line;
+  } catch {
+    line = {};
+  }
+  return outcome.code === 0
+    ? result("database_environment", "pass", `database marked ${wanted}`)
+    : result(
+        "database_environment",
+        "fail",
+        line.why ?? `marker check failed (exit ${String(outcome.code)})`,
+      );
 }
 
 async function databaseCheck(deps: PredeployDeps): Promise<GateResult> {
@@ -301,6 +333,7 @@ export function summarize(results: readonly GateResult[]): GateSummary {
 
 export async function runPredeployGate(deps: PredeployDeps): Promise<GateSummary> {
   const results: GateResult[] = [...environmentChecks(deps.env)];
+  results.push(await environmentMarkerCheck(deps));
   results.push(await databaseCheck(deps));
   results.push(...(await preflightChecks(deps)));
   results.push(await readinessCheck(deps));

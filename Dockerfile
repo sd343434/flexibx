@@ -8,13 +8,22 @@
 # Runtime configuration (DATABASE_URL, APP_URL, S3_*…) is injected as environment
 # variables at run time; no secrets are baked into the image.
 
-ARG NODE_IMAGE=node:22.22.3-bookworm-slim
+# Base images are pinned by digest (Pass 15): a rebuild of the same commit starts from the
+# same bytes, and a moved tag cannot change what is deployed. Digests read on 2026-10-19
+# (multi-arch index) from mirror.gcr.io, Google's pull-through cache of Docker Hub. To
+# update: pull the new tag, read `docker image inspect --format '{{index .RepoDigests 0}}'`,
+# replace both tag and digest here, and let CI rebuild. Ubuntu/Debian packages installed
+# below still come from the distributions' archives at build time (security updates).
+ARG NODE_IMAGE=node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752
 # Base of the two job images (`ops`, `worker`): Ubuntu 24.04 LTS, whose own archive carries
 # both tools they need — FFmpeg 6.1 (the version CI's integration tests and the worker's
 # media check run against) and the PostgreSQL 16 client (same major as the server) — so no
 # third-party package repository is configured. Node is the exact runtime of NODE_IMAGE,
 # copied in (no second Node install).
-ARG JOBS_IMAGE=ubuntu:24.04
+ARG JOBS_IMAGE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+# The commit an image was built from (CI passes github.sha), as an OCI label on the runtime
+# images: `docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`.
+ARG GIT_SHA=unknown
 
 FROM ${NODE_IMAGE} AS base
 # COREPACK_HOME: pnpm is fetched once at build time (as root) into a shared, world-readable
@@ -95,6 +104,10 @@ WORKDIR /app
 # scripts convert URLs to libpq variables and a private PGPASSFILE). No default command:
 # every job names what it runs.
 FROM jobs-base AS ops
+ARG GIT_SHA
+LABEL org.opencontainers.image.source="https://github.com/sd343434/flexibx" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.title="flexibx-ops"
 COPY --from=build /corepack /corepack
 COPY --from=jobs-files /app ./
 COPY --from=jobs-deps /deps/ops/node_modules ./node_modules
@@ -121,6 +134,10 @@ CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
 # (docs/runbooks/STAGING_CREATOR_STUDIO.md). FFmpeg, ffprobe, libass and a subtitle font
 # come from Ubuntu's archive; the application files are the build stage's.
 FROM jobs-base AS worker
+ARG GIT_SHA
+LABEL org.opencontainers.image.source="https://github.com/sd343434/flexibx" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.title="flexibx-worker"
 ENV CREATOR_WORK_DIR=/work
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
@@ -144,6 +161,10 @@ CMD ["node", "--import", "tsx", "--import", "./scripts/video-retention/register.
 
 # ── Runtime ─────────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS runner
+ARG GIT_SHA
+LABEL org.opencontainers.image.source="https://github.com/sd343434/flexibx" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.title="flexibx-app"
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \

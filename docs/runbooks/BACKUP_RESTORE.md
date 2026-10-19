@@ -262,3 +262,36 @@ production-sized copy before it is promised.
 **RPO:** with the daily `db-backup.sh` alone, up to **24 hours** of data. With managed
 PITR (BACKUP_RESTORE.md § 2, D-2), the provider's figure (≈ 5 minutes on RDS). PITR is not
 exercised anywhere yet: no hosted database exists.
+
+## 9. Pass 15: measured on the real schema at 1 GB, and the environment marker
+
+**Measured** (2026-10-19, same machine as § 8: 4 vCPU, local PostgreSQL 16, through the
+`ops` image). A database migrated with all 37 migrations, then filled with synthetic
+volume on the real schema: 200 workspaces, 2 000 users, 3 000 000 audit rows — 1 081 MB,
+every trigger and index active.
+
+| Step                                             | Time   | Result                                                                      |
+| ------------------------------------------------ | ------ | --------------------------------------------------------------------------- |
+| `db-backup.sh`                                   | 40.1 s | 413 MB dump, 77 tables, manifest + checksums                                |
+| `db-restore.sh` into a **separate** new database | 27.1 s | 77 tables; 951 MB after restore (rebuilt, without bloat)                    |
+| `db-verify.sh` with the manifest                 | 2.2 s  | row counts match (77 tables), 502 schema objects, 37 migrations: `VERIFIED` |
+
+Source and restored copy: 3 000 000 audit rows, 132 triggers (none disabled), 300 indexes.
+
+**Estimated, not measured** (from the restore rate above, ≈ 40 MB/s of database on this
+machine; a managed disk can be several times slower): RTO ≈ restore (size ÷ 40 MB/s) +
+verify (seconds) + marking and switching `DATABASE_URL` and restarting the app (≈ 1–2
+minutes). 10 GB → ≈ 6–7 minutes; 50 GB → ≈ 25 minutes. A 1 GB sample does not predict a
+large production database reliably: index builds and verification grow faster than
+linearly on large tables. Re-measure on the hosted database before any RTO is promised.
+
+**RPO:** daily dumps alone → up to 24 h. The Terraform for staging
+(`deploy/staging/aws`) enables RDS automated backups for 7 days, which gives
+point-in-time recovery — **configured in code, never applied or exercised**: PITR is not
+available anywhere until the owner applies it and a restore to a point in time is tested.
+
+**After any restore:** the restored database carries no environment marker (pg_dump does
+not keep database comments — verified). Before pointing staging at it:
+`scripts/ops/db-environment.sh mark staging --confirm-database <name>`; until then the
+`migrate` job and the staging gate refuse it (verified: `database … is unmarked, expected
+staging`, exit 1).

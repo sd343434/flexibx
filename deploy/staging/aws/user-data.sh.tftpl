@@ -1,0 +1,16 @@
+#!/bin/bash
+# First boot of the Flexibx staging host (rendered by Terraform; contains no secret).
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends docker.io docker-compose-v2 caddy unattended-upgrades
+systemctl enable --now docker
+# TLS terminates here; the app listens on 127.0.0.1:3000 (compose.yaml).
+cat > /etc/caddy/Caddyfile <<'CADDY'
+${app_domain} {
+  encode gzip
+  reverse_proxy 127.0.0.1:3000
+}
+CADDY
+systemctl restart caddy
+install -d -m 750 -o root -g root /opt/flexibx

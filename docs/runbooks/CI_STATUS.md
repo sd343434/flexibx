@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–14)
+# CI status and the GitHub Actions blocker (Passes 10–15)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -10,19 +10,21 @@ passing CI. The local gates (below) do not replace CI.
 
 Collected through the GitHub API (repository, workflow, runs, jobs, check runs and usage).
 
-| Run                | Commit    | Created (UTC)    | Result                                    |
-| ------------------ | --------- | ---------------- | ----------------------------------------- |
-| #41                | `ee1e886` | 2026-10-16 21:40 | success, about 14 minutes of real work    |
-| #42                | `8820d9e` | 2026-10-16 22:27 | **success**: the last run that executed   |
-| #43 (attempts 1–3) | `4c38dd3` | 2026-10-17 13:07 | failure in seconds, no runner             |
-| #44–#49            | …         | 2026-10-17/18    | failure in 2–4 s each, no runner          |
-| #50                | `9941a87` | 2026-10-18 23:28 | failure in 4 s, no runner                 |
-| #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner                 |
-| #52                | `81cfd81` | 2026-10-19 09:56 | failure in 4 s, no runner (Pass 12 check) |
-| #53                | `99ae9c2` | 2026-10-19 11:14 | failure in 4 s, no runner (Pass 13 check) |
-| #54                | `4ef0a26` | 2026-10-19 12:46 | failure in 5 s, no runner (Pass 14 check) |
+| Run                | Commit    | Created (UTC)    | Result                                                          |
+| ------------------ | --------- | ---------------- | --------------------------------------------------------------- |
+| #41                | `ee1e886` | 2026-10-16 21:40 | success, about 14 minutes of real work                          |
+| #42                | `8820d9e` | 2026-10-16 22:27 | **success**: the last run that executed                         |
+| #43 (attempts 1–3) | `4c38dd3` | 2026-10-17 13:07 | failure in seconds, no runner                                   |
+| #44–#49            | …         | 2026-10-17/18    | failure in 2–4 s each, no runner                                |
+| #50                | `9941a87` | 2026-10-18 23:28 | failure in 4 s, no runner                                       |
+| #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner                                       |
+| #52                | `81cfd81` | 2026-10-19 09:56 | failure in 4 s, no runner (Pass 12 check)                       |
+| #53                | `99ae9c2` | 2026-10-19 11:14 | failure in 4 s, no runner (Pass 13 check)                       |
+| #54                | `4ef0a26` | 2026-10-19 12:46 | failure in 5 s, no runner (Pass 14 check)                       |
+| #55                | `069c2df` | 2026-10-19 14:33 | failure in 5 s, no runner (push)                                |
+| #56                | `069c2df` | 2026-10-19 14:46 | failure in 8 s, no runner (manual `workflow_dispatch`, Pass 15) |
 
-For runs #50 to #54, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
+For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
 
 - `started_at` and `completed_at` are 2 seconds apart;
@@ -66,7 +68,7 @@ page, "Annotations"), not through the API this session can use.
 ## 2. What the owner must check (outside the repository; needs the account owner)
 
 1. **Read the annotation:** open
-   [run #54](https://github.com/sd343434/flexibx/actions/runs/39254705669), select a failed
+   [run #56](https://github.com/sd343434/flexibx/actions/runs/39272010631), select a failed
    job, and read the message under "Annotations". It names the cause, for example "The job
    was not started because your account is locked due to a billing issue".
 2. **Billing:** _Settings → Billing and licensing_ of the account `sd343434`.
@@ -118,6 +120,13 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   image); `migrate` is the ops image with its command fixed; the Docker job also loads the
   app image and enforces size budgets (`scripts/docker/check-image-size.sh`: app 500 MB,
   worker 1400 MB, ops 1250 MB).
+- **Pass 15:** evidence re-collected. Run #56 was started by hand (`workflow_dispatch`)
+  and failed like the push runs: the trigger does not matter. Each job's check run has an
+  empty output and its log download answers 404 (the job never started); billable time
+  0 ms. Nothing in the repository can change this: the workflow file parses and ran green
+  before (run history), and the same jobs fail identically for every commit. The Docker
+  job now also passes the commit as `GIT_SHA` (image label) and checks that the staging
+  Compose file refuses to render without a release tag.
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

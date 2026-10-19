@@ -118,6 +118,7 @@ jobs:
           context: .
           target: runner
           push: false
+          build-args: GIT_SHA=${{ github.sha }}
           load: true
           tags: flexibx:ci
           cache-from: type=gha
@@ -128,6 +129,7 @@ jobs:
           context: .
           target: ops
           push: false
+          build-args: GIT_SHA=${{ github.sha }}
           load: true
           tags: flexibx-ops:ci
           cache-from: type=gha
@@ -137,6 +139,7 @@ jobs:
           context: .
           target: worker
           push: false
+          build-args: GIT_SHA=${{ github.sha }}
           load: true
           tags: flexibx-worker:ci
           cache-from: type=gha
@@ -156,7 +159,11 @@ jobs:
       - name: Validate the staging Compose file (Pass 13)
         run: |
           cp deploy/staging/staging.env.example deploy/staging/staging.env
-          docker compose -f deploy/staging/compose.yaml --profile jobs config --quiet
+          FLEXIBX_TAG=ci docker compose -f deploy/staging/compose.yaml --profile jobs config --quiet
+          # Without an explicit release tag the Compose file must refuse to render.
+          if docker compose -f deploy/staging/compose.yaml config --quiet 2>/dev/null; then
+            echo "compose accepted a missing FLEXIBX_TAG" >&2; exit 1
+          fi
           rm deploy/staging/staging.env
       - name: Check ops image (offline, no credentials)
         run: |

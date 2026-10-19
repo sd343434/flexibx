@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+region     = "me-central-1" # example only: decided by D-1 (data residency)
+app_domain = "staging.example.com"

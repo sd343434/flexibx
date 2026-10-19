@@ -46,6 +46,7 @@ function opsBody(overrides: Record<string, Partial<{ value: number | null; level
 function deps(
   over: {
     env?: Record<string, string | undefined>;
+    dbEnvironment?: CommandOutcome;
     dbVerify?: CommandOutcome;
     preflight?: CommandOutcome;
     health?: { status: number; text: string } | Error;
@@ -55,15 +56,24 @@ function deps(
   } = {},
 ) {
   const calls: { url: string; headers?: Record<string, string>; body?: string }[] = [];
+  const runs: { name: string; env: Readonly<Record<string, string>> }[] = [];
   const d: PredeployDeps = {
     env: over.env ?? ENV,
     sendTestAlert: over.sendTestAlert ?? false,
-    run: (name) =>
-      Promise.resolve(
-        name === "db-verify"
-          ? (over.dbVerify ?? { kind: "exited", code: 0, stdout: "migrations ok\nVERIFIED\n" })
-          : (over.preflight ?? { kind: "exited", code: 0, stdout: PREFLIGHT_OK }),
-      ),
+    run: (name, env) => {
+      runs.push({ name, env });
+      return Promise.resolve(
+        name === "db-environment"
+          ? (over.dbEnvironment ?? {
+              kind: "exited",
+              code: 0,
+              stdout: '{"status":"OK","database":"flexibx_staging","environment":"staging"}\n',
+            })
+          : name === "db-verify"
+            ? (over.dbVerify ?? { kind: "exited", code: 0, stdout: "migrations ok\nVERIFIED\n" })
+            : (over.preflight ?? { kind: "exited", code: 0, stdout: PREFLIGHT_OK }),
+      );
+    },
     fetch: (url, init) => {
       calls.push({
         url,
@@ -78,7 +88,7 @@ function deps(
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     },
   };
-  return { d, calls };
+  return { d, calls, runs };
 }
 
 const byName = (results: readonly GateResult[], name: string) =>
@@ -145,6 +155,39 @@ describe("staging pre-rollout gate", () => {
       detail: "psql not installed",
     });
     expect(summarize(missing.results).verdict).toBe("INCOMPLETE");
+  });
+
+  it("fails on a database that is not marked staging, naming what it is", async () => {
+    const { d, runs } = deps({
+      dbEnvironment: {
+        kind: "exited",
+        code: 1,
+        stdout: '{"status":"FAILED","why":"database flexibx is production, expected staging"}\n',
+      },
+    });
+    const summary = await runPredeployGate(d);
+    expect(byName(summary.results, "database_environment")).toMatchObject({
+      status: "fail",
+      detail: "database flexibx is production, expected staging",
+    });
+    expect(summary.verdict).toBe("FAILED");
+    expect(runs.find((entry) => entry.name === "db-environment")?.env.WANTED).toBe("staging");
+    const unmarked = await runPredeployGate(
+      deps({ dbEnvironment: { kind: "exited", code: 1, stdout: "not json" } }).d,
+    );
+    expect(byName(unmarked.results, "database_environment")?.detail).toBe(
+      "marker check failed (exit 1)",
+    );
+    const noPsql = await runPredeployGate(
+      deps({ dbEnvironment: { kind: "missing", what: "psql" } }).d,
+    );
+    expect(byName(noPsql.results, "database_environment")?.status).toBe("not_run");
+  });
+
+  it("checks the environment given in STAGING_CHECK_ENVIRONMENT", async () => {
+    const { d, runs } = deps({ env: { ...ENV, STAGING_CHECK_ENVIRONMENT: "development" } });
+    await runPredeployGate(d);
+    expect(runs.find((entry) => entry.name === "db-environment")?.env.WANTED).toBe("development");
   });
 
   it("reports each preflight failure, and a preflight that printed nothing", async () => {

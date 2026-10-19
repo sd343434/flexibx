@@ -1,4 +1,4 @@
-# Creator Studio — staging validation plan (Passes 10–14)
+# Creator Studio — staging validation plan (Passes 10–15)
 
 Status on 2026-10-19:
 
@@ -13,8 +13,12 @@ Status on 2026-10-19:
   (were 2.62 / 2.06 GB); the cycle re-run on them with a resumed multipart upload, burned
   subtitles, a lease left to expire on its own, a worker outage alerted while the alert
   destination refused, and measured backup / restore times.
+- **Pass 15 (§ 12):** a database environment marker that `migrate` and the gate assert;
+  digest-pinned base images and a required release tag; AWS infrastructure as Terraform
+  (`deploy/staging/aws`, validated, not applied); a scheduling defect found on the stack
+  and fixed (internal endpoints refused a steady scheduler for 10 of every 22 minutes).
 - **Not executed on hosted infrastructure:** no staging environment, bucket or
-  credentials exist yet (checked again in Pass 14, § 11). Nothing below has been verified
+  credentials exist yet (checked again in Pass 15). Nothing below has been verified
   there.
 
 The owner must approve and provide every resource in § 1 before the trial. No paid
@@ -103,12 +107,19 @@ On a Docker host (any container platform runs the same five services):
 `deploy/staging/compose.yaml`, environment in `deploy/staging/staging.env` (from
 `staging.env.example`; git-ignored, kept in the host's secret store).
 
+0. **Release tag:** `export FLEXIBX_TAG=<commit sha>` — required (the Compose file refuses
+   to render without it); an immutable tag, never `latest` or `staging`. On AWS the image
+   repositories reject a re-used tag (`deploy/staging/aws`).
 1. **Images**, all from one commit: `docker compose -f deploy/staging/compose.yaml build`
-   (app `runner`, `worker`, `ops`). The worker build fails by itself unless its FFmpeg
+   (app `runner`, `worker`, `ops`; base images pinned by digest, the commit in the
+   `org.opencontainers.image.revision` label). The worker build fails by itself unless its FFmpeg
    passes `scripts/creator/check-media-tools.sh` (version 6 or later, libx264, aac, libopus,
    libass, ffprobe, the subtitle font, a real smoke encode).
 2. **Database:**
-   - confirm the target is the staging database, never production;
+   - once per database, an administrator marks it (ops image):
+     `scripts/ops/db-environment.sh mark staging --confirm-database <name>`. The
+     `migrate` job and the gate refuse an unmarked or differently marked database; a
+     restored copy is unmarked until marked on purpose;
    - take a backup: `docker compose … run --rm backup` (copy it off the host);
    - `docker compose … run --rm migrate` (`prisma migrate deploy`, as the unprivileged
      user);
@@ -120,7 +131,7 @@ On a Docker host (any container platform runs the same five services):
    the worker image). It must print `STAGING CHECK PASSED`:
    - environment: required variables set and the app's own startup validation (names,
      never values);
-   - database (as above); media tools, scratch space, private bucket, signed links,
+   - database: marked `staging` (`database_environment`), then as above; media tools, scratch space, private bucket, signed links,
      multipart, CORS and lifecycle (`creator:preflight`, probe objects only, never a
      provider);
    - app readiness; ops-status: worker heartbeat, scheduler, stuck jobs, deletions,
@@ -360,3 +371,56 @@ to arrive raises it at the next tick, because the heartbeat is already stale.
 1.1 s, verify 1.1 s (`VERIFIED`; same 132 triggers, 300 indexes, 356 constraints); drill
 PASSED. Throughput on a 1.08 GB synthetic database: dump 32 s, restore 20.5 s. RTO / RPO:
 `BACKUP_RESTORE.md` § 8.
+
+## 12. Pass 15: hardening the path, a scheduling defect fixed, the cycle again
+
+Local again (2026-10-19, one machine, Compose with the local override, synthetic media,
+declared simulator, no paid resource). **Not hosted:** no credentials or approved
+resources exist (checked: the session's AWS variables are proxy placeholders, gcloud has
+no account; nothing was created in any account).
+
+**Deployment path:**
+
+- `scripts/ops/db-environment.sh` marks a database (`flexibx-environment=staging`, its
+  comment) and asserts it. The `migrate` job asserts before migrating; the gate has a new
+  first database check, `database_environment`. Verified: migrate on an unmarked database
+  → exit 1 (`database … is unmarked, expected staging`); gate FAILED on the same; after
+  marking, migrate applied all 37 migrations in 3.2 s. pg_dump does not keep the marker, so
+  a restored copy must be marked deliberately (verified).
+- Base images pinned by digest; `FLEXIBX_TAG` required (Compose refuses to render
+  without it); the commit as an OCI label on every runtime image; `deploy/` kept out of
+  the images.
+- `deploy/staging/aws` (Terraform): host, RDS PostgreSQL 16 with 7-day PITR, private
+  bucket, ECR (immutable tags), Secrets Manager container, scoped IAM. `terraform validate`
+  passes (provider 6.69.1); never applied. Owner inputs: its README.
+
+**Defect found and fixed — internal endpoints refused a steady scheduler.** On this stack
+the scheduler's tick answered 429 for 10-minute stretches (15:13–15:21, 15:34–15:40),
+so no recovery and no alerts ran; a worker outage with a job waiting went unalerted.
+Cause: Better Auth's limiter resets a count only after `window` seconds without an
+allowed request, so any caller steadier than one call per window gets `max` calls and is
+then refused until it pauses (not a rolling window). It hit `automation-tick`,
+`video-retention` and `ops-status` (an uptime monitor polling every minute would have been
+refused for 10 minutes every hour). Fix: those three buckets count in fixed windows (two
+alternating keys by window parity — `fixedWindowSlot`), same approved limits, two stored
+rows per bucket. Integration tests (real limiter and database, faked clock): 45 minutes of
+once-a-minute calls never refused, still 12 per window, Better Auth's rule documented on
+an unchanged bucket; both mutants killed. Live after redeploy: 30 consecutive ticks, all 200.
+
+**Cycle on the Pass 15 images:**
+
+| Step                                          | Result                                                                                                                                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accounts                                      | Two accounts through the app container's pages                                                                                                                                     |
+| Multipart 47.7 MiB, 3 parts                   | Part 2 cut off; completing refused (`CONFLICT`); storage reported `[1]`; resumed; size, file and per-part SHA-256 verified by the worker                                           |
+| Analysis, transcript, export                  | 1280×720 H.264 + audio, 12 s; declared simulator; 720×1280 H.264 + AAC, 8.000 s, subtitles burned (10 552 vs 39 pixels)                                                            |
+| Access                                        | Owner 303 → 200; bare object, tampered signature, tampered expiry 403; other account 404; no session 401; upload PUT 404 for both                                                  |
+| `docker stop` mid-render                      | 446 ms, exit 0; handed back (attempt not counted, hold released); finished after restart                                                                                           |
+| SIGKILL, lease left alone                     | Lease ended 15:06:14; alert `creator_jobs_lease_expired` delivered 15:22:11; takeover (attempt 2); next tick `ok`                                                                  |
+| Outage + refusing destination (after the fix) | Stale-worker alert refused (500) at 16:11:40, tick unaffected, `alert_delivery_failed`; delivered at 16:13:40 after recovery; waiting export done 8 s after the worker returned    |
+| Charges                                       | 5 exports → 5 captures, 2 releases (the handed-back and the killed attempts): none twice                                                                                           |
+| Deletion                                      | 6 objects → bucket empty, no rows left, audit kept                                                                                                                                 |
+| Restart, gate                                 | Recreated with `CREATOR_AI_PROVIDER=disabled`: healthy in 7 s; `STAGING CHECK PASSED`, 34 checks, test alert delivered. With the simulator: FAILED on `preflight.ai_provider` only |
+| Logs                                          | App, worker, scheduler, alerts, gate output: nothing sensitive                                                                                                                     |
+
+Backup / restore at 1 GB on the real schema: BACKUP_RESTORE.md § 9.

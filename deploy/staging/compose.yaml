@@ -8,6 +8,7 @@
 #
 #   cp deploy/staging/staging.env.example deploy/staging/staging.env   # fill in; never commit
 #   docker compose -f deploy/staging/compose.yaml build
+#   export FLEXIBX_TAG=<release>   # required: an immutable tag (e.g. the commit), never "latest"
 #   docker compose -f deploy/staging/compose.yaml run --rm migrate      # once per release
 #   docker compose -f deploy/staging/compose.yaml up -d app worker scheduler
 #   docker compose -f deploy/staging/compose.yaml run --rm check        # must say PASSED
@@ -29,7 +30,7 @@ x-build: &build
 services:
   app:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/app:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/app:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: runner }
     restart: unless-stopped
     ports:
@@ -39,7 +40,7 @@ services:
 
   worker:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: worker }
     restart: unless-stopped
     # SIGTERM reaches node (PID 1): the job in progress is handed back within seconds.
@@ -53,7 +54,7 @@ services:
 
   scheduler:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: ops }
     restart: unless-stopped
     environment:
@@ -66,15 +67,18 @@ services:
   # ── One-off jobs (`docker compose run --rm <job>`) ──────────────────────────────
   migrate:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     environment:
       COREPACK_ENABLE_NETWORK: "0"
-    command: ["pnpm", "exec", "prisma", "migrate", "deploy"]
+    # Refuses unless the database is marked staging (scripts/ops/db-environment.sh).
+    entrypoint: ["bash", "-c"]
+    command:
+      ["scripts/ops/db-environment.sh assert staging && exec pnpm exec prisma migrate deploy"]
 
   check:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     environment:
       COREPACK_ENABLE_NETWORK: "0"
@@ -86,7 +90,7 @@ services:
 
   backup:
     <<: *env
-    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:-staging}
+    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     entrypoint: ["bash", "-c"]
     # Writes the dump, its manifest and checksums to the `backups` volume; copy them off

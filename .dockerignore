@@ -22,3 +22,5 @@ tests
 playwright.config.ts
 # Written by `next dev` for coding agents; not part of any image.
 AGENTS.md
+# Deployment definitions (Compose, Terraform) are used from the checkout, never inside an image.
+deploy

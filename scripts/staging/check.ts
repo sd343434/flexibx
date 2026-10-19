@@ -50,6 +50,11 @@ async function main(): Promise<number> {
     env: process.env,
     sendTestAlert: process.argv.includes("--send-test-alert"),
     run: (name, env) => {
+      if (name === "db-environment") {
+        if (!installed("psql")) return Promise.resolve({ kind: "missing", what: "psql" });
+        const { WANTED: wanted = "staging", ...rest } = env;
+        return runScript("bash", ["scripts/ops/db-environment.sh", "assert", wanted], rest);
+      }
       if (name === "db-verify") {
         if (!installed("psql")) return Promise.resolve({ kind: "missing", what: "psql" });
         return runScript("bash", ["scripts/ops/db-verify.sh", "--no-row-counts"], env);

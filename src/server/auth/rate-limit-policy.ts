@@ -28,6 +28,15 @@ export interface RateLimitRule {
   readonly window: number;
   /** Requests allowed per window. */
   readonly max: number;
+  /**
+   * Count in fixed windows (Pass 15) instead of Better Auth's own rule, under which the
+   * count resets only after `window` seconds WITHOUT an allowed request: a caller steadier
+   * than one call per window then gets `max` calls and is refused until it pauses for a
+   * whole window (measured: a once-a-minute scheduler lost the tick for 10 of every
+   * 22 minutes). For buckets called continuously by schedulers and monitors. See
+   * fixedWindowSlot.
+   */
+  readonly fixedWindow?: true;
 }
 
 /**
@@ -65,7 +74,8 @@ export interface RateLimitRule {
  * (POST /api/internal/automation-tick, recovery of interrupted tasks, scheduled planning,
  * advancing runs):
  * - automation-tick: 12 per 10 min, one shared subject for all callers holding the bearer
- *   secret (room for a once-a-minute schedule plus a retry). Consumed only after the
+ *   secret (room for a once-a-minute schedule plus a retry). Counted in fixed 10-minute
+ *   windows (Pass 15, `fixedWindow`), so a steady schedule is never refused. Consumed only after the
  *   secret is verified, as for video-retention.
  *
  * STATUS: PROPOSED — PENDING HUMAN DECISION (Phase C). Two-factor authentication:
@@ -93,11 +103,11 @@ export const RATE_LIMIT_RULES = {
   "invitation-create": { scope: "subject", window: 3600, max: 50 },
   "ai-generate": { scope: "subject", window: 600, max: 20 },
   "ai-generate-workspace": { scope: "subject", window: 3600, max: 100 },
-  "video-retention": { scope: "subject", window: 600, max: 12 },
-  "automation-tick": { scope: "subject", window: 600, max: 12 },
+  "video-retention": { scope: "subject", window: 600, max: 12, fixedWindow: true },
+  "automation-tick": { scope: "subject", window: 600, max: 12, fixedWindow: true },
   "two-factor-verify": { scope: "ip", window: 900, max: 20 },
   "two-factor-manage": { scope: "subject", window: 900, max: 10 },
-  "ops-status": { scope: "subject", window: 600, max: 60 },
+  "ops-status": { scope: "subject", window: 600, max: 60, fixedWindow: true },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMIT_RULES;
@@ -112,6 +122,18 @@ export const RATE_LIMIT_CHECKPOINT_PREFIX = "/flexibx/rate-limit";
  * bucket: HMAC-SHA256 keyed with AUTH_SECRET, so a leaked `rate_limits` table cannot be
  * reversed by hashing a list of known emails.
  */
+/**
+ * The subject suffix of a fixed-window bucket: the parity of the current window. Two keys
+ * alternate, and a key is used again only two windows later, after at least one full
+ * window without a request, so Better Auth's reset rule (`now - lastRequest >= window`)
+ * always starts it from zero: at most `max` requests per fixed window, and two stored
+ * rows per bucket instead of one per window. Empty for every other bucket.
+ */
+export function fixedWindowSlot(rule: RateLimitRule, nowMs: number): string {
+  if (rule.fixedWindow !== true) return "";
+  return `#w${String(Math.floor(nowMs / (rule.window * 1000)) % 2)}`;
+}
+
 export function subjectKey(secret: string, bucket: RateLimitBucket, subject: string): string {
   return createHmac("sha256", secret)
     .update(`${bucket}:${subject.trim().toLowerCase()}`)

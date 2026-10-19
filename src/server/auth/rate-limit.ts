@@ -3,6 +3,7 @@ import { AppError } from "../errors/app-error";
 import type { Auth } from "./auth-config";
 import {
   checkpointPath,
+  fixedWindowSlot,
   RATE_LIMIT_RULES,
   subjectKey,
   type RateLimitBucket,
@@ -59,7 +60,9 @@ export function createRateLimiter(auth: Auth, config: RateLimiterConfig): RateLi
     }
     const path = checkpointPath(
       bucket,
-      subject === undefined ? undefined : subjectKey(config.secret, bucket, subject),
+      subject === undefined
+        ? undefined
+        : subjectKey(config.secret, bucket, subject + fixedWindowSlot(rule, Date.now())),
     );
     const response = await auth.handler(
       new Request(new URL(`/api/auth${path}`, config.baseURL), {
