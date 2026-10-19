@@ -22,5 +22,8 @@ tests
 playwright.config.ts
 # Written by `next dev` for coding agents; not part of any image.
 AGENTS.md
+CLAUDE.md
+# Development-process state (phase protocol), read by no image.
+.phase-status.json
 # Deployment definitions (Compose, Terraform) are used from the checkout, never inside an image.
 deploy

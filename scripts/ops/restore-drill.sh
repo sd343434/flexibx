@@ -19,6 +19,13 @@
 #   6. an index dropped after the restore fails verification (schema objects)
 #   7. a guard trigger disabled in the SOURCE survives backup and restore and fails
 #      verification (integrity.sql guard_triggers_inactive)
+#   8. a missing manifest, or a manifest without its checksum, fails verification
+#   9. a restore without --confirm-target, or naming another database, is refused
+#  10. a restore that fails part-way (a cut-off dump) rolls back completely: the target
+#      stays empty, and the full dump then restores and verifies
+#  11. a backup that fails (unreachable database) leaves no partial file behind
+#  12. a restored copy carries no environment marker: refused as "staging" until it is
+#      marked on purpose (db-environment.sh), then accepted (Pass 16)
 # Prints step names, results and check names only: no URL, password or row data.
 set -uo pipefail
 
@@ -51,7 +58,7 @@ if [[ "$host" != localhost && "$host" != 127.0.0.1 && "$host" != "::1" && "${DRI
   exit 2
 fi
 
-DBS=(flexibx_drill_src flexibx_drill_restore flexibx_drill_refused flexibx_drill_guard)
+DBS=(flexibx_drill_src flexibx_drill_restore flexibx_drill_refused flexibx_drill_guard flexibx_drill_cut)
 work="$(mktemp -d)"
 chmod 700 "$work"
 admin() { # admin <sql>: one statement on the maintenance database
@@ -143,6 +150,58 @@ VERIFY_DATABASE_URL="$(url_for flexibx_drill_guard)" "$here/db-verify.sh" "$(ls 
 expect "verification of a restore without the guard fails" fail $?
 grep -q $'^guard_triggers_inactive\t1$' "$work/verify-guard.log"
 expect "…and names guard_triggers_inactive" ok $?
+
+echo "== 8. missing manifest or manifest checksum"
+VERIFY_DATABASE_URL="$(url_for flexibx_drill_restore)" "$here/db-verify.sh" "$work/absent.counts.tsv" \
+  >"$work/verify-absent.log" 2>&1
+expect "verification without the manifest fails" fail $?
+cp "$manifest" "$work/unsigned.counts.tsv"
+VERIFY_DATABASE_URL="$(url_for flexibx_drill_restore)" "$here/db-verify.sh" "$work/unsigned.counts.tsv" \
+  >"$work/verify-unsigned.log" 2>&1
+expect "verification of a manifest without its checksum fails" fail $?
+
+echo "== 9. restore confirmation"
+fresh flexibx_drill_cut || exit 2
+RESTORE_DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-restore.sh" "$dump" >/dev/null 2>&1
+expect "restore without --confirm-target is refused" fail $?
+RESTORE_DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-restore.sh" "$dump" \
+  --confirm-target flexibx_drill_restore >/dev/null 2>&1
+expect "restore naming another database is refused" fail $?
+
+echo "== 10. restore that fails part-way"
+# A dump cut off after its table of contents (as by an interrupted copy), with a checksum
+# that matches it, so only pg_restore itself can notice: it must roll everything back.
+head -c "$(($(stat -c%s "$dump") * 2 / 3))" "$dump" >"$work/cut.dump"
+sha256sum "$work/cut.dump" | cut -d' ' -f1 >"$work/cut.dump.sha256"
+RESTORE_DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-restore.sh" "$work/cut.dump" \
+  --confirm-target flexibx_drill_cut >/dev/null 2>&1
+expect "restore of a cut-off dump fails" fail $?
+tables="$(on flexibx_drill_cut "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")"
+[[ "$tables" == 0 ]]
+expect "…and left the target empty (single transaction)" ok $?
+RESTORE_DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-restore.sh" "$dump" \
+  --confirm-target flexibx_drill_cut >/dev/null 2>&1
+expect "the full dump then restores into the same target" ok $?
+VERIFY_DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-verify.sh" "$manifest" >"$work/verify-cut.log" 2>&1
+expect "…and verifies" ok $?
+
+echo "== 11. failed backup leaves nothing behind"
+BACKUP_DATABASE_URL="$(url_for flexibx_drill_absent_database)" "$here/db-backup.sh" "$work/failed" \
+  >/dev/null 2>&1
+expect "backup of a database that does not exist fails" fail $?
+[[ -z "$(ls -A "$work/failed" 2>/dev/null)" ]]
+expect "…and left no partial file" ok $?
+
+echo "== 12. environment marker on a restored copy"
+DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-environment.sh" assert staging >/dev/null 2>&1
+expect "a restored copy is not accepted as staging" fail $?
+DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-environment.sh" mark staging \
+  --confirm-database flexibx_drill_cut >/dev/null 2>&1
+expect "it is marked on purpose (name repeated)" ok $?
+DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-environment.sh" assert staging >/dev/null 2>&1
+expect "…and then accepted" ok $?
+DATABASE_URL="$(url_for flexibx_drill_cut)" "$here/db-environment.sh" assert production >/dev/null 2>&1
+expect "…but never as another environment" fail $?
 
 if [[ $failures -gt 0 ]]; then
   echo "{\"status\":\"DRILL FAILED\",\"failures\":$failures}"

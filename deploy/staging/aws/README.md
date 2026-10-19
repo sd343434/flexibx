@@ -1,7 +1,9 @@
-# Flexibx staging on AWS — infrastructure (Pass 15)
+# Flexibx staging on AWS — infrastructure (Passes 15–16)
 
 **Not applied.** Validated only (`terraform fmt -check`, `terraform validate` with the AWS
-provider 6.69.1; no credentials, no plan). Applying it creates **paid** resources in the
+provider 6.69.1, and `terraform test` against a **mocked** provider — `tests/`; no
+credentials, no plan against AWS). Passing these proves the configuration is consistent
+and that the properties below hold in it — not that it deploys or runs on AWS. Applying it creates **paid** resources in the
 owner's account: only the owner runs it, after the decisions below.
 
 ## What it creates
@@ -21,7 +23,8 @@ few dollars at staging volumes. No load balancer, NAT gateway or Multi-AZ.
 
 ## Decisions and inputs the owner provides
 
-1. **Region** (`region`, no default): decision D-1 (data residency) decides it.
+1. **Region** (`region`, no default): decision D-1 (data residency,
+   PHASE_D_1_INFRASTRUCTURE_DECISIONS.md) decides it; see RELEASE_READINESS_DECISIONS.md R-2/R-3.
 2. **Domain** (`app_domain`) and the DNS A record to the output `public_ip`.
 3. AWS credentials of an account the owner controls, and a private Terraform state
    backend (S3 bucket with versioning) for a shared setup.
@@ -52,3 +55,31 @@ migration: restore the pre-deploy backup into a **new** database (BACKUP_RESTORE
 it, switch `DATABASE_URL`. Never restore over the live database.
 
 Teardown: `deletion_protection` must be switched off first; a final snapshot is kept.
+
+## Audit (Pass 16)
+
+Reviewed file by file against least privilege, encryption, exposure, recovery and
+pinning. Changes made, each covered by `tests/staging.tftest.hcl` (8 runs, all passing;
+mutants `publicly_accessible = true` and `delete_automated_backups = true` are caught):
+
+| Area           | Finding                                                                  | Change                                                                  |
+| -------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| S3             | No TLS-only policy: plain-HTTP requests were not refused                 | Bucket policy denies every request with `aws:SecureTransport = false`   |
+| IAM (storage)  | Object rights on the whole bucket                                        | Limited to `workspaces/*` (every key the app writes; `storage.ts`)      |
+| RDS            | Automated backups deleted with the instance                              | `delete_automated_backups = false` (PITR outlives an accidental delete) |
+| RDS            | `db_backup_retention_days = 0` would silently disable PITR               | Validation: 1–35 days                                                   |
+| EC2            | IMDSv2 required, but containers could reach the metadata service (hop 2) | `http_put_response_hop_limit = 1`: the host role stays with the host    |
+| Host / Compose | Container logs unbounded (disk fills on a long-running host)             | Docker daemon and Compose: json-file, 10 MB × 5 per service             |
+
+Checked and unchanged: RDS private (no public access, security group from the host only,
+TLS required — RDS default `rds.force_ssl = 1` for PostgreSQL 15+, and `sslmode=require` in the URL), storage encrypted (RDS, EBS root, S3 SSE), master password
+managed by RDS in Secrets Manager (never in Terraform state), deletion protection and a
+final snapshot, ECR immutable tags and scan on push, host reached through SSM only (no SSH,
+no inbound except 80/443 for Caddy, which renews its certificates itself), versions constrained in `versions.tf` (AWS provider `~> 6.69`, Terraform `>= 1.6`; tested with 6.69.1 and 1.13.4) — **not exact pins**: no `.terraform.lock.hcl` is committed yet because the registry is not reachable from this environment; commit the one the first `terraform init` writes, which pins the provider version and its checksums, no secret created by Terraform.
+
+**Owner decisions left open** (RELEASE_READINESS_DECISIONS.md): region and account (R-2),
+cost (R-3), ECR lifecycle (keep the last N tags), CloudWatch log shipping and retention
+(R-7), RDS CloudWatch alarms and an SNS destination, storage autoscaling ceiling,
+backup / maintenance windows, rotation of the storage user's access key (or move the app
+to the host role), the default-VPC assumption, and unrestricted egress from the host
+(needed for image pulls and the mail / AI providers; narrowing it needs a NAT or proxy).

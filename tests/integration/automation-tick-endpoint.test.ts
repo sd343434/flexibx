@@ -1,6 +1,7 @@
 // The scheduler-facing endpoint POST /api/internal/automation-tick: disabled without a
 // secret, indistinguishable 404 for a wrong token, one real tick with the right one
-// (counts only in the response), and 12 authorized requests per 10 minutes.
+// (counts only in the response), 12 authorized requests per 10 minutes, and a steady
+// once-a-minute scheduler never refused.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceRole } from "@/generated/prisma/enums";
@@ -109,6 +110,25 @@ describe("POST /api/internal/automation-tick", () => {
     // The limited call ran nothing.
     expect(await system.agentRun.count({ where: { workspaceId: ctx.workspaceId } })).toBe(0);
   });
+});
+
+describe("a steady scheduler at the route (Pass 16)", () => {
+  it("is never refused when it calls once a minute for 45 minutes", async () => {
+    vi.stubEnv("AUTOMATION_CRON_SECRET", SECRET);
+    // Only Date is faked (the limiter's clock and the tick's); timers and I/O stay real.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.UTC(2026, 9, 19, 12, 3, 30);
+      const statuses: number[] = [];
+      for (let minute = 0; minute < 45; minute += 1) {
+        vi.setSystemTime(start + minute * 60_000);
+        statuses.push((await post(AUTH)).status);
+      }
+      expect(statuses.filter((status) => status !== 200)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 120_000);
 });
 
 describe("one scheduler tick when a whole phase fails", () => {

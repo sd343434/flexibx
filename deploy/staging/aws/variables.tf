@@ -41,7 +41,11 @@ variable "db_storage_gb" {
 }
 
 variable "db_backup_retention_days" {
-  description = "Automated backups; > 0 also enables point-in-time recovery."
+  description = "Automated backups and point-in-time recovery window (days). 0 would turn both off, so it is refused."
   type        = number
   default     = 7
+  validation {
+    condition     = var.db_backup_retention_days >= 1 && var.db_backup_retention_days <= 35
+    error_message = "db_backup_retention_days must be 1–35: 0 would disable automated backups and PITR."
+  }
 }

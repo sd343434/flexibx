@@ -555,6 +555,29 @@ describe("tick heartbeat and alerts", () => {
   });
 });
 
+/**
+ * Runs `call` with the application's database clients pointed at a closed port (the
+ * process-wide singletons are set aside and put back afterwards), as when PostgreSQL is down.
+ */
+async function withUnreachableDatabase<T>(call: () => Promise<T>): Promise<T> {
+  const holder = globalThis as typeof globalThis & { __flexibxDb?: Record<string, unknown> };
+  const saved = { ...holder.__flexibxDb };
+  for (const key of Object.keys(holder.__flexibxDb ?? {})) delete holder.__flexibxDb?.[key];
+  const original = process.env.DATABASE_URL;
+  vi.stubEnv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/flexibx_down_test");
+  vi.resetModules();
+  try {
+    return await call();
+  } finally {
+    const opened = holder.__flexibxDb?.base as { $disconnect?: () => Promise<void> } | undefined;
+    await opened?.$disconnect?.().catch(() => undefined);
+    for (const key of Object.keys(holder.__flexibxDb ?? {})) delete holder.__flexibxDb?.[key];
+    Object.assign(holder.__flexibxDb ?? {}, saved);
+    vi.stubEnv("DATABASE_URL", original ?? "");
+    vi.resetModules();
+  }
+}
+
 describe("GET /api/internal/ops-status", () => {
   async function get(authorization?: string) {
     vi.resetModules();
@@ -599,6 +622,42 @@ describe("GET /api/internal/ops-status", () => {
     // A wrong token is still a 404, not a 429 (rejected calls never reach the limiter).
     expect((await call("Bearer wrong-token-0123456789abcdef0123456789")).status).toBe(404);
   }, 60_000);
+
+  it("is never refused for an uptime monitor polling once a minute (75 minutes)", async () => {
+    vi.stubEnv("OPS_STATUS_SECRET", SECRET);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.UTC(2026, 9, 19, 12, 7, 10);
+      const statuses: number[] = [];
+      // Longer than its quota (60) in calls: a sliding count would refuse from call 61.
+      for (let minute = 0; minute < 75; minute += 1) {
+        vi.setSystemTime(start + minute * 60_000);
+        statuses.push((await get(`Bearer ${SECRET}`)).status);
+      }
+      expect(statuses.filter((status) => status === 429)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 120_000);
+
+  it("never answers ok when the database cannot be reached, nor does readiness", async () => {
+    vi.stubEnv("OPS_STATUS_SECRET", SECRET);
+    const [unreachable, readiness] = await withUnreachableDatabase(async () => {
+      const health = await import("@/app/api/health/route");
+      return [
+        await get(`Bearer ${SECRET}`),
+        await health.GET(new Request("http://localhost:3000/api/health")),
+      ] as const;
+    });
+    expect(readiness.status).toBe(503);
+    expect(await readiness.json()).toMatchObject({ status: "unavailable", checks: { db: "down" } });
+    expect(unreachable.status).toBe(500);
+    const body = await unreachable.text();
+    expect(body).not.toMatch(/"status":"ok"|checks/);
+    expect(body).not.toContain("127.0.0.1");
+    // The database is back: so is the answer.
+    expect([200, 503]).toContain((await get(`Bearer ${SECRET}`)).status);
+  });
 
   it("answers 503 when something is critical and 200 when healthy", async () => {
     vi.stubEnv("OPS_STATUS_SECRET", SECRET);

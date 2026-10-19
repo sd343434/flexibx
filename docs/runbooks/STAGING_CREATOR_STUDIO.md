@@ -424,3 +424,48 @@ an unchanged bucket; both mutants killed. Live after redeploy: 30 consecutive ti
 | Logs                                          | App, worker, scheduler, alerts, gate output: nothing sensitive                                                                                                                     |
 
 Backup / restore at 1 GB on the real schema: BACKUP_RESTORE.md § 9.
+
+## 13. Pass 16: release hardening, the cycle again, a backup-job defect fixed
+
+Local again (2026-10-19, one machine, Compose with the local override, SeaweedFS as the
+bucket, synthetic media, **declared simulator** for the transcript; no paid resource).
+**Not hosted:** no credentials or approved resources exist; nothing was created. What
+the owner must decide first: RELEASE_READINESS_DECISIONS.md. Restoring the service after
+an incident: SERVICE_RESTORE.md.
+
+**Defect found and fixed — the Compose `backup` job could not write its volume.** On a
+fresh host the `backups` named volume is created owned by root, and the ops image runs as
+`node`: `mkdir: cannot create directory '/backups/staging': Permission denied`, exit 1.
+Pass 15 had measured backups by running the script directly, so the job itself had never
+run. Fix: the ops image creates `/backups` owned by `node`, mode 700 (a new named volume
+takes the directory's owner); the ops-image self-check now fails when `/backups` is not
+writable (it failed on the old image, passes on the new one). After the fix the job wrote
+the dump, manifest and checksums, files mode 600, directories 700.
+
+**Hardening in this pass:** container logs rotate (json-file, 10 MB × 5 per service, in
+Compose and in the host's Docker daemon); the worker and ops images no longer carry the
+development-process state file (`.phase-status.json`) — the ops-image self-check refuses
+`.git`, `deploy`, agent state and Terraform state; the Terraform audit
+(deploy/staging/aws/README.md § Audit).
+
+**Cycle on the Pass 16 images** (app 426 MB, worker 1.22 GB, ops 1.08 GB; app runs as
+`flexibx`, worker and ops as `node`; label `revision` set):
+
+| #   | Step                                | Result                                                                                                                                                                                                                                           |
+| --- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1–2 | Images                              | Built; non-root; no `.env`, credentials, `.git`, `deploy/` or agent state in them (self-check + listing); media tools check OK                                                                                                                   |
+| 3   | Migrate on an unmarked database     | Refused, exit 1. Compose also refuses to render without `FLEXIBX_TAG`                                                                                                                                                                            |
+| 4   | Mark, migrate                       | `MARKED`; 37 migrations in 4.4 s                                                                                                                                                                                                                 |
+| 5   | App, worker, scheduler, gate        | App healthy in 6 s; gate FAILED only on `preflight.ai_provider` while the simulator was configured (by design)                                                                                                                                   |
+| 6   | Multipart upload 154 MiB, 10 parts  | Part 2 cut off; completing refused (`CONFLICT`); storage reported `[1]`; parts 2–10 resumed; size and SHA-256 of the file and of every part verified by the worker (VERIFIED in 5 s)                                                             |
+| 7   | Transcript, export                  | Transcript from the **simulator** (stored `simulated = true`); export 720×1280 H.264 + AAC 48 kHz, 8.000 s, subtitles burned (17 547 bright pixels in the subtitle band)                                                                         |
+| 8   | Access and signed links             | Owner 303 → signed link 200; other account 404; no session 401; unsigned object, tampered signature, same signature on another key, and the link after its 120 s expiry: all 403                                                                 |
+| 9   | SIGKILL mid-render, no restart      | Lease ended on its own (2 min); takeover after the worker returned (attempt 2); export READY; one hold captured for that step — the ledger moved by exactly the two exports' price                                                               |
+| 10  | Outage + refusing alert destination | ~14 min without a worker, one export waiting: `creator_worker_last_seen_age_seconds` alerts offered and refused (500), `alert_delivery_failed` raised; destination back → both delivered (200); worker back → both exports READY; next tick `ok` |
+| 11  | Project deletion                    | 4 objects → bucket empty; no source, export or transcript rows left; audit (`project_created`, `deletion_requested`, `purged`) and the ledger kept                                                                                               |
+| 12  | Backup → restore → verify           | `backup` job (after the fix) 0.76 s; restore into a **separate** database 1.1 s; `VERIFIED` 1.2 s (77 tables, 502 schema objects, 37 migrations); migrate refused on the unmarked copy, accepted after marking; same counts as the source        |
+| 13  | Logs                                | App, worker, scheduler, alerts, gate and cycle output: no secret, signed URL, storage key, e-mail or customer text; no error-level line. Scheduler: 27 ticks, all 200, none 429                                                                  |
+| —   | Final gate                          | Recreated with `CREATOR_AI_PROVIDER=disabled`: `STAGING CHECK PASSED`, 34 checks, 0 failed, 0 not run, test alert delivered                                                                                                                      |
+
+Local stack torn down afterwards (containers, volumes, bucket, databases, throwaway role
+and the generated secrets removed).

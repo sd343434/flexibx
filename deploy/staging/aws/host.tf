@@ -18,6 +18,9 @@ resource "aws_instance" "host" {
   metadata_options {
     http_tokens   = "required"
     http_endpoint = "enabled"
+    # One hop: the host itself can read its role (secret, image pulls); containers
+    # behind Docker's bridge cannot, so the application never borrows the host role.
+    http_put_response_hop_limit = 1
   }
   root_block_device {
     volume_size = var.host_disk_gb

@@ -4,6 +4,11 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends docker.io docker-compose-v2 caddy unattended-upgrades
+# Bounded container logs (also set per service in compose.yaml): never fill the disk.
+install -d /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKER'
+{ "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "5" } }
+DOCKER
 systemctl enable --now docker
 # TLS terminates here; the app listens on 127.0.0.1:3000 (compose.yaml).
 cat > /etc/caddy/Caddyfile <<'CADDY'

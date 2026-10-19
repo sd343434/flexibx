@@ -2,13 +2,13 @@
 // bound to the provider and region shown, duplicate requests, the per-workspace limit on
 // running jobs (also under a race), the worker's heartbeat during a long job and its
 // scratch-disk check, alert delivery outcomes in ops-status, logs without customer
-// content, and the read-only retention report.
+// content, the read-only retention report, and a stopped worker as the scheduler sees it.
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CreatorDeps, CreatorLogger } from "@/server/creator/config";
 import { claimNextJob, workOnce } from "@/server/creator/jobs";
@@ -28,6 +28,7 @@ import { retentionReport } from "@/server/creator/retention";
 import { runWorker } from "@/server/creator/worker";
 import { recordAlertDelivery } from "@/server/monitoring/alert-delivery";
 import { collectOpsStatus } from "@/server/monitoring/ops-status";
+import type { TickPhases } from "@/server/orchestration/runtime";
 import { MemoryStorageService } from "@/server/storage/memory-storage";
 import type { TenantContext } from "@/server/tenancy/context";
 
@@ -403,6 +404,72 @@ describe("duplicates, limits and the worker", () => {
     expect(check("creator_worker_disk_low")).toMatchObject({ value: 1, level: "critical" });
     expect(check("creator_worker_last_seen_age_seconds")?.level).toBe("ok");
     expect(check("creator_worker_cleanup_failed")).toMatchObject({ value: 0, level: "ok" });
+  }, 90_000);
+});
+
+describe("a stopped worker, seen from the scheduler (Pass 16)", () => {
+  const idle: TickPhases = {
+    orchestration: () =>
+      Promise.resolve({ recovered: 0, scheduled: 0, skippedNoDelegate: 0, executed: [] }),
+    social: () => Promise.resolve({ published: 0, drafted: 0, sent: 0, stuck: 0 }) as never,
+    credits: () => Promise.resolve(0),
+    video: () => Promise.resolve(0),
+  };
+  const KEY = "ops:creator_worker_last_seen_age_seconds";
+
+  it("work waiting with no worker is alerted; once a worker is back the job runs and it stops", async () => {
+    const ctx = await createTenant(system);
+    const { deps } = harness();
+    await queuedAnalysis(deps, ctx, "Waiting for a worker");
+    const sent: { key: string; severity: string }[] = [];
+    vi.stubEnv("ALERT_WEBHOOK_URL", "https://hooks.example.test/flexibx");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        sent.push(JSON.parse(init.body as string) as never);
+        return Promise.resolve(new Response("ok"));
+      }),
+    );
+    vi.resetModules();
+    try {
+      const runtime = await import("@/server/orchestration/runtime");
+      await runtime.runScheduledAutomationTick(() => new Date(), idle);
+      expect(sent.find((entry) => entry.key === KEY)).toMatchObject({ severity: "warning" });
+
+      // A worker starts: it beats, takes the waiting job and finishes it.
+      const stop = new AbortController();
+      const worker = runWorker(deps, system, {
+        signal: stop.signal,
+        pollMs: 20,
+        heartbeatEveryMs: 50,
+        cleanupEveryMs: 60_000,
+        minFreeBytes: 1,
+      });
+      for (let i = 0; i < 200; i += 1) {
+        const job = await system.creatorJob.findFirstOrThrow({ where: { kind: "ANALYZE" } });
+        if (job.state === "SUCCEEDED") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      stop.abort();
+      expect(await worker).toEqual({ jobs: 1 });
+
+      // The next tick finds a fresh worker: the check is ok and nothing new is raised
+      // (not even counted as suppressed by the throttle).
+      sent.length = 0;
+      await runtime.runScheduledAutomationTick(() => new Date(), idle);
+      expect(sent.map((entry) => entry.key)).not.toContain(KEY);
+      expect(await system.alertThrottle.findUniqueOrThrow({ where: { key: KEY } })).toMatchObject({
+        suppressedCount: 0,
+      });
+      const status = await collectOpsStatus(system, new Date());
+      expect(
+        status.checks.find((entry) => entry.name === "creator_worker_last_seen_age_seconds"),
+      ).toMatchObject({ level: "ok" });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubEnv("ALERT_WEBHOOK_URL", "");
+      vi.resetModules();
+    }
   }, 90_000);
 });
 

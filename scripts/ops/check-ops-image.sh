@@ -3,8 +3,8 @@
 # credentials:
 #   docker run --rm --network none --entrypoint bash -e COREPACK_ENABLE_NETWORK=0 \
 #     flexibx-ops:ci scripts/ops/check-ops-image.sh
-# Checks: non-root user; PostgreSQL client tools are major version 16 (they must match the
-# 16 server); pnpm and the Prisma CLI run offline as that user (migrate and the
+# Checks: non-root user; /backups writable (the backup job's volume); PostgreSQL client
+# tools are major version 16 (they must match the 16 server); pnpm and the Prisma CLI run offline as that user (migrate and the
 # operator CLIs); no environment files or credentials were baked into the image; the ops
 # scripts parse. Never connects to a database.
 set -euo pipefail
@@ -44,7 +44,23 @@ for name in DATABASE_URL BACKUP_DATABASE_URL RESTORE_DATABASE_URL VERIFY_DATABAS
 done
 echo "no environment or credential files"
 
-for script in scripts/ops/db-backup.sh scripts/ops/db-restore.sh scripts/ops/db-verify.sh; do
+# Nothing from the checkout that no job reads: repository history, deployment definitions
+# (Terraform state would hold secrets), agent or development-process state.
+for path in .git deploy .phase-status.json AGENTS.md CLAUDE.md; do
+  [[ ! -e "/app/$path" ]] || fail "/app/$path is in the image"
+done
+leftover="$(find /app -path /app/node_modules -prune -o -type f \
+  \( -name '*.tfstate' -o -name '*.tfstate.*' -o -name '*.tfvars' \) -print 2>/dev/null || true)"
+[[ -z "$leftover" ]] || fail "Terraform state or variables in the image: $leftover"
+echo "no repository, deployment or agent state"
+
+# The Compose `backup` job mounts a named volume at /backups: it inherits this directory's
+# owner, so it must be writable by the job's user.
+[[ -d /backups && -w /backups ]] || fail "/backups is missing or not writable by $(id -un)"
+echo "/backups writable"
+
+for script in scripts/ops/db-backup.sh scripts/ops/db-restore.sh scripts/ops/db-verify.sh \
+  scripts/ops/db-environment.sh; do
   bash -n "$script" || fail "$script does not parse"
 done
 echo "ops image check passed"

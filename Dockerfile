@@ -115,8 +115,12 @@ COPY --from=jobs-deps /deps/ops/node_modules ./node_modules
 # build stage has no `openssl` binary, so the engine fetched at install time is the
 # fallback; this image has OpenSSL 3, so its engine is fetched here, as root, at build time
 # (at run time `node` cannot write to node_modules and `migrate deploy` would fail).
+# /backups belongs to `node`: a new named volume mounted there (Compose `backup` job)
+# takes this owner and mode, so db-backup.sh can write to it (Pass 16: a root-owned volume
+# refused the first backup on a fresh host).
 RUN pnpm exec prisma version >/dev/null \
- && node scripts/docker/job-deps.mjs --verify
+ && node scripts/docker/job-deps.mjs --verify \
+ && install -d -m 700 -o node -g node /backups
 USER node
 CMD ["sh", "-c", "echo 'flexibx-ops: name the command to run' >&2; exit 64"]
 

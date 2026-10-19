@@ -23,13 +23,20 @@ x-env: &env
     - path: staging.env
       required: true
 
+# Container logs rotate (5 × 10 MB per service): a long-running host never fills its disk
+# with logs. The platform's log shipping, if any, reads them before rotation.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
 x-build: &build
   context: ../..
   dockerfile: Dockerfile
 
 services:
   app:
-    <<: *env
+    <<: [*env, *logging]
     image: ${FLEXIBX_REGISTRY:-flexibx}/app:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: runner }
     restart: unless-stopped
@@ -39,7 +46,7 @@ services:
     stop_grace_period: 20s
 
   worker:
-    <<: *env
+    <<: [*env, *logging]
     image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: worker }
     restart: unless-stopped
@@ -53,7 +60,7 @@ services:
       - work:/work
 
   scheduler:
-    <<: *env
+    <<: [*env, *logging]
     image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     build: { <<: *build, target: ops }
     restart: unless-stopped

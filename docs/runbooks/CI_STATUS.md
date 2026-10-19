@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–15)
+# CI status and the GitHub Actions blocker (Passes 10–16)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -79,7 +79,8 @@ page, "Annotations"), not through the API this session can use.
    - _Repository → Settings → Actions → General_: "Allow all actions and reusable
      workflows", or at least the actions this workflow uses: `actions/checkout`,
      `pnpm/action-setup`, `actions/setup-node`, `docker/setup-buildx-action`,
-     `docker/build-push-action`, `actions/upload-artifact` and `gitleaks/gitleaks-action`.
+     `docker/build-push-action`, `actions/upload-artifact`, `gitleaks/gitleaks-action` and
+     (Pass 16) `hashicorp/setup-terraform`.
    - Actions must not be disabled for the repository or the account.
 4. **Account status:** a flagged or restricted account cannot start hosted runners. GitHub
    Support is the only way out (check for e-mails from GitHub).
@@ -127,6 +128,17 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   before (run history), and the same jobs fail identically for every commit. The Docker
   job now also passes the commit as `GIT_SHA` (image label) and checks that the staging
   Compose file refuses to render without a release tag.
+- **Pass 16:** run #57 (push of 5654509, 2026-10-19 16:38 UTC) failed like every run
+  since #43: four jobs, each finished 3 s after creation, 0 billable ms, no runner. The
+  quality job now also runs the staging Terraform's `fmt -check`, `validate` and
+  `terraform test` (mocked AWS provider: no credentials, nothing created); the ops-image
+  self-check also refuses repository, deployment or agent state in the image
+  (`.git`, `deploy`, `.phase-status.json`, `AGENTS.md`, Terraform state). Once runners
+  start, CI covers the images (media tools, non-root, size budgets, ops self-check), the
+  required release tag (Compose refuses to render without `FLEXIBX_TAG`) and the database
+  environment marker (`tests/integration/ops-db-environment.test.ts`,
+  `restore-drill.sh` step 12). The owner decisions are collected in
+  RELEASE_READINESS_DECISIONS.md (R-1).
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

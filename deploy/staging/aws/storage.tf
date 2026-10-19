@@ -14,6 +14,24 @@ resource "aws_s3_bucket_public_access_block" "media" {
   restrict_public_buckets = true
 }
 
+# Requests without TLS are refused, whoever signs them (Pass 16 audit).
+resource "aws_s3_bucket_policy" "media_tls_only" {
+  bucket = aws_s3_bucket.media.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.media.arn, "${aws_s3_bucket.media.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+  # The public-access block must exist first (it does not block a Deny statement).
+  depends_on = [aws_s3_bucket_public_access_block.media]
+}
+
 resource "aws_s3_bucket_ownership_controls" "media" {
   bucket = aws_s3_bucket.media.id
   rule {

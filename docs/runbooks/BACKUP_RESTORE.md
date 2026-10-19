@@ -107,8 +107,12 @@ tooling).
      point the app at it. Try the previous backup (or PITR) and record the failure (§ 6).
    - Interrupted by the operator (Ctrl-C) or the task runner's timeout: same as `FAILED`.
 
-4. Apply migrations that are newer than the dump, if the application version is newer:
-   `DATABASE_URL=… pnpm db:deploy` (forward only, see DEPLOYMENT.md).
+4. Mark the restored database with its environment (it is unmarked after any restore,
+   § 9): `DATABASE_URL=… scripts/ops/db-environment.sh mark staging --confirm-database
+<name>`. Then apply migrations that are newer than the dump, if the application
+   version is newer: the staging `migrate` job (it asserts the marker first), or
+   `DATABASE_URL=… pnpm db:deploy` elsewhere (forward only, see DEPLOYMENT.md). The
+   whole service order is in SERVICE_RESTORE.md.
 5. Verify (§ 5). Do not reopen traffic until every check passes.
 6. Object storage: if files were lost, restore object versions (or the replica) for the
    affected prefixes. Rows whose file is missing are detected by the app as missing media
@@ -295,3 +299,39 @@ not keep database comments — verified). Before pointing staging at it:
 `scripts/ops/db-environment.sh mark staging --confirm-database <name>`; until then the
 `migrate` job and the staging gate refuse it (verified: `database … is unmarked, expected
 staging`, exit 1).
+
+## 10. Pass 16: failure cases added to the drill
+
+`scripts/ops/restore-drill.sh` gained five steps (local PostgreSQL 16, throwaway
+`flexibx_drill_*` databases and a throwaway superuser role, all dropped afterwards).
+The whole drill — steps 1–12, 28 assertions — passed in 45 s (2026-10-19):
+
+| Step | Case                                                                        | Result                                                                                     |
+| ---- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 8    | `db-verify.sh` with the manifest absent / without its `.sha256`             | `FAILED`, exit 1 (both)                                                                    |
+| 9    | restore without `--confirm-target` / naming another database                | refused (both)                                                                             |
+| 10   | restore of a cut-off dump (checksum matching it, so only pg_restore sees)   | `FAILED`; target has 0 tables; full dump then restores and `VERIFIED` into the same target |
+| 11   | backup of a database that does not exist                                    | `FAILED`; output directory left empty                                                      |
+| 12   | restored copy asserted as staging / marked / asserted again / as production | refused / `MARKED` / accepted / refused                                                    |
+
+Step 10 is the interrupted restore: a connection lost or a process killed mid-way ends the
+same single transaction, so it leaves the same empty target. Step 12 shows that the
+marker never travels with a backup: a restored copy is refused by the staging `migrate`
+job and gate until someone marks it on purpose, with its name typed twice, and a marked
+database is never accepted as another environment.
+
+**What is measured vs estimated:** the times in § 8–9 are measured on one local machine;
+the RTO figures derived from them, and every RDS / PITR figure, are estimates. The
+Terraform in `deploy/staging/aws` keeps automated backups (retention 1–35 days, enforced
+by a variable validation; `delete_automated_backups = false`, so they outlive the
+instance) — tested only against a mocked provider (`terraform test`), never applied.
+
+**The staging `backup` job (Compose) — defect fixed in Pass 16.** Run for the first time
+through Compose on a fresh volume, it failed: the named volume was owned by root and the
+ops image runs as `node` (`Permission denied`, exit 1, nothing written). The ops image now
+creates `/backups` owned by `node` (mode 700), which a new volume inherits, and the image
+self-check fails if it is not writable. After the fix, on the local staging stack: backup
+0.76 s (77 tables, files mode 600), restore into a separate database 1.1 s, `VERIFIED` in
+1.2 s, the restored copy refused by `migrate` until marked (STAGING_CREATOR_STUDIO.md § 13).
+A volume created by the old image keeps its root owner: remove it (it holds no backup,
+since none could be written) or `chown 1000:1000` it once.

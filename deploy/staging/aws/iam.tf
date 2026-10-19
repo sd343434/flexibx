@@ -17,7 +17,8 @@ data "aws_iam_policy_document" "storage" {
       "s3:AbortMultipartUpload",
       "s3:ListMultipartUploadParts",
     ]
-    resources = ["${aws_s3_bucket.media.arn}/*"]
+    # Every object the application writes is under workspaces/ (src/server/storage).
+    resources = ["${aws_s3_bucket.media.arn}/workspaces/*"]
   }
   statement {
     sid = "Bucket"

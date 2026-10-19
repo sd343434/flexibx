@@ -38,6 +38,20 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
+      # passes its security tests against a mocked AWS provider — no credentials, no plan
+      # against AWS, nothing created.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+          terraform_wrapper: false
+      - name: Terraform fmt, validate and tests (staging, mocked provider)
+        working-directory: deploy/staging/aws
+        run: |
+          terraform fmt -recursive -check
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform test
 
   integration:
     name: Integration, build, e2e
