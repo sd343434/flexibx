@@ -84,8 +84,11 @@ digests. ECR scans again on push.
 
 `deploy/staging/aws/README.md` "Launch", in this order — stop at the first failure:
 
-1. Render `/opt/flexibx/staging.env` (mode 600) from the env secret; check out the same
-   commit's `deploy/staging/compose.yaml`.
+1. Check out the same commit, then write the env file from the secret (instance role;
+   refuses a missing key, an empty or placeholder value, a test-only setting; mode 600,
+   atomic; prints no value — `scripts/ops/test-render-staging-env.sh`, CI):
+   `scripts/ops/render-staging-env.sh <env_secret_arn> /opt/flexibx/staging.env`
+   (the AWS CLI comes from the host's first boot, `user-data.sh.tftpl`).
 2. Database roles (`docs/runbooks/DATABASE_ROLES.md`) with the RDS-managed master secret.
 3. Mark the database once: `scripts/ops/db-environment.sh mark staging --confirm-database <name>`.
 4. `docker compose run --rm migrate` (refuses an unmarked database).

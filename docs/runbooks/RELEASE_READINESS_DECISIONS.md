@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–21, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–22, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -23,7 +23,7 @@ environment exists.
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
 
-## Status of every open item (Pass 21, 2026-10-20)
+## Status of every open item (Pass 22, 2026-10-20)
 
 `FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
 owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
@@ -32,7 +32,7 @@ Writing a document about an item never makes it `FIXED`.
 
 | Item                                                       | Where                  | Severity       | Status      | Evidence / what is needed                                                                                                                                                                                                                                                           |
 | ---------------------------------------------------------- | ---------------------- | -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#64: four jobs each, 0 billable ms, `runner_id` 0 (#64 on 6b5345a). Owner: CI_STATUS.md one-page note at the top                                                                                                                                                           |
+| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#67: four jobs each, 0 billable ms, `runner_id` 0 (#67 on 26ccada). Owner: CI_STATUS.md one-page note at the top                                                                                                                                                           |
 | AWS account and region (R-2)                               | hosting                | —              | **BLOCKED** | Owner; D-1 (residency)                                                                                                                                                                                                                                                              |
 | Cost approval (R-3)                                        | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                                                                                                                                               |
 | Staging secrets channel (R-4)                              | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                                                                                                                                               |
@@ -58,6 +58,25 @@ Writing a document about an item never makes it `FIXED`.
 | Builds not byte-reproducible                               | images                 | —              | **OPEN**    | Remaining: per-build Server Action key and preview keys (secrets), trace-list order, pnpm's `.modules.yaml` timestamp (RELEASE_PIPELINE.md § 4)                                                                                                                                     |
 | Pass 19's first E2E run (33 of 43 failed)                  | local gate script      | —              | **FIXED**   | Pass 20: reproduced exactly (33 failed / 10 passed): the local script left the shell in `deploy/staging/aws`, so the E2E database was never migrated (`rate_limits` missing). Not an app defect. `e2e/global-setup.ts` now stops a run on an unmigrated database (tested both ways) |
 | Hosted-staging preflight                                   | `scripts/release`      | —              | **FIXED**   | Pass 20: `staging-preflight.sh` (no AWS call) and its test in CI, 6/6 mutants killed; STAGING_LAUNCH.md                                                                                                                                                                             |
+| Env file on the host from Secrets Manager                  | `scripts/ops`, host    | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
+
+## Status on 2026-10-20 (Pass 22)
+
+Checked 2026-10-20 16:40 UTC: the Prisma gate (2026-10-22) is **still not reached**; not
+applied; the committed patch applies to HEAD. The exception timeline of Pass 21 stands
+(upgrade from 10-22, escalate on 10-28, expiry 10-29). No owner decision recorded:
+R-1, R-2, R-3, R-4, R-7, R-8 **BLOCKED**; R-5, R-6, R-9 **OPEN**; nothing `ACCEPTED`.
+The AWS credentials in the session environment were again **not used** (no read call
+either).
+
+**New evidence:** a gap in the launch package found and closed — the host's role may
+read the env secret, but the host had no AWS CLI (Ubuntu 24.04 ships no `awscli`
+package), so STAGING_LAUNCH.md § 5 step 1 had no tool. user-data now installs it;
+`scripts/ops/render-staging-env.sh` writes `staging.env` from the secret only when it is
+complete and real. Release candidate **`26ccada`** built and verified (label, contents,
+sizes 389 / 1229 / 1089 MB, ops self-check, media tools; Trivy database of 2026-10-20
+07:17 UTC: 0 fixable HIGH/CRITICAL); staging gate `PASSED` 34 / 0 / 0 on the local stack
+(not hosted); backup and `VERIFIED` restore; CI runs #66 and #67 again without a runner.
 
 ## Status on 2026-10-20 (Pass 21)
 

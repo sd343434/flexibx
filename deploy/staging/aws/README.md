@@ -138,3 +138,14 @@ push; the same images are scanned before by CI (Trivy).
   the release commit, the lock file and `terraform validate` without any AWS call; it
   passes on this repository with a filled-in file and refuses `terraform.tfvars.example`.
 - Not planned or applied against AWS (no account, approval or secrets channel).
+
+## Pass 22
+
+- The host gets the AWS CLI at first boot (`snap install aws-cli --classic`; Ubuntu 24.04
+  has no `awscli` package) — without it the env secret could not be read on the host
+  (asserted in `tests/staging.tftest.hcl`). It runs on the host, not in a container: the
+  IMDS hop limit of 1 keeps the instance role away from containers.
+- `scripts/ops/render-staging-env.sh <env_secret_arn> /opt/flexibx/staging.env` writes
+  the env file from that secret after checking it against `staging.env.example`; tested
+  with a stub CLI (14 checks, 11 of 11 mutants killed).
+- Still not planned or applied against AWS.
