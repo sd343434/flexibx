@@ -4,7 +4,8 @@
 # never builds or pushes an image:
 #   scripts/release/staging-preflight.sh <terraform.tfvars> <release commit SHA>
 # 1. the variables file: present, not tracked by git, region and domain filled in (not
-#    the example's placeholder domain);
+#    the example's placeholder domain, nor a reserved name that never resolves publicly:
+#    .test, .example, .invalid, .localhost, .local — RFC 2606 / 6761 / 6762; Pass 23);
 # 2. the release commit: a full SHA, a commit of this repository, on a remote branch (a
 #    release is built from pushed history only);
 # 3. the Terraform lock file: hashicorp/aws pinned to one version with checksums;
@@ -38,7 +39,8 @@ else
   domain="$(value app_domain)"
   [[ "$region" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] && pass "region set ($region)" ||
     fail "region set to an AWS region name (got '${region}')"
-  if [[ -z "$domain" || "$domain" == *example.* || ! "$domain" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+  if [[ -z "$domain" || "$domain" == *example.* || "$domain" =~ \.(test|example|invalid|localhost|local)$ ||
+    ! "$domain" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
     fail "app_domain set to the real staging host (got '${domain}')"
   else
     pass "app_domain set ($domain)"

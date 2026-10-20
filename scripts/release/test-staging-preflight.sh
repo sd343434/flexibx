@@ -32,7 +32,7 @@ printf '#!/usr/bin/env bash\necho "terraform $*" >>"%s/tf.log"\nexit "${STUB_TF_
 chmod +x "$work/bin/terraform"
 
 good="$work/good.tfvars"
-printf 'region     = "me-central-1"\napp_domain = "staging.flexibx.test"\n' >"$good"
+printf 'region     = "me-central-1"\napp_domain = "staging.flexibx-demo.net"\n' >"$good"
 
 failures=0
 case_() { # case_ <name> <expected exit> <expected line or -> [VAR=value ...] -- <args>
@@ -59,7 +59,11 @@ grep -qE "plan|apply" "$work/tf.log" && { echo "FAIL  …terraform plan/apply ra
 case_ "missing variables file" 1 "FAIL  variables file" -- "$work/none.tfvars" "$pushed"
 printf 'region     = "me-central-1"\napp_domain = "staging.example.com"\n' >"$work/example.tfvars"
 case_ "the example's placeholder domain" 1 "FAIL  app_domain" -- "$work/example.tfvars" "$pushed"
-printf 'region     = ""\napp_domain = "staging.flexibx.test"\n' >"$work/noregion.tfvars"
+for tld in test invalid localhost local; do
+  printf 'region     = "me-central-1"\napp_domain = "staging.flexibx.%s"\n' "$tld" >"$work/reserved.tfvars"
+  case_ "a reserved name (.$tld)" 1 "FAIL  app_domain" -- "$work/reserved.tfvars" "$pushed"
+done
+printf 'region     = ""\napp_domain = "staging.flexibx-demo.net"\n' >"$work/noregion.tfvars"
 case_ "no region" 1 "FAIL  region" -- "$work/noregion.tfvars" "$pushed"
 cp "$good" "$repo/tracked.tfvars"
 git -C "$repo" add tracked.tfvars

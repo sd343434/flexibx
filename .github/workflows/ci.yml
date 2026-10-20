@@ -50,6 +50,10 @@ jobs:
       # present and real, mode 600, atomically, printing no value.
       - name: Staging env from the secret (stub AWS CLI)
         run: scripts/ops/test-render-staging-env.sh
+      # Pass 23 (R-9 proposal): a pinned AWS CLI is installed only when its SHA-256 and
+      # reported version are the pinned ones.
+      - name: Pinned AWS CLI installer (stub download)
+        run: scripts/ops/test-install-aws-cli-pinned.sh
       # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
       # passes its security tests against a mocked AWS provider — no credentials, no plan
       # against AWS, nothing created.
