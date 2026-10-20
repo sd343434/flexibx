@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Pass 17, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–18, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -22,6 +22,37 @@ environment exists.
 | R-7 | Alert destination and retention    | One paging webhook (on-call) + log retention 30 days staging                            | Gate's `alert_destination` on hosting |
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
+
+## Status of every open item (Pass 18, 2026-10-20)
+
+`FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
+owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
+waits on an owner decision, an account or a permission; `OPEN` = still needs work.
+Writing a document about an item never makes it `FIXED`.
+
+| Item                                                       | Where                  | Severity       | Status      | Evidence / what is needed                                                                                                                                |
+| ---------------------------------------------------------- | ---------------------- | -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#59: four jobs each, 0 billable ms. Owner: billing / Actions settings (CI_STATUS.md § 2)                                                        |
+| AWS account and region (R-2)                               | hosting                | —              | **BLOCKED** | Owner; D-1 (residency)                                                                                                                                   |
+| Cost approval (R-3)                                        | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                    |
+| Staging secrets channel (R-4)                              | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                    |
+| Hosted staging                                             | hosting                | —              | **BLOCKED** | Needs R-2, R-3, R-4; nothing created                                                                                                                     |
+| PITR exercised on the provider (R-8)                       | RDS                    | —              | **BLOCKED** | Configured in Terraform only; never tested (no hosted database)                                                                                          |
+| Alert destination, log shipping and RDS alarms (R-7)       | operations             | —              | **BLOCKED** | Owner; paid resources                                                                                                                                    |
+| `deepmerge-ts` 7.1.5 (CVE-2026-40345)                      | ops image (Prisma CLI) | HIGH           | **OPEN**    | Fixed by Prisma 7.10.1 (rehearsed, R-5); gated to 2026-10-22; scanner exception expires 2026-10-29                                                       |
+| `mysql2` 3.15.3 (GHSA-3f6p-5ww8-9rcr, GHSA-rgwj-5xj2-c3m3) | ops image (Prisma CLI) | HIGH, MEDIUM   | **OPEN**    | Same upgrade; never used (PostgreSQL only)                                                                                                               |
+| `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm)                       | lint tooling, no image | HIGH           | **OPEN**    | No fixed release exists (re-checked 2026-10-20)                                                                                                          |
+| `http-cache-semantics` 4.2.0 (GHSA-ch52-4w7c-c8xp)         | worker and ops (pnpm)  | HIGH           | **FIXED**   | pnpm 10.34.7 bundles 4.3.0 (fixed); Pass 18 scan: gone. Pass 17's "no fix" was wrong: Trivy's database listed no fixed version, the advisory names 4.3.0 |
+| Ubuntu packages without HIGH/CRITICAL                      | app / worker / ops     | MEDIUM, LOW    | **OPEN**    | app 21/4, worker 637/28 (FFmpeg's media libraries), ops 23/4 (MEDIUM/LOW); not gated; security updates applied at every build                            |
+| Debian and npm findings of the Pass 16 app image           | app image              | CRITICAL, HIGH | **FIXED**   | Pass 17: app on Ubuntu with `node` only; scans since: 0 HIGH/CRITICAL                                                                                    |
+| pnpm 10.28.0 advisories                                    | worker, ops            | HIGH           | **FIXED**   | pnpm 10.34.7; scan                                                                                                                                       |
+| OS patch policy (R-9)                                      | images                 | —              | **OPEN**    | Implemented (security updates at build + scan in CI); the owner has not confirmed the reproducibility trade-off                                          |
+| Prisma 7.10.1 upgrade (R-5)                                | dependencies           | —              | **OPEN**    | Rehearsed in full (Pass 17); the 2026-10-22 gate is not reached (checked 2026-10-20 08:37 UTC)                                                           |
+| Terraform provider checksums                               | `deploy/staging/aws`   | —              | **FIXED**   | `.terraform.lock.hcl` from the GPG-verified SHA256SUMS; an altered hash makes `terraform init` fail                                                      |
+| Restore drill blind spots (non-empty target, row counts)   | `restore-drill.sh`     | —              | **FIXED**   | Pass 18 mutation test: two defects went undetected; drill extended; 13/13 mutants now killed                                                             |
+| Storage user's access key rotation                         | IAM                    | —              | **OPEN**    | Manual rotation, or move the app to the host role; owner decision                                                                                        |
+| Static FFmpeg build (R-6)                                  | worker image           | —              | **OPEN**    | Recommendation: keep Ubuntu's FFmpeg; awaits the owner's confirmation                                                                                    |
+| Trivy image signature                                      | supply chain           | —              | **OPEN**    | Digest identical on Docker Hub and ghcr.io; cosign verification impossible here (sigstore unreachable) — to do where it is reachable                     |
 
 ## Status on 2026-10-20 (Pass 17)
 

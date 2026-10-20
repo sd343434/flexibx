@@ -13,8 +13,10 @@
 # Steps (each must turn out as expected, or the drill exits 1):
 #   1. migrate and seed flexibx_drill_src; back it up (db-backup.sh)
 #   2. restore into an empty database and verify (db-verify.sh): VERIFIED
-#   3. a restore over a non-empty database is refused
-#   4. a tampered row-count manifest fails verification (checksum)
+#   3. a restore over a non-empty database is refused — also one holding only an unrelated
+#      table (nothing would collide), refused before any change
+#   4. a tampered row-count manifest fails verification (checksum), and so does a re-signed
+#      manifest with the wrong counts (row counts)
 #   5. a tampered dump is refused before anything is restored; the target stays empty
 #   6. an index dropped after the restore fails verification (schema objects)
 #   7. a guard trigger disabled in the SOURCE survives backup and restore and fails
@@ -152,6 +154,14 @@ echo "== 3. restore over a non-empty database"
 RESTORE_DATABASE_URL="$(url_for flexibx_drill_restore)" "$here/db-restore.sh" "$dump" \
   --confirm-target flexibx_drill_restore >/dev/null 2>&1
 expect "restore over a non-empty database is refused" fail $?
+# The dangerous case: a target whose tables do not collide with the dump's (pg_restore
+# itself would not fail; the data would be mixed in). Refused before any change: exit 2.
+fresh flexibx_drill_refused || exit 2
+on flexibx_drill_refused "CREATE TABLE unrelated (v text)" >/dev/null
+RESTORE_DATABASE_URL="$(url_for flexibx_drill_refused)" "$here/db-restore.sh" "$dump" \
+  --confirm-target flexibx_drill_refused >/dev/null 2>&1
+[[ $? -eq 2 ]]
+expect "restore into a database holding another table is refused (exit 2)" ok $?
 
 echo "== 4. tampered manifest"
 cp "$manifest" "$work/tampered.counts.tsv"
@@ -161,6 +171,14 @@ awk -F'\t' 'BEGIN { OFS = "\t" } !done && $2 ~ /^[0-9]+$/ { $2 = $2 + 1; done = 
 VERIFY_DATABASE_URL="$(url_for flexibx_drill_restore)" "$here/db-verify.sh" "$work/tampered.counts.tsv" \
   >"$work/verify-manifest.log" 2>&1
 expect "verification with a tampered manifest fails" fail $?
+# A manifest whose checksum is valid but whose counts are not this backup's (e.g. another
+# backup's manifest): only the row-count comparison itself can catch it.
+sha256sum "$work/tampered.counts.tsv" | cut -d' ' -f1 >"$work/tampered.counts.tsv.sha256"
+VERIFY_DATABASE_URL="$(url_for flexibx_drill_restore)" "$here/db-verify.sh" "$work/tampered.counts.tsv" \
+  >"$work/verify-resigned.log" 2>&1
+expect "verification with a re-signed wrong manifest fails" fail $?
+grep -q $'^row_counts\tMISMATCH' "$work/verify-resigned.log"
+expect "…on the row counts" ok $?
 
 echo "== 5. tampered dump"
 cp "$dump" "$work/tampered.dump"

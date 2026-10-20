@@ -484,3 +484,15 @@ and the generated secrets removed).
 - **Checks every build:** `scripts/docker/check-image-contents.sh` and
   `scripts/docker/scan-images.sh` (Trivy, pinned by digest), in CI's Docker job.
   The Pass 17 images: 0 fixable HIGH/CRITICAL findings (details: RELEASE_READINESS_DECISIONS.md R-9).
+
+## 15. Pass 18: the gate on the release images
+
+pnpm 10.34.7 (was 10.34.6: it bundles the fixed `http-cache-semantics` 4.3.0). On the
+Pass 18 images, on the local Compose stack (SeaweedFS, local PostgreSQL 16, alert
+receiver; not hosted, 2026-10-20): `migrate` refused on the unmarked database; the gate
+FAILED before the deploy (`database_environment`); after marking, 37 migrations applied;
+app healthy in 5 s; scheduler ticks 200; **`STAGING CHECK PASSED`, 34 pass, 0 fail,
+0 not run**, test alert delivered; app runs as `flexibx`, worker and scheduler as `node`,
+all labelled with the build's revision. The `backup` job, a refused restore over the
+source, a `VERIFIED` restore into a separate database, and `migrate` refused on that
+unmarked copy: BACKUP_RESTORE.md § 12. Release process: RELEASE_PIPELINE.md.

@@ -56,7 +56,7 @@ jobs:
   integration:
     name: Integration, build, e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16.15-alpine
@@ -102,6 +102,12 @@ jobs:
         env:
           DRILL_ADMIN_URL: postgresql://flexibx:flexibx@localhost:5432/flexibx
         run: scripts/ops/restore-drill.sh
+      # Pass 18: the drill must also FAIL — 13 deliberate defects (in a copy of scripts/ops,
+      # or in the restored copy), each caught at its own step.
+      - name: Restore drill mutation test
+        env:
+          DRILL_ADMIN_URL: postgresql://flexibx:flexibx@localhost:5432/flexibx
+        run: scripts/ops/restore-drill-mutants.sh
       - name: Creator Studio acceptance on a disposable S3-compatible bucket (Pass 12)
         run: scripts/staging/local-stack.sh
       - run: pnpm build
@@ -161,15 +167,6 @@ jobs:
       # needs (offline; no credentials, no storage, no provider).
       # The image build already ran this check (it fails the build); run it again on the
       # final image as the worker's user, offline, and prove the worker is not root.
-      - name: Check worker image media tools and user (offline)
-        run: |
-          docker run --rm --network none flexibx-worker:ci sh scripts/creator/check-media-tools.sh
-          uid="$(docker run --rm --network none flexibx-worker:ci id -u)"
-          echo "worker runs as uid $uid"
-          test "$uid" != "0"
-          # The staging gate (pnpm staging:check) runs in this image: its database check
-          # needs the PostgreSQL 16 client.
-          docker run --rm --network none flexibx-worker:ci psql --version | grep -q " 16\."
       - name: Validate the staging Compose file (Pass 13)
         run: |
           cp deploy/staging/staging.env.example deploy/staging/staging.env
@@ -179,29 +176,13 @@ jobs:
             echo "compose accepted a missing FLEXIBX_TAG" >&2; exit 1
           fi
           rm deploy/staging/staging.env
-      - name: Check ops image (offline, no credentials)
-        run: |
-          docker run --rm --network none --entrypoint bash \
-            -e COREPACK_ENABLE_NETWORK=0 flexibx-ops:ci scripts/ops/check-ops-image.sh
-      # Pass 17: what no runtime image may contain (secrets, keys, Terraform state, repository
-      # or agent state, tests; no package manager in the app image) and how each runs
-      # (non-root; /work and /backups writable).
-      - name: Check image contents (offline)
-        run: |
-          scripts/docker/check-image-contents.sh flexibx:ci app
-          scripts/docker/check-image-contents.sh flexibx-worker:ci worker
-          scripts/docker/check-image-contents.sh flexibx-ops:ci ops
-      # Pass 17: known vulnerabilities (OS and Node packages), Trivy pinned by digest. Fails on
-      # a fixable HIGH/CRITICAL finding; exceptions only in .trivyignore.yaml, with expiry.
-      - name: Vulnerability scan (Trivy)
-        run: scripts/docker/scan-images.sh flexibx:ci flexibx-worker:ci flexibx-ops:ci
-      # Pass 14: the job images carry only what their commands load (scripts/docker/job-deps.mjs).
-      # Measured 389 / 1229 / 1088 MB (Pass 17); a regression past the budget fails here.
-      - name: Image size budgets
-        run: |
-          scripts/docker/check-image-size.sh flexibx:ci 500
-          scripts/docker/check-image-size.sh flexibx-worker:ci 1400
-          scripts/docker/check-image-size.sh flexibx-ops:ci 1250
+      # Pass 18: every release check in one script, shared with scripts/release/build-and-verify.sh:
+      # revision label = this commit; contents (non-root, no secrets/state/tests, no package
+      # manager in the app image, /work and /backups writable); size budgets (measured 389 /
+      # 1229 / 1088 MB, Pass 17); ops self-check; worker media tools and PostgreSQL 16 client;
+      # vulnerability scan (Trivy pinned by digest; fails on a fixable HIGH/CRITICAL).
+      - name: Verify release images
+        run: scripts/release/verify-images.sh flexibx:ci flexibx-worker:ci flexibx-ops:ci "${{ github.sha }}"
 
   secrets:
     name: Secret scan

@@ -102,3 +102,20 @@ be rotated by hand (or the bucket moved to the host role — an open decision, s
 Logs and alarms: container logs rotate on the host; nothing is shipped or alarmed in
 AWS yet (RELEASE_READINESS_DECISIONS.md R-7). The images pushed to ECR are scanned on
 push; the same images are scanned before by CI (Trivy).
+
+## Pass 18
+
+- **Lock file committed** (`.terraform.lock.hcl`): `hashicorp/aws` 6.69.1 pinned with the
+  `zh:` hashes of all 15 platform packages from the provider's SHA256SUMS — whose GPG
+  signature was verified against HashiCorp's release key (primary
+  `C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F`) — and the `h1:` hash of the
+  linux_amd64 package, which matched them. `terraform init` refuses a provider package
+  whose checksum is not in the lock file (tested). Constraint in `versions.tf` unchanged
+  (`~> 6.69`): the lock file is what pins the exact version.
+- **New test `iam_is_least_privilege`:** the storage user has named `s3:` actions on the
+  media bucket only; the host policy has no wildcard action, a wildcard resource only for
+  `ecr:GetAuthorizationToken`, the env secret only; the host's one managed policy is
+  Session Manager's. 11 runs pass; mutants `s3:*` and a secret read on `*` are caught.
+- Still **not planned or applied against AWS**; logs, alarms and their retention are
+  owner decision R-7 (paid resources). RDS rotates its master password itself; the
+  storage user's key is rotated by hand (open decision).

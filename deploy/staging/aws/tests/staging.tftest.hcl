@@ -200,3 +200,54 @@ run "nothing_is_deleted_with_its_data" {
     error_message = "the database has deletion protection and a final snapshot"
   }
 }
+
+run "iam_is_least_privilege" {
+  command = apply # against the mock only
+
+  # The storage user (the app's S3 key): named S3 actions only, on the media bucket only.
+  assert {
+    condition = alltrue(flatten([
+      for statement in data.aws_iam_policy_document.storage.statement : [
+        for action in statement.actions : startswith(action, "s3:") && !strcontains(action, "*")
+      ]
+    ]))
+    error_message = "the storage user may use named S3 actions only"
+  }
+  assert {
+    condition = alltrue(flatten([
+      for statement in data.aws_iam_policy_document.storage.statement : [
+        for resource in statement.resources : startswith(resource, aws_s3_bucket.media.arn)
+      ]
+    ]))
+    error_message = "the storage user may touch the media bucket only"
+  }
+  # The host: read its one env secret, pull images; a wildcard resource only where AWS
+  # allows nothing else (ecr:GetAuthorizationToken); no wildcard action anywhere.
+  assert {
+    condition = alltrue(flatten([
+      for statement in data.aws_iam_policy_document.host.statement : [
+        for action in statement.actions : !strcontains(action, "*")
+      ]
+    ]))
+    error_message = "no wildcard action in the host policy"
+  }
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.host.statement :
+      !contains(statement.resources, "*") || statement.actions == toset(["ecr:GetAuthorizationToken"])
+    ])
+    error_message = "a wildcard resource only for ecr:GetAuthorizationToken"
+  }
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.host.statement :
+      statement.resources == toset([aws_secretsmanager_secret.env.arn])
+      if contains(statement.actions, "secretsmanager:GetSecretValue")
+    ])
+    error_message = "the host reads the env secret and no other"
+  }
+  assert {
+    condition     = aws_iam_role_policy_attachment.host_ssm.policy_arn == "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+    error_message = "the host's only managed policy is Session Manager's"
+  }
+}

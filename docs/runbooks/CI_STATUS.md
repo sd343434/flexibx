@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–17)
+# CI status and the GitHub Actions blocker (Passes 10–18)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -147,6 +147,15 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   as a container pinned by digest — no new action to allow; fails on a fixable HIGH or
   CRITICAL finding; exceptions only in `.trivyignore.yaml`, with an expiry date). The
   restore drill gained steps 13–17 (BACKUP_RESTORE.md § 11).
+- **Pass 18:** run #59 (push of b64f0c2, 2026-10-20 08:07 UTC) failed like every run since
+  #43: four jobs, 0 billable ms, no runner. Changes: the Docker job's checks are one script
+  shared with the release script (`scripts/release/verify-images.sh`, given
+  `${{ github.sha }}` so a stale image cannot pass); the integration job runs the restore
+  drill's mutation test (`scripts/ops/restore-drill-mutants.sh`, 13 mutants) and its
+  timeout is 45 minutes (was 25); the Terraform step now initialises against a committed
+  lock file (`deploy/staging/aws/.terraform.lock.hcl`, signature-verified checksums). No
+  step in the workflow may fail softly (no `continue-on-error`, no `|| true`); the
+  staging gate's NOT_RUN is exit 2, never a pass (`tests/unit/staging-predeploy.test.ts`).
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

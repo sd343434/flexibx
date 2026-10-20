@@ -371,3 +371,38 @@ constraints semantically.
 **Measured vs estimated** (unchanged): the local timings of § 8–9 are measurements on one
 machine; every RDS, PITR and production-size figure is an estimate. PITR has never been
 exercised: no hosted database exists.
+
+## 12. Pass 18: the drill tested by mutation
+
+`scripts/ops/restore-drill-mutants.sh` applies 13 realistic defects, one at a time, to a
+copy of `scripts/ops` (the repository's scripts are never changed) or to the restored
+copy, runs the drill against it, and requires the drill to fail **at the step named for
+that defect**. Run on 2026-10-20 (local PostgreSQL 16, about 6 minutes), and in CI after
+the drill.
+
+The first run let **two defects through**, so the drill had blind spots:
+
+- **Restore into a non-empty database** (emptiness check removed): step 3 still "passed"
+  because pg_restore failed on the objects that already existed — the drill could not
+  tell a refusal from a failure. The dangerous case, a target holding only unrelated
+  tables (nothing collides, so the dump would be mixed in), was never tested. Step 3 now
+  restores into a database holding one unrelated table and requires exit 2 (refused
+  before any change).
+- **Row counts never compared** (comparison replaced by `true`): step 4's tampered
+  manifest is caught by its checksum first. Step 4 now also verifies a re-signed manifest
+  with wrong counts and requires `row_counts MISMATCH`.
+
+After the fix: drill `DRILL PASSED` with 47 assertions; **13 of 13 mutants killed** —
+partial files left after a failed backup, world-readable backup files, a restore without
+`--single-transaction`, a restore into any database, over a non-empty one, without the
+checksum, a verify that ignores row counts, an unmarked database accepted as staging, a
+loosened CHECK constraint, a missing index, a disabled trigger, a changed audit log in the
+copy, and a change to another database on the server.
+
+**Through the release images** (2026-10-20, local Compose stack): the `backup` job wrote
+the dump (77 tables); a restore naming the source database was refused (exit 2); the
+restore into a separate database was `VERIFIED` (77 tables, 502 schema objects, 37
+migrations); `migrate` was refused on the unmarked restored copy.
+
+RTO / RPO: unchanged from § 8–9 (local measurements; RDS figures are estimates). PITR has
+never been exercised on the provider.
