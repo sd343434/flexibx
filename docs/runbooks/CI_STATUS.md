@@ -1,6 +1,22 @@
-# CI status and the GitHub Actions blocker (Passes 10–20)
+# CI status and the GitHub Actions blocker (Passes 10–21)
 
-**Verdict on 2026-10-20 (rechecked in Pass 20, run #63): CI is NOT verified.** Since run
+> **For the GitHub owner (`sd343434`), one page — Pass 21, 2026-10-20.**
+> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #65 on
+> `c8f2218` (push, 13:13 UTC; #64 on `6b5345a` the same) — four jobs, each `runner_id: 0` with no runner name,
+> created and completed within 3 s, 0 billable ms (`get_workflow_run_usage`), job logs
+> HTTP 404 (never written). Same for a manual `workflow_dispatch` (#56).
+> **Not the repository:** the workflow is valid and `active`, ran green before (#42),
+> uses only GitHub-hosted `ubuntu-latest`, no `environment`, no job condition,
+> `permissions: contents: read`; the public repository's hosted minutes are free.
+> **Action needed (account owner, outside the repository):** open
+> [run #64](https://github.com/sd343434/flexibx/actions/runs/39425742595) → a job →
+> "Annotations" and read GitHub's reason; then check _Settings → Billing and licensing_
+> (a failed payment locks Actions for every repository of the account) and _Repository
+> → Settings → Actions → General_ (Actions allowed; the 8 actions in § 2 allowed). Then
+> _Actions → CI → Run workflow_ on `claude/amazing-sagan-pvouqy`. CI counts as passing
+> only when all four jobs show a runner, step logs and success.
+
+**Verdict on 2026-10-20 (rechecked in Pass 21, run #64): CI is NOT verified.** Since run
 #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
@@ -28,6 +44,8 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #61                | `baa80be` | 2026-10-20 09:44 | failure in 5 s, no runner, 0 billable ms (Pass 18)              |
 | #62                | `3e41054` | 2026-10-20 10:19 | failure in 5 s, no runner, 0 billable ms (Pass 19)              |
 | #63                | `f7dfef6` | 2026-10-20 11:54 | failure in 5 s, no runner, 0 billable ms (Pass 20 check)        |
+| #64                | `6b5345a` | 2026-10-20 12:52 | failure in 5 s, no runner, 0 billable ms (Pass 21 check)        |
+| #65                | `c8f2218` | 2026-10-20 13:13 | failure in 6 s, no runner, 0 billable ms (Pass 21)              |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:

@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–20, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–21, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -23,7 +23,7 @@ environment exists.
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
 
-## Status of every open item (Pass 20, 2026-10-20)
+## Status of every open item (Pass 21, 2026-10-20)
 
 `FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
 owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
@@ -32,7 +32,7 @@ Writing a document about an item never makes it `FIXED`.
 
 | Item                                                       | Where                  | Severity       | Status      | Evidence / what is needed                                                                                                                                                                                                                                                           |
 | ---------------------------------------------------------- | ---------------------- | -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#63: four jobs each, 0 billable ms, `runner_id` 0 (#63 on f7dfef6). Owner: billing / Actions settings (CI_STATUS.md § 2)                                                                                                                                                   |
+| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#64: four jobs each, 0 billable ms, `runner_id` 0 (#64 on 6b5345a). Owner: CI_STATUS.md one-page note at the top                                                                                                                                                           |
 | AWS account and region (R-2)                               | hosting                | —              | **BLOCKED** | Owner; D-1 (residency)                                                                                                                                                                                                                                                              |
 | Cost approval (R-3)                                        | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                                                                                                                                               |
 | Staging secrets channel (R-4)                              | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                                                                                                                                               |
@@ -58,6 +58,38 @@ Writing a document about an item never makes it `FIXED`.
 | Builds not byte-reproducible                               | images                 | —              | **OPEN**    | Remaining: per-build Server Action key and preview keys (secrets), trace-list order, pnpm's `.modules.yaml` timestamp (RELEASE_PIPELINE.md § 4)                                                                                                                                     |
 | Pass 19's first E2E run (33 of 43 failed)                  | local gate script      | —              | **FIXED**   | Pass 20: reproduced exactly (33 failed / 10 passed): the local script left the shell in `deploy/staging/aws`, so the E2E database was never migrated (`rate_limits` missing). Not an app defect. `e2e/global-setup.ts` now stops a run on an unmigrated database (tested both ways) |
 | Hosted-staging preflight                                   | `scripts/release`      | —              | **FIXED**   | Pass 20: `staging-preflight.sh` (no AWS call) and its test in CI, 6/6 mutants killed; STAGING_LAUNCH.md                                                                                                                                                                             |
+
+## Status on 2026-10-20 (Pass 21)
+
+Checked 2026-10-20 13:11 UTC: the Prisma gate (2026-10-22) is **still not reached**; the
+upgrade was not applied (the committed patch still applies cleanly to HEAD). No owner
+decision recorded: R-1, R-2, R-3, R-4, R-7, R-8 **BLOCKED**; R-5, R-6, R-9 **OPEN**;
+nothing `ACCEPTED`.
+
+**Exception timeline (escalation rule):**
+
+| Date       | What must happen                                                                                |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| 2026-10-22 | earliest date for the Prisma 7.10.1 upgrade (procedure in R-5 below)                            |
+| 2026-10-22 | the scan starts printing "expires in 7 day(s)" warnings (a CI annotation once CI runs; Pass 21) |
+| 2026-10-28 | **escalate to the owner** if the upgrade is not merged by then                                  |
+| 2026-10-29 | both exceptions expire: the image scan fails on `deepmerge-ts` / `mysql2` again (by design)     |
+
+Extending an exception is not a remedy. If 7.10.1 fails its gates, the options are
+R-5 (b), waiting for 7.10.2, or a red image gate for the ops image until a fix exists;
+either one needs the owner's explicit, recorded decision.
+
+**AWS credentials in the development environment:** this session's environment carries
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (names seen, values never printed). They were
+**not used** — not even for `sts get-caller-identity`: nothing says whose account they
+are or that the owner approved using it for staging (approval 1 of STAGING_LAUNCH.md).
+The owner must say whether they belong to the staging account before any AWS call.
+
+**New evidence:** release images built from `c8f2218` passed every check (label,
+contents, sizes 389 / 1229 / 1089 MB, ops self-check, media tools, Trivy: 0 fixable
+HIGH/CRITICAL); the staging gate on them `PASSED` 34 / 0 / 0 on the local stack (not
+hosted); the preflight passed with the AWS variables removed from its environment and
+rejected `terraform.tfvars.example`; CI run #64 again had no runner.
 
 ## Status on 2026-10-20 (Pass 20)
 
