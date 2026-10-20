@@ -54,6 +54,10 @@ jobs:
       # reported version are the pinned ones.
       - name: Pinned AWS CLI installer (stub download)
         run: scripts/ops/test-install-aws-cli-pinned.sh
+      # Pass 24: a new AWS CLI pin is taken only from a signature by the current (not
+      # expired, not revoked) AWS CLI team key — gpg's exit status alone accepts an expired one.
+      - name: AWS CLI signature check (throwaway keys)
+        run: scripts/ops/test-verify-aws-cli-signature.sh
       # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
       # passes its security tests against a mocked AWS provider — no credentials, no plan
       # against AWS, nothing created.

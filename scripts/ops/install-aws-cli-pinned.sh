@@ -3,12 +3,15 @@
 # user-data until the owner chooses it over the snap — RELEASE_READINESS_DECISIONS.md R-9).
 # Downloads exactly one versioned installer from AWS, refuses it unless its SHA-256 is the
 # pinned one, installs it and refuses an installed version other than the pinned one.
-# The pinned hash was taken on 2026-10-20 from a file whose GPG signature verified against
-# the AWS CLI team key FB5DB77FD5C118B80511ADA8A6310ACC4672475C (VALIDSIG); the hash, not
-# the key, is checked at install time, so the result does not depend on that key's expiry.
+# The pinned hash was taken on 2026-10-20 from a file whose signature is cryptographically
+# valid for the AWS CLI team key FB5DB77FD5C118B80511ADA8A6310ACC4672475C, but the only
+# copy of that key reachable then (keyserver.ubuntu.com) was EXPIRED (2026-07-07), so
+# scripts/ops/verify-aws-cli-signature.sh refuses it: the pin's provenance is NOT fully
+# established until that script passes with the current key from AWS's documentation
+# (RELEASE_READINESS_DECISIONS.md R-9). The hash, not the key, is checked at install time.
 #   scripts/ops/install-aws-cli-pinned.sh [install dir] [bin dir]
 # To move to a newer version, change AWS_CLI_VERSION and AWS_CLI_SHA256 together (both, or
-# the script refuses), after verifying the new file's signature the same way.
+# the script refuses), after verify-aws-cli-signature.sh passes for the new file.
 set -euo pipefail
 
 pinned_version="2.38.2"

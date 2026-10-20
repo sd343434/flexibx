@@ -65,6 +65,8 @@ for tld in test invalid localhost local; do
 done
 printf 'region     = ""\napp_domain = "staging.flexibx-demo.net"\n' >"$work/noregion.tfvars"
 case_ "no region" 1 "FAIL  region" -- "$work/noregion.tfvars" "$pushed"
+printf 'region     = "me-central-1"\n' >"$work/nodomain.tfvars"
+case_ "no app_domain (incomplete file)" 1 "FAIL  app_domain" -- "$work/nodomain.tfvars" "$pushed"
 cp "$good" "$repo/tracked.tfvars"
 git -C "$repo" add tracked.tfvars
 case_ "a variables file tracked by git" 1 "FAIL  variables file is not tracked" -- "$repo/tracked.tfvars" "$pushed"
