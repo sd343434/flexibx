@@ -22,6 +22,7 @@ DEPLOYMENT.md (migrations and rollback).
 | Alert destination and log retention             | R-7      | `ALERT_WEBHOOK_URL` (+ token) in the env secret; retention  |
 | PITR + off-host dump plan, one restore exercise | R-8      | RDS retention (Terraform), backup job schedule              |
 | Image/OS update policy confirmed                | R-9      | as implemented (security updates at build + Trivy gate)     |
+| Host AWS CLI: snap (unpinned) or pinned 2.38.2  | R-9      | `user-data.sh.tftpl` (`install-aws-cli-pinned.sh`, Pass 23) |
 | GitHub Actions running again                    | R-1      | CI verifies the release commit before anything is published |
 | Mail provider for the staging domain            | R-4      | env secret                                                  |
 
@@ -31,7 +32,8 @@ DEPLOYMENT.md (migrations and rollback).
 scripts/release/staging-preflight.sh deploy/staging/aws/terraform.tfvars <release-sha>
 ```
 
-Checks the variables file (present, git-ignored, real region and domain), the release
+Checks the variables file (present, git-ignored, real region and domain — a reserved
+name such as `.test` or `.invalid` is refused, Pass 23), the release
 commit (full SHA, pushed), the Terraform lock file (hashicorp/aws pinned with checksums)
 and `terraform fmt` / `init -backend=false` / `validate`. Must print `PREFLIGHT PASSED`.
 Tested by `scripts/release/test-staging-preflight.sh` (CI quality job). Also required

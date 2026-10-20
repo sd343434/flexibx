@@ -149,3 +149,14 @@ push; the same images are scanned before by CI (Trivy).
   the env file from that secret after checking it against `staging.env.example`; tested
   with a stub CLI (14 checks, 11 of 11 mutants killed).
 - Still not planned or applied against AWS.
+
+## Pass 23
+
+- The AWS CLI line in user-data is unchanged (`snap install aws-cli --classic`), and it is
+  the one host tool whose version is not pinned. A pinned alternative is ready and tested:
+  `scripts/ops/install-aws-cli-pinned.sh` (AWS CLI 2.38.2, refused unless the
+  installer's SHA-256 and the installed version match). It is **not adopted**: that is
+  owner decision R-9 (RELEASE_READINESS_DECISIONS.md, "Pass 23, the host's tools").
+- The preflight now refuses an `app_domain` under a reserved name (`.test`, `.example`,
+  `.invalid`, `.localhost`, `.local`): such a name can never be the hosted staging host.
+- Still not planned or applied against AWS.

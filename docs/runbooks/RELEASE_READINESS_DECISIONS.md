@@ -399,3 +399,26 @@ calculator for the chosen region before approving; these are estimates, not quot
   MEDIUM/LOW (worker: 637 MEDIUM, mostly FFmpeg's media libraries, no fixed versions);
   the two Prisma-gated advisories in ops are listed in `.trivyignore.yaml` with an expiry
   of 2026-10-29. Owner: confirm (b)'s reproducibility trade-off.
+- **Pass 23, the host's tools (not the images):** the staging host gets the AWS CLI at
+  first boot with `snap install aws-cli --classic` (Pass 22). That is the one tool on the
+  host that is **not pinned**: the snap's version is whatever the `latest/stable` channel
+  holds at boot, and snapd refreshes it on its own afterwards. Every other host package
+  (`docker.io`, `caddy`, …) is also unpinned, from Ubuntu's archive with
+  `unattended-upgrades`, so the snap matches the host's current policy, not the images'.
+  If the owner wants host tools pinned like the images, a tested alternative exists:
+  `scripts/ops/install-aws-cli-pinned.sh` installs **AWS CLI 2.38.2** from AWS's versioned
+  installer only when its SHA-256 is the pinned
+  `16a4d39d…76164b37` and the installed CLI reports that version (test in CI: 12 checks,
+  7/7 mutants killed; the real 2.38.2 file installed into a scratch prefix reported
+  `aws-cli/2.38.2`). The pinned hash was taken from a file whose GPG signature is valid
+  for the AWS CLI team key `FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C`
+  (`VALIDSIG`, signed 2026-10-19). Caveat: the only copy of that key reachable here
+  (keyserver.ubuntu.com) is marked **expired on 2026-07-07**; AWS's own page with the
+  current key was unreachable, and `gpg --verify` still exits 0 for an expired key, so
+  a check at boot based on gpg's exit status alone would not catch an expired key. That is
+  why the script checks a pinned hash, not the key, at install time. **Not adopted:** to switch,
+  replace the `snap install` line in `user-data.sh.tftpl` with this script (plus `unzip`
+  in the `apt-get install` line) and update the tftest assertion; moving to a new version
+  means a new hash, verified against the current key from AWS's documentation.
+  **Owner decision (R-9):** keep the snap (auto-updated, unpinned) or adopt the pin
+  (reproducible, but updated only by a reviewed change).
