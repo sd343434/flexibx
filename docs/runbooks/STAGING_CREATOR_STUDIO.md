@@ -469,3 +469,18 @@ development-process state file (`.phase-status.json`) — the ops-image self-che
 
 Local stack torn down afterwards (containers, volumes, bucket, databases, throwaway role
 and the generated secrets removed).
+
+## 14. Pass 17: what changed in the images
+
+- **App image on Ubuntu 24.04** (the job images' base) with only the `node` binary of the
+  pinned Node image: no npm, npx or corepack. Their bundled packages were 14 of the app
+  image's HIGH/CRITICAL scanner findings; Debian's OS packages were most of the rest.
+  389 MB (was 426). Verified: healthy, runs as `flexibx`, readiness 200 against a
+  PostgreSQL 16 database, `/en` and `/ar/sign-in` 200.
+- **Security updates at build:** every Ubuntu stage runs `apt-get upgrade` from Ubuntu's
+  signed archive (the base stays pinned by digest).
+- **pnpm 10.34.6** (was 10.28.0; same major and lockfile; fixes the advisories reported
+  against 10.28.0) — the copy in the worker and ops images runs offline.
+- **Checks every build:** `scripts/docker/check-image-contents.sh` and
+  `scripts/docker/scan-images.sh` (Trivy, pinned by digest), in CI's Docker job.
+  The Pass 17 images: 0 fixable HIGH/CRITICAL findings (details: RELEASE_READINESS_DECISIONS.md R-9).

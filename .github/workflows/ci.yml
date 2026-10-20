@@ -183,8 +183,20 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint bash \
             -e COREPACK_ENABLE_NETWORK=0 flexibx-ops:ci scripts/ops/check-ops-image.sh
+      # Pass 17: what no runtime image may contain (secrets, keys, Terraform state, repository
+      # or agent state, tests; no package manager in the app image) and how each runs
+      # (non-root; /work and /backups writable).
+      - name: Check image contents (offline)
+        run: |
+          scripts/docker/check-image-contents.sh flexibx:ci app
+          scripts/docker/check-image-contents.sh flexibx-worker:ci worker
+          scripts/docker/check-image-contents.sh flexibx-ops:ci ops
+      # Pass 17: known vulnerabilities (OS and Node packages), Trivy pinned by digest. Fails on
+      # a fixable HIGH/CRITICAL finding; exceptions only in .trivyignore.yaml, with expiry.
+      - name: Vulnerability scan (Trivy)
+        run: scripts/docker/scan-images.sh flexibx:ci flexibx-worker:ci flexibx-ops:ci
       # Pass 14: the job images carry only what their commands load (scripts/docker/job-deps.mjs).
-      # Measured 426 / 1224 / 1084 MB; a regression past the budget fails here.
+      # Measured 389 / 1229 / 1088 MB (Pass 17); a regression past the budget fails here.
       - name: Image size budgets
         run: |
           scripts/docker/check-image-size.sh flexibx:ci 500

@@ -1,4 +1,4 @@
-# CI status and the GitHub Actions blocker (Passes 10–16)
+# CI status and the GitHub Actions blocker (Passes 10–17)
 
 **Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
@@ -139,6 +139,14 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   environment marker (`tests/integration/ops-db-environment.test.ts`,
   `restore-drill.sh` step 12). The owner decisions are collected in
   RELEASE_READINESS_DECISIONS.md (R-1).
+- **Pass 17:** run #58 (push of 6017891, 2026-10-19 21:49 UTC) failed like every run since
+  #43 (four jobs, 0 billable ms). The Docker job now also runs
+  `scripts/docker/check-image-contents.sh` on the three images (non-root; no credentials,
+  keys, Terraform state, repository/agent state or tests; no package manager in the app
+  image; `/work` and `/backups` writable) and `scripts/docker/scan-images.sh` (Trivy 0.76.0
+  as a container pinned by digest — no new action to allow; fails on a fixable HIGH or
+  CRITICAL finding; exceptions only in `.trivyignore.yaml`, with an expiry date). The
+  restore drill gained steps 13–17 (BACKUP_RESTORE.md § 11).
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

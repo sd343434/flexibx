@@ -4,6 +4,9 @@
 # checks.
 resource "aws_s3_bucket" "media" {
   bucket_prefix = "${var.name}-media-"
+  # Explicit (the provider's default): `terraform destroy` refuses a bucket that still
+  # holds objects instead of deleting customer media with it (Pass 17).
+  force_destroy = false
 }
 
 resource "aws_s3_bucket_public_access_block" "media" {
@@ -79,6 +82,8 @@ resource "aws_ecr_repository" "image" {
   for_each             = toset(["app", "worker", "ops"])
   name                 = "${var.name}/${each.key}"
   image_tag_mutability = "IMMUTABLE"
+  # A repository with released images is never deleted with them (explicit default).
+  force_delete = false
   image_scanning_configuration {
     scan_on_push = true
   }
@@ -92,4 +97,7 @@ resource "aws_ecr_repository" "image" {
 resource "aws_secretsmanager_secret" "env" {
   name        = "${var.name}/env"
   description = "Flexibx staging environment (KEY=value lines, staging.env.example)."
+  # A deleted secret stays recoverable for 30 days (explicit default; 0 would delete it
+  # at once).
+  recovery_window_in_days = 30
 }

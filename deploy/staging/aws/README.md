@@ -83,3 +83,22 @@ cost (R-3), ECR lifecycle (keep the last N tags), CloudWatch log shipping and re
 backup / maintenance windows, rotation of the storage user's access key (or move the app
 to the host role), the default-VPC assumption, and unrestricted egress from the host
 (needed for image pulls and the mail / AI providers; narrowing it needs a NAT or proxy).
+
+## Review (Pass 17)
+
+Re-checked against the first hosted deployment; still **not applied, not planned against
+AWS** (no credentials; no approval for paid resources). Made explicit (they were the
+provider's defaults, now pinned so an edit cannot flip them silently) and tested: the
+media bucket is never destroyed with its objects (`force_destroy = false`), image
+repositories are never deleted with their images (`force_delete = false`), a deleted env
+secret stays recoverable for 30 days. New `terraform test` runs: the host accepts 443 and
+80 only (no SSH) and the database 5432 from the host only; nothing is deleted with its
+data. 10 runs pass; mutants `force_destroy = true` and an SSH port are caught.
+
+Secrets and rotation: the RDS master password is created and rotated by RDS in Secrets
+Manager (`manage_master_user_password`; RDS's default rotation, 7 days); the env secret
+is written by the owner; the storage user's access key is created by the owner and must
+be rotated by hand (or the bucket moved to the host role — an open decision, see Audit).
+Logs and alarms: container logs rotate on the host; nothing is shipped or alarmed in
+AWS yet (RELEASE_READINESS_DECISIONS.md R-7). The images pushed to ECR are scanned on
+push; the same images are scanned before by CI (Trivy).

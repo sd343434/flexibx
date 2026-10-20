@@ -12,8 +12,8 @@
 # same bytes, and a moved tag cannot change what is deployed. Digests read on 2026-10-19
 # (multi-arch index) from mirror.gcr.io, Google's pull-through cache of Docker Hub. To
 # update: pull the new tag, read `docker image inspect --format '{{index .RepoDigests 0}}'`,
-# replace both tag and digest here, and let CI rebuild. Ubuntu/Debian packages installed
-# below still come from the distributions' archives at build time (security updates).
+# replace both tag and digest here, and let CI rebuild. The packages installed
+# below come from Ubuntu's archive at build time, upgraded to its current security updates.
 ARG NODE_IMAGE=node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752
 # Base of the two job images (`ops`, `worker`): Ubuntu 24.04 LTS, whose own archive carries
 # both tools they need — FFmpeg 6.1 (the version CI's integration tests and the worker's
@@ -47,7 +47,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# The image is glibc (Debian): the musl builds of sharp's libvips that Next.js's output
+# The image is glibc (Ubuntu): the musl builds of sharp's libvips that Next.js's output
 # tracing also copies are never loaded (-18 MB).
 RUN pnpm exec prisma generate && pnpm build \
  && rm -rf .next/standalone/node_modules/.pnpm/@img+sharp-libvips-linuxmusl-* \
@@ -90,6 +90,7 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
  && node --version \
  && corepack enable \
  && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
  && apt-get install -y --no-install-recommends ca-certificates postgresql-client-16 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -164,7 +165,12 @@ STOPSIGNAL SIGTERM
 CMD ["node", "--import", "tsx", "--import", "./scripts/video-retention/register.mjs", "scripts/creator/worker.ts"]
 
 # ── Runtime ─────────────────────────────────────────────────────────────────────
-FROM ${NODE_IMAGE} AS runner
+# Ubuntu 24.04 (JOBS_IMAGE) with only the `node` binary of NODE_IMAGE: no npm, npx or
+# corepack (the server never runs them, and their bundled packages carried most of the
+# app image's scanner findings — Pass 17), and the same distribution as the job images,
+# patched from Ubuntu's signed archive at build time (`apt-get upgrade`; the base stays
+# pinned by digest, the security updates are what moves).
+FROM ${JOBS_IMAGE} AS runner
 ARG GIT_SHA
 LABEL org.opencontainers.image.source="https://github.com/sd343434/flexibx" \
       org.opencontainers.image.revision="${GIT_SHA}" \
@@ -174,7 +180,12 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 WORKDIR /app
-RUN groupadd --system --gid 1001 flexibx && useradd --system --uid 1001 --gid flexibx flexibx
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 1001 flexibx && useradd --system --uid 1001 --gid flexibx flexibx \
+ && node --version
 COPY --from=build --chown=flexibx:flexibx /app/.next/standalone ./
 USER flexibx
 EXPOSE 3000

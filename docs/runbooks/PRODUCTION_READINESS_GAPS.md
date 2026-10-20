@@ -96,6 +96,25 @@ development and migration tooling only, never the production image. Keep the dat
 (three version pins and the regenerated lockfile) and run the gates above plus a
 migration on a copy of a real backup (§ 5.1).
 
+Pass 17 re-check (2026-10-20, two days before the gate): `pnpm audit` unchanged (3 high,
+1 moderate); no 7.10.2; `prisma` `latest` still `8.0.0-rc.23`. **Second rehearsal of
+7.10.1**, again in an isolated worktree: the regenerated lockfile changes only Prisma's
+packages and mysql2's dependencies; audit then reports only `braces`; generate,
+`db:validate`, typecheck, lint, 1132 unit tests, migrations, 923 integration tests, the
+restore drill and the build pass. The new migration engine (schema engine `d1b3f37`)
+applied all 37 migrations to a schema byte-identical to 7.10.0's (pg_dump) with identical
+migration checksums, reported a 7.10.0-migrated database as up to date, applied nothing to
+it, and `migrate diff` found no drift with either version. Not adopted: the gate date
+stands. On 2026-10-22, if still no 7.10.2 or regression report: apply exactly the three
+pins and the regenerated lockfile, run the gates, and remove the two `.trivyignore.yaml`
+entries (they expire 2026-10-29 regardless).
+
+`braces` (Pass 17): 3.0.3 is still the newest release (last published 2024-09); the
+advisory names no fixed version; `fast-glob` (3.3.3), `micromatch` (4.0.8) and
+`@next/eslint-plugin-next` (16.4.2) all still resolve to it. No upgrade exists to take, and
+an override to another major would break `micromatch`'s range — not done. It is in no
+image (lint only).
+
 ## 3. Storage
 
 | Item                                | Severity                                                                                        | Evidence                                                                                                                                                                                                                                                                                                     | Required action                                                      | Safe verification                  | Approval                                                |
@@ -663,3 +682,22 @@ RELEASE_READINESS_DECISIONS.md (R-1 … R-9).
 | OS packages                         | C         | `apt-get -s upgrade` in the built images: app (Debian 12) 0 pending; worker / ops (Ubuntu 24.04, newest digest) 2 pending security updates (`libsystemd0`, `libudev1` 8.18). No scanner reachable (R-9).                                                                                                                                                                           |
 | Container cycle (13 steps)          | A, then C | All passed locally (STAGING_CREATOR_STUDIO.md § 13); simulator declared; not hosted.                                                                                                                                                                                                                                                                                               |
 | Local gates (this pass)             | A         | format, typecheck, lint, Prisma validate, phase file, 1132 unit tests (68 files), 923 integration tests (59 files, 0 failed, 0 skipped), production build, 43 E2E tests, 5 S3 acceptance tests, restore drill PASSED, media tools OK, Terraform fmt / validate / test (8), gitleaks: history and changed files clean, `git diff --check` clean. CI: not run (account block).       |
+
+## 22. Pass 17: dependency remediation, image certification, restore end to end — status by evidence
+
+Pass 17 (2026-10-20). States as in § 12. **Hosted staging: not launched** (no credentials
+or approved resources; nothing created; no `terraform plan` against AWS). **CI: still no
+runner** (run #58: four jobs, 0 billable ms). No owner decision recorded since Pass 16.
+
+| Area                                | State     | Evidence / what is missing                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image vulnerabilities (OS and Node) | A         | Trivy 0.76.0 (digest-pinned) on the Pass 16 images: app 4 CRITICAL + 64 HIGH (Debian OS) + 14 HIGH/CRITICAL (npm's bundle); worker/ops 31–33 HIGH/CRITICAL (pnpm 10.28.0 and its bundle). Pass 17 images: **0 fixable HIGH/CRITICAL**; one HIGH with no fix anywhere (pnpm's bundled `http-cache-semantics`, unused offline). Pass 16's "app: 0 pending" was wrong (archive unreachable). |
+| App image runtime                   | A         | Ubuntu 24.04 + `node` only (no npm/npx/corepack); security updates at build; 389 MB; healthy, readiness 200, pages 200, non-root.                                                                                                                                                                                                                                                         |
+| pnpm                                | A         | 10.28.0 → 10.34.6 (≥ 2 weeks old; covers every listed advisory); lockfile unchanged; frozen install passes.                                                                                                                                                                                                                                                                               |
+| Image contents / scan in CI         | A, then C | `check-image-contents.sh` and `scan-images.sh` in the Docker job; both fail on the Pass 16 images (npm in app; fixable findings) and pass on the new ones; an expired `.trivyignore.yaml` entry fails again. CI cannot run (R-1).                                                                                                                                                         |
+| Prisma 7.10.1                       | B         | Full rehearsal passed (§ 2); migration engine output byte-identical; not adopted before the 2026-10-22 gate. `mysql2`/`deepmerge-ts` remain in the ops image only, accepted until 2026-10-29.                                                                                                                                                                                             |
+| `braces`                            | B         | No fixed release exists (§ 2); lint only, in no image.                                                                                                                                                                                                                                                                                                                                    |
+| Restore drill                       | A         | 17 steps, 44 assertions: interrupted backup, connection cut late in a restore (rollback after all data), source = copy (schema; 99 CHECK constraints by parser; audit log row for row), nothing else touched. 3 mutants killed. Found: a restore re-prints 25 CHECK constraints (equivalent; BACKUP_RESTORE.md § 11). Step 10's Pass 16 claim corrected.                                  |
+| Terraform                           | B         | Deletion safety pinned (bucket, ECR, secret recovery); 10 `terraform test` runs pass (mocked provider), 2 mutants killed. Never planned or applied against AWS.                                                                                                                                                                                                                           |
+| PITR                                | C         | Configured in code only; never exercised (no hosted database).                                                                                                                                                                                                                                                                                                                            |
+| Local gates (this pass)             | A         | format, typecheck, lint, Prisma validate, phase file, 1132 unit (68 files), 923 integration (59 files, 0 failed, 0 skipped), restore drill PASSED (44), 5 S3 acceptance, production build, 43 E2E, media tools OK, three images built (budgets hold), contents check and scan pass, Terraform fmt/validate/test (10), gitleaks, `git diff --check`. CI: not run.                          |

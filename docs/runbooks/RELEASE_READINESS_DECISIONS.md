@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Pass 17, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -21,7 +21,35 @@ environment exists.
 | R-6 | Static FFmpeg build                | Keep Ubuntu's signed FFmpeg 6.1 for now                                                 | Nothing (optional)                    |
 | R-7 | Alert destination and retention    | One paging webhook (on-call) + log retention 30 days staging                            | Gate's `alert_destination` on hosting |
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
-| R-9 | OS package patch policy for images | Refresh base digests on a schedule; consider `apt-get upgrade` at build                 | Clearing OS findings                  |
+| R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
+
+## Status on 2026-10-20 (Pass 17)
+
+No decision was recorded by the owner since Pass 16 (no commit, setting or message; CI
+run #58 on 6017891 failed like the others: four jobs, 0 billable ms). What changed in the
+repository:
+
+- **R-5 (Prisma):** the gate date (2026-10-22) is not reached; 7.10.2 does not exist and
+  npm's `latest` is still `8.0.0-rc.23`. A full rehearsal of 7.10.1 passed in an isolated
+  worktree (never this checkout): lockfile changes only Prisma's packages and mysql2's;
+  `pnpm audit` then leaves only `braces`; generate, typecheck, lint, 1132 unit, 923
+  integration tests, the restore drill and the build all pass; the migration engine
+  (7.10.1's schema engine `d1b3f37`) applies the 37 migrations to a byte-identical schema
+  with identical checksums, reports a 7.10.0-migrated database as up to date and finds no
+  drift either way. **Ready to apply on 2026-10-22, not adopted before.**
+- **R-9 (OS packages): implemented.** The app image now runs on the same Ubuntu 24.04
+  base as the job images with only the `node` binary (no npm, npx, corepack), and every
+  Ubuntu stage applies the archive's security updates at build (`apt-get upgrade`; the
+  base stays pinned by digest, apt checks Ubuntu's signatures). Trivy (official image
+  pinned by digest) scans all three images in CI and fails on a fixable HIGH/CRITICAL
+  finding. Owner: confirm this policy (reproducibility trade-off: two builds of one commit
+  can differ by the security updates published in between).
+- **Correction to Pass 16:** its statement "app image (Debian 12): 0 pending updates" was
+  wrong. Debian's archive is unreachable from the development environment, so
+  `apt-get update` fetched nothing and `apt-get -s upgrade` had nothing to compare. A real
+  scan (Trivy) of that image found 4 CRITICAL and 64 HIGH OS findings (perl-base with a
+  fix available, among others) and 14 HIGH/CRITICAL in npm's bundled packages. All gone
+  from the Pass 17 app image (0 HIGH/CRITICAL; 21 MEDIUM, 4 LOW).
 
 ## R-1. GitHub Actions is blocked
 
@@ -38,7 +66,8 @@ environment exists.
 - **Recommendation:** (a). Steps in CI_STATUS.md § 2. The allowed-actions list now has
   eight entries: `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`,
   `docker/setup-buildx-action`, `docker/build-push-action`, `actions/upload-artifact`,
-  `gitleaks/gitleaks-action`, and (Pass 16) `hashicorp/setup-terraform`.
+  `gitleaks/gitleaks-action`, and (Pass 16) `hashicorp/setup-terraform`. The Pass 17 scan uses
+  no new action (Trivy runs as a container pinned by digest).
 - **Blocked until decided:** any statement that CI passes; the image size budgets,
   the ops-image self-check and the Terraform tests running on every push.
 
@@ -163,3 +192,16 @@ calculator for the chosen region before approving; these are estimates, not quot
   (these two libraries are not used by the worker's processes: no systemd / udev in a
   container).
 - **Blocked:** nothing at runtime; a "no known OS vulnerability" statement.
+- **Pass 17 outcome:** (b) and (c) were implemented, (a) stays (digests unchanged: the
+  pinned `ubuntu:24.04` digest was still the newest on 2026-10-20). The "none pending"
+  statement about the Debian app image above was wrong (see "Status on 2026-10-20"); the
+  app image no longer uses Debian. A scanner was found after all: Trivy 0.76.0 from its
+  official Docker Hub image through mirror.gcr.io, whose index digest equals the one Aqua
+  publishes on ghcr.io (`sha256:2416d1f7…`; signature verification with cosign was not
+  possible — the sigstore endpoints are unreachable here). Results on the Pass 17 images:
+  app 0 HIGH/CRITICAL (21 MEDIUM, 4 LOW, OS); worker and ops 0 fixable HIGH/CRITICAL —
+  one HIGH without any fix (`http-cache-semantics` inside pnpm's own bundle, used for
+  registry HTTP caching, which the images never do: pnpm runs offline there) plus Ubuntu
+  MEDIUM/LOW (worker: 637 MEDIUM, mostly FFmpeg's media libraries, no fixed versions);
+  the two Prisma-gated advisories in ops are listed in `.trivyignore.yaml` with an expiry
+  of 2026-10-29. Owner: confirm (b)'s reproducibility trade-off.

@@ -159,3 +159,44 @@ run "app_domain_must_be_a_plain_host" {
   }
   expect_failures = [var.app_domain]
 }
+
+run "host_exposes_only_the_web_ports" {
+  command = plan
+
+  # No SSH: the host is reached through Session Manager only. Caddy needs 443 (and 80 for
+  # the ACME challenge and the redirect).
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.https.from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.https.to_port == 443 &&
+      aws_vpc_security_group_ingress_rule.http.from_port == 80 &&
+      aws_vpc_security_group_ingress_rule.http.to_port == 80
+    )
+    error_message = "the host accepts 443 and 80 only"
+  }
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.db_from_host.from_port == 5432 && aws_vpc_security_group_ingress_rule.db_from_host.to_port == 5432
+    error_message = "the database accepts PostgreSQL only"
+  }
+}
+
+run "nothing_is_deleted_with_its_data" {
+  command = plan
+
+  assert {
+    condition     = aws_s3_bucket.media.force_destroy == false
+    error_message = "the media bucket is never destroyed with its objects"
+  }
+  assert {
+    condition     = alltrue([for repository in aws_ecr_repository.image : repository.force_delete == false])
+    error_message = "image repositories are never deleted with their images"
+  }
+  assert {
+    condition     = aws_secretsmanager_secret.env.recovery_window_in_days == 30
+    error_message = "a deleted env secret stays recoverable for 30 days"
+  }
+  assert {
+    condition     = aws_db_instance.db.deletion_protection && !aws_db_instance.db.skip_final_snapshot
+    error_message = "the database has deletion protection and a final snapshot"
+  }
+}

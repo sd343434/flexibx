@@ -335,3 +335,39 @@ self-check fails if it is not writable. After the fix, on the local staging stac
 1.2 s, the restored copy refused by `migrate` until marked (STAGING_CREATOR_STUDIO.md § 13).
 A volume created by the old image keeps its root owner: remove it (it holds no backup,
 since none could be written) or `chown 1000:1000` it once.
+
+## 11. Pass 17: the drill end to end, and what a restore really reproduces
+
+`scripts/ops/restore-drill.sh` now has 17 steps and 44 assertions; it passed in about 25 s
+on local PostgreSQL 16 (2026-10-20). New steps:
+
+| Step | Case                             | How it is provoked (deterministically)                                                                                                              | Result                                                                                            |
+| ---- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 13   | Backup files private             | —                                                                                                                                                   | directory 700, every file 600                                                                     |
+| 14   | Backup interrupted mid-run       | a session holds an exclusive lock on `audit_logs`, so pg_dump waits; the backup's process group gets SIGTERM                                        | `FAILED`, no partial file left                                                                    |
+| 15   | Connection cut late in a restore | an uncommitted relation named like one of the dump's indexes makes pg_restore wait after all tables and rows are written; its backend is terminated | `FAILED`, target has 0 tables; the same restore then succeeds into the same target and `VERIFIED` |
+| 16   | Restored copy equals the source  | schema-only dumps compared; CHECK constraints compared by the server's parser; audit log compared row for row                                       | identical (99 CHECK constraints, 77 tables)                                                       |
+| 17   | Nothing else touched             | an unrelated database created before the drill; the source's row counts against its manifest                                                        | both unchanged                                                                                    |
+
+**Mutation checks** (each run once with a deliberately broken script, then restored): a
+backup trap that no longer removes partial files fails step 14; a restore without
+`--single-transaction` fails step 15 (tables left behind); a CHECK constraint loosened in
+the copy fails step 16.
+
+**Correction to § 10 (Pass 16).** Step 10's cut-off dump fails before pg_restore writes
+anything — where a cut lands decides how early it fails (a cut in the table of contents
+fails at once; a cut after the data does not fail at all). It never proved the rollback of
+a half-done restore; step 15 now does, after every table and row exists.
+
+**Found: a restore re-prints 25 of the 99 CHECK constraints.** PostgreSQL stores a
+constraint in parsed form and prints it back; restoring that printed form and printing it
+again moves the casts (`ANY ((ARRAY['a'::varchar])::text[])` becomes
+`ANY (ARRAY[('a'::varchar)::text])`). The constraints are the same — the source's text,
+parsed again by the server, prints exactly as the restored one, and a second dump/restore
+round changes nothing (tested). A plain text comparison of schemas would report a
+difference on every restore; step 16 compares everything else byte for byte and CHECK
+constraints semantically.
+
+**Measured vs estimated** (unchanged): the local timings of § 8–9 are measurements on one
+machine; every RDS, PITR and production-size figure is an estimate. PITR has never been
+exercised: no hosted database exists.

@@ -27,3 +27,5 @@ CLAUDE.md
 .phase-status.json
 # Deployment definitions (Compose, Terraform) are used from the checkout, never inside an image.
 deploy
+# Scanner exceptions are read from the checkout, never from an image.
+.trivyignore.yaml
