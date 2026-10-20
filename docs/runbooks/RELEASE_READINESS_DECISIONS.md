@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–22, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–23, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -23,7 +23,7 @@ environment exists.
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
 
-## Status of every open item (Pass 22, 2026-10-20)
+## Status of every open item (Pass 23, 2026-10-20)
 
 `FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
 owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
@@ -59,6 +59,26 @@ Writing a document about an item never makes it `FIXED`.
 | Pass 19's first E2E run (33 of 43 failed)                  | local gate script      | —              | **FIXED**   | Pass 20: reproduced exactly (33 failed / 10 passed): the local script left the shell in `deploy/staging/aws`, so the E2E database was never migrated (`rate_limits` missing). Not an app defect. `e2e/global-setup.ts` now stops a run on an unmigrated database (tested both ways) |
 | Hosted-staging preflight                                   | `scripts/release`      | —              | **FIXED**   | Pass 20: `staging-preflight.sh` (no AWS call) and its test in CI, 6/6 mutants killed; STAGING_LAUNCH.md                                                                                                                                                                             |
 | Env file on the host from Secrets Manager                  | `scripts/ops`, host    | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
+| Host AWS CLI version not pinned (snap)                     | host (user-data)       | —              | **OPEN**    | Pass 23: tested pinned alternative `install-aws-cli-pinned.sh` (2.38.2, hash + version; 12 checks, 7/7 mutants); not adopted — owner decision R-9                                                                                                                                   |
+| Preflight accepted a reserved domain (`.test`)             | `scripts/release`      | —              | **FIXED**   | Pass 23: `.test/.example/.invalid/.localhost/.local` refused; 4 new checks; mutant killed                                                                                                                                                                                           |
+
+## Status on 2026-10-20 (Pass 23)
+
+Checked 2026-10-20 18:40 UTC: the Prisma gate (2026-10-22) is **still not reached**; not
+applied; the committed patch applies to `72565fc`. Exceptions unchanged (expire
+2026-10-29; escalate 2026-10-28; never extended). No owner decision recorded: R-1, R-2,
+R-3, R-4, R-7, R-8 **BLOCKED**; R-5, R-6, R-9 **OPEN**; nothing `ACCEPTED`. The AWS
+credentials in the session environment were **not used** (no call of any kind).
+
+**New evidence:** R-9 extended to the host's tools (see R-9, "Pass 23"): the snap AWS CLI
+is unpinned; a pinned, tested alternative exists and awaits the owner's choice. The
+preflight accepted `staging.flexibx.test`; reserved names are now refused. Release
+candidate **`72565fc`** built and verified (label, contents, sizes 389 / 1229 / 1089 MB,
+ops self-check, media tools; Trivy database of 2026-10-20 07:17 UTC, the newest
+published: 0 fixable HIGH/CRITICAL; OS MEDIUM/LOW app 21/4, worker 637/28, ops 23/4; ops 1
+Node MEDIUM); staging gate `PASSED` 34 / 0 / 0 on the local stack (not hosted); backup,
+refused restore over the source, `VERIFIED` restore (77 tables, 502 objects, 37
+migrations). CI runs #68 and #69 again without a runner.
 
 ## Status on 2026-10-20 (Pass 22)
 
