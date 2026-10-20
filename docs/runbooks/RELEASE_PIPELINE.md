@@ -64,9 +64,26 @@ ECR scans again on push (`scan_on_push`).
 
 ## 4. Measured (2026-10-20, local)
 
-Recorded in PRODUCTION_READINESS_GAPS.md § 23 (Pass 18): the release images of the
-Pass 18 commit, built twice from `git archive` of that commit, with what matched and what
-did not.
+The Pass 18 commit `9333ffa` was built twice with `build-and-verify.sh` (the second time
+after clearing the build cache), with this environment's local options (proxy CA, base
+images through mirror.gcr.io at the same digests). Both runs passed every check.
+
+| Image  | Image ID | Files compared (`/app`, `node`) | Differing files                                                             | OS packages (name + version) |
+| ------ | -------- | ------------------------------- | --------------------------------------------------------------------------- | ---------------------------- |
+| app    | differs  | 2 602                           | 212, all Next.js build output (`.next/`)                                    | 92, identical                |
+| worker | differs  | 5 685                           | 2: pnpm's `.modules.yaml` (install timestamp) and one generated `.bin` shim | 306, identical               |
+| ops    | differs  | 18 287                          | 4: `.modules.yaml` and three generated `.bin` shims                         | 113, identical               |
+
+So the builds are **not byte-reproducible**, and the image IDs differ. Every source file,
+dependency, the Node binary and every OS package were identical. The app's differences
+come from Next.js: a random `BUILD_ID` per build (which every chunk manifest references),
+per-build preview-mode keys (secrets, rightly different), and file lists in traced
+dependency manifests written in a different order (same 445 files in the sample checked).
+Identical OS packages here only mean no Ubuntu update landed between the two builds; a
+later rebuild may differ by design (security updates at build).
+
+Open option: `generateBuildId` from the commit would remove the `BUILD_ID` difference
+(not the per-build keys); not done in this pass.
 
 ## 5. CI
 
