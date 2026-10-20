@@ -1,6 +1,6 @@
-# CI status and the GitHub Actions blocker (Passes 10–19)
+# CI status and the GitHub Actions blocker (Passes 10–20)
 
-**Verdict on 2026-10-20 (rechecked in Pass 19, run #62): CI is NOT verified.** Since run
+**Verdict on 2026-10-20 (rechecked in Pass 20, run #63): CI is NOT verified.** Since run
 #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
@@ -27,6 +27,7 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #57–#60            | …         | 2026-10-19/20    | failure in 3–5 s each, no runner (Passes 16–18)                 |
 | #61                | `baa80be` | 2026-10-20 09:44 | failure in 5 s, no runner, 0 billable ms (Pass 18)              |
 | #62                | `3e41054` | 2026-10-20 10:19 | failure in 5 s, no runner, 0 billable ms (Pass 19)              |
+| #63                | `f7dfef6` | 2026-10-20 11:54 | failure in 5 s, no runner, 0 billable ms (Pass 20 check)        |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
@@ -173,6 +174,17 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   `hashicorp/setup-terraform`). Coverage once runners start: build (app/worker/ops), image
   contents, size budgets, ops self-check, media tools, vulnerability scan, Terraform
   fmt/validate/test, restore drill and its mutation test, S3 acceptance, e2e, gitleaks.
+- **Pass 20:** run #63 (push of f7dfef6, 11:54 UTC) failed like every run since #43:
+  every job `runner_id: 0` with an empty runner name, created and completed within 3 s,
+  0 billable ms. The workflow was checked again for a repository-side cause and none
+  exists: it parses (`python3 -c 'yaml.safe_load(...)'`), the workflow state is `active`,
+  no job uses an `environment` (so no protection rule or reviewer can hold it), no job
+  has an `if`, the token permission is `contents: read`, and `concurrency` with
+  `cancel-in-progress` can only end a superseded run as `cancelled`, never as `failure`.
+  Branch protection does not apply to pushes of this branch's own workflow runs. Changes:
+  the quality job runs `scripts/release/test-staging-preflight.sh`; in CI the E2E web
+  server's own log is printed (`stdout: pipe`) and a run stops at once on an unmigrated
+  database (`e2e/global-setup.ts`). No new action.
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

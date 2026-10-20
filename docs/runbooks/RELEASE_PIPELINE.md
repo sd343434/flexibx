@@ -1,4 +1,4 @@
-# Release pipeline: build, verify, publish one release (Passes 18–19)
+# Release pipeline: build, verify, publish one release (Passes 18–20)
 
 How a Flexibx release becomes three images, what proves they are fit to deploy, and how
 they reach the registry. The deployment itself is STAGING_CREATOR_STUDIO.md § 3 (and
@@ -70,6 +70,8 @@ and an existing tag push nothing; pushes come only after verification. Eight mut
 `build-and-verify.sh` (each guard removed, verification made non-fatal, push moved before
 verification, wrong `GIT_SHA`, build from the checkout) are all caught (Pass 19).
 Deploy by that tag (`FLEXIBX_TAG=<commit-sha>`); Compose refuses to run without one.
+For the first hosted staging launch, the push is approval 3 of docs/runbooks/STAGING_LAUNCH.md,
+after `scripts/release/staging-preflight.sh` (Pass 20) and a reviewed `terraform plan`.
 ECR scans again on push (`scan_on_push`).
 
 ## 4. Measured (2026-10-20, local)

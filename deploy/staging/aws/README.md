@@ -128,3 +128,13 @@ push; the same images are scanned before by CI (Trivy).
 - `terraform fmt -check`, `validate` and `test` re-run against the lock file: 11 runs pass.
 - Still **not planned or applied against AWS**: no account, region, cost approval or
   secrets channel (RELEASE_READINESS_DECISIONS.md "Inputs for the first AWS deploy").
+
+## Pass 20
+
+- The whole first launch — owner inputs, preflight, plan, the three approvals (use the
+  account, create resources, push images), deploy, acceptance A1–A10, stop conditions,
+  rollback and the RTO to measure — is one procedure: docs/runbooks/STAGING_LAUNCH.md.
+- `scripts/release/staging-preflight.sh terraform.tfvars <sha>` checks the variables file,
+  the release commit, the lock file and `terraform validate` without any AWS call; it
+  passes on this repository with a filled-in file and refuses `terraform.tfvars.example`.
+- Not planned or applied against AWS (no account, approval or secrets channel).
