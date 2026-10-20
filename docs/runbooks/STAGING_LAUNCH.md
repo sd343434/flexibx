@@ -12,19 +12,19 @@ DEPLOYMENT.md (migrations and rollback).
 
 ## 0. Inputs the owner provides (still missing on 2026-10-20)
 
-| Input                                           | Decision | Where it goes                                               |
-| ----------------------------------------------- | -------- | ----------------------------------------------------------- |
-| AWS account (staging only) and region           | R-2, D-1 | `terraform.tfvars` `region`; the deploy role                |
-| Staging domain and who edits its DNS            | R-2      | `terraform.tfvars` `app_domain`; an A record to `public_ip` |
-| Private Terraform state bucket (versioned)      | R-2      | backend configuration (not in the repository)               |
-| Cost approval (≈ USD 100–130 / month) + budget  | R-3      | AWS Budgets alarm, e.g. USD 150                             |
-| Secrets channel: owner writes the env secret    | R-4      | the Secrets Manager secret Terraform creates (empty)        |
-| Alert destination and log retention             | R-7      | `ALERT_WEBHOOK_URL` (+ token) in the env secret; retention  |
-| PITR + off-host dump plan, one restore exercise | R-8      | RDS retention (Terraform), backup job schedule              |
-| Image/OS update policy confirmed                | R-9      | as implemented (security updates at build + Trivy gate)     |
-| Host AWS CLI: snap (unpinned) or pinned 2.38.2  | R-9      | `user-data.sh.tftpl` (`install-aws-cli-pinned.sh`, Pass 23) |
-| GitHub Actions running again                    | R-1      | CI verifies the release commit before anything is published |
-| Mail provider for the staging domain            | R-4      | env secret                                                  |
+| Input                                           | Decision | Where it goes                                                                                              |
+| ----------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| AWS account (staging only) and region           | R-2, D-1 | `terraform.tfvars` `region`; the deploy role                                                               |
+| Staging domain and who edits its DNS            | R-2      | `terraform.tfvars` `app_domain`; an A record to `public_ip`                                                |
+| Private Terraform state bucket (versioned)      | R-2      | backend configuration (not in the repository)                                                              |
+| Cost approval (≈ USD 100–130 / month) + budget  | R-3      | AWS Budgets alarm, e.g. USD 150                                                                            |
+| Secrets channel: owner writes the env secret    | R-4      | the Secrets Manager secret Terraform creates (empty)                                                       |
+| Alert destination and log retention             | R-7      | `ALERT_WEBHOOK_URL` (+ token) in the env secret; retention                                                 |
+| PITR + off-host dump plan, one restore exercise | R-8      | RDS retention (Terraform), backup job schedule                                                             |
+| Image/OS update policy confirmed                | R-9      | as implemented (security updates at build + Trivy gate)                                                    |
+| Host AWS CLI: snap (unpinned) or pinned 2.38.2  | R-9      | `user-data.sh.tftpl`; pin only after `verify-aws-cli-signature.sh` passes with AWS's current key (Pass 24) |
+| GitHub Actions running again                    | R-1      | CI verifies the release commit before anything is published                                                |
+| Mail provider for the staging domain            | R-4      | env secret                                                                                                 |
 
 ## 1. Preflight (no credentials, no AWS call)
 

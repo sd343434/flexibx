@@ -1,22 +1,22 @@
-# CI status and the GitHub Actions blocker (Passes 10–23)
+# CI status and the GitHub Actions blocker (Passes 10–24)
 
-> **For the GitHub owner (`sd343434`), one page — Pass 23, 2026-10-20.**
-> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #69 on
-> `72565fc` (push, 18:37 UTC; #64–#68 the same) — four jobs, each `runner_id: 0` with no runner name,
+> **For the GitHub owner (`sd343434`), one page — Pass 24, 2026-10-20.**
+> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #71 on
+> `88f3929` (push, 19:09 UTC; #64–#70 the same) — four jobs, each `runner_id: 0` with no runner name,
 > created and completed within 4 s, 0 billable ms (`get_workflow_run_usage`), job logs
 > HTTP 404 (never written). Same for a manual `workflow_dispatch` (#56).
 > **Not the repository:** the workflow is valid and `active`, ran green before (#42),
 > uses only GitHub-hosted `ubuntu-latest`, no `environment`, no job condition,
 > `permissions: contents: read`; the public repository's hosted minutes are free.
 > **Action needed (account owner, outside the repository):** open
-> [run #69](https://github.com/sd343434/flexibx/actions/runs/39476428057) → a job →
+> [run #71](https://github.com/sd343434/flexibx/actions/runs/39481015413) → a job →
 > "Annotations" and read GitHub's reason; then check _Settings → Billing and licensing_
 > (a failed payment locks Actions for every repository of the account) and _Repository
 > → Settings → Actions → General_ (Actions allowed; the 8 actions in § 2 allowed). Then
 > _Actions → CI → Run workflow_ on `claude/amazing-sagan-pvouqy`. CI counts as passing
 > only when all four jobs show a runner, step logs and success.
 
-**Verdict on 2026-10-20 (rechecked in Pass 23, run #69): CI is NOT verified.** Since run
+**Verdict on 2026-10-20 (rechecked in Pass 24, run #71): CI is NOT verified.** Since run
 #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
@@ -50,6 +50,8 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #67                | `26ccada` | 2026-10-20 16:46 | failure in 4 s, no runner, 0 billable ms (Pass 22)              |
 | #68                | `c70624d` | 2026-10-20 17:25 | failure in 4 s, `runner_id` 0, 0 billable ms                    |
 | #69                | `72565fc` | 2026-10-20 18:37 | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 23)          |
+| #70                | `72bb73c` | 2026-10-20 18:41 | failure in 4 s, `runner_id` 0                                   |
+| #71                | `88f3929` | 2026-10-20 19:09 | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 24)          |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:

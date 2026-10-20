@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–23, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–24, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -23,7 +23,7 @@ environment exists.
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
 
-## Status of every open item (Pass 23, 2026-10-20)
+## Status of every open item (Pass 24, 2026-10-20)
 
 `FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
 owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
@@ -59,8 +59,39 @@ Writing a document about an item never makes it `FIXED`.
 | Pass 19's first E2E run (33 of 43 failed)                  | local gate script      | —              | **FIXED**   | Pass 20: reproduced exactly (33 failed / 10 passed): the local script left the shell in `deploy/staging/aws`, so the E2E database was never migrated (`rate_limits` missing). Not an app defect. `e2e/global-setup.ts` now stops a run on an unmigrated database (tested both ways) |
 | Hosted-staging preflight                                   | `scripts/release`      | —              | **FIXED**   | Pass 20: `staging-preflight.sh` (no AWS call) and its test in CI, 6/6 mutants killed; STAGING_LAUNCH.md                                                                                                                                                                             |
 | Env file on the host from Secrets Manager                  | `scripts/ops`, host    | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
-| Host AWS CLI version not pinned (snap)                     | host (user-data)       | —              | **OPEN**    | Pass 23: tested pinned alternative `install-aws-cli-pinned.sh` (2.38.2, hash + version; 12 checks, 7/7 mutants); not adopted — owner decision R-9                                                                                                                                   |
+| Host AWS CLI version not pinned (snap)                     | host (user-data)       | —              | **OPEN**    | Pinned alternative tested (Pass 23); Pass 24: its provenance is not established — `verify-aws-cli-signature.sh` refuses the only reachable key copy (expired 2026-07-07); needs the current key from AWS's documentation, then owner decision R-9                                   |
 | Preflight accepted a reserved domain (`.test`)             | `scripts/release`      | —              | **FIXED**   | Pass 23: `.test/.example/.invalid/.localhost/.local` refused; 4 new checks; mutant killed                                                                                                                                                                                           |
+
+## Status on 2026-10-20 (Pass 24)
+
+Checked 2026-10-20 21:34 UTC: the Prisma gate (2026-10-22) is **still not reached**, so
+7.10.1 is **not applied** and both exceptions stay (expire 2026-10-29; escalate
+2026-10-28; never extended). No owner decision recorded: R-1, R-2, R-3, R-4, R-7, R-8
+**BLOCKED**; R-5, R-6, R-9 **OPEN**; nothing `ACCEPTED`. AWS credentials **not used**.
+
+**Rehearsal of the upgrade (detached worktree, separate databases; not on the branch):**
+the committed patch applied to `88f3929` gives Prisma 7.10.1 with `deepmerge-ts` 8.0.2
+and `mysql2` 3.24.4. validate, typecheck, lint, 1135 unit, migrate + status, drift
+(migrated database vs schema: empty), 923 integration, drill PASSED, mutants 13/13,
+build, 43 E2E — all pass. A database migrated by 7.10.0 and one by 7.10.1 have
+**identical** schema dumps (7881 lines) and identical migration names + checksums (37).
+Images built from the rehearsal commit (`697fcdd`, local only) with the exception file
+**empty**: Trivy (DB 2026-10-20 07:17 UTC, newest) 0 fixable HIGH/CRITICAL and **no Node
+finding in any image** (ops' 1 Node MEDIUM gone too); OS MEDIUM/LOW unchanged (app 21/4,
+worker 637/28, ops 23/4, Ubuntu packages without fixes). Local stack on those images:
+`STAGING CHECK PASSED` 34 / 0 / 0, `VERIFIED` restore (77 / 502 / 37). So both
+exceptions can go with the upgrade: the exact change is
+`docs/runbooks/patches/prisma-7.10.1-remove-exceptions.patch` (R-5 procedure).
+Rehearsal mistakes kept on record: a test database not named `*_test` was refused by the
+integration guard (re-run on a `_test` database: 923 passed), and a migrations-to-schema
+diff needs a shadow database the config does not define (replaced by the dump comparison).
+
+**AWS CLI (R-9):** `scripts/ops/verify-aws-cli-signature.sh` refuses an expired or revoked
+key (gpg alone accepts an expired one); on the real 2.38.2 file with the keyserver copy of
+the AWS key it **refuses** — the 2.38.2 pin is therefore unproven until rechecked with the
+key from AWS's documentation (unreachable here). The keyserver shows AWS extending the key
+every July (2023, 2024, 2025 self-signatures); the July 2026 extension is not on it.
+**No decision:** snap stays in user-data.
 
 ## Status on 2026-10-20 (Pass 23)
 
@@ -444,3 +475,11 @@ calculator for the chosen region before approving; these are estimates, not quot
   means a new hash, verified against the current key from AWS's documentation.
   **Owner decision (R-9):** keep the snap (auto-updated, unpinned) or adopt the pin
   (reproducible, but updated only by a reviewed change).
+- **Pass 24:** a pin may only be taken after `scripts/ops/verify-aws-cli-signature.sh`
+  passes: valid signature, AWS CLI team key fingerprint, key **not expired or revoked**
+  (test in CI: 7 checks with throwaway keys, 5/5 mutants killed). On the 2.38.2 file with
+  the only reachable key copy (keyserver.ubuntu.com, last self-signature 2025-07-07,
+  expired 2026-07-07) it refuses, so the pinned hash's provenance is **not established**.
+  To close: download the key block from AWS's documentation page ("Install or update the
+  AWS CLI" → PGP public key), run the script on the pinned file; if it passes, the owner
+  chooses snap or pin; if it fails, the pin is dropped. Until then: snap (unchanged).
