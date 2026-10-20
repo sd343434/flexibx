@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 
 import { API_CONTENT_SECURITY_POLICY } from "./src/security/csp";
+import { buildIdFromCommit } from "./src/server/build-id";
 import { INVITATION_URL_PATTERN } from "./src/server/redact";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
@@ -29,6 +30,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
+  // Release images: the commit (Dockerfile build stage); otherwise Next.js's random ID.
+  generateBuildId: () => Promise.resolve(buildIdFromCommit(process.env.GIT_SHA)),
   // Media uploads (images up to 10 MiB, src/server/marketing/media-service.ts) are the
   // only large server-action bodies; the service enforces the exact per-file limit.
   experimental: { serverActions: { bodySizeLimit: "11mb" } },

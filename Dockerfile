@@ -47,6 +47,8 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# The commit becomes the Next.js build ID (next.config.ts), not a random one per build.
+ARG GIT_SHA
 # The image is glibc (Ubuntu): the musl builds of sharp's libvips that Next.js's output
 # tracing also copies are never loaded (-18 MB).
 RUN pnpm exec prisma generate && pnpm build \

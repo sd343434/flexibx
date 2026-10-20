@@ -38,6 +38,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # Pass 19: build-and-verify.sh refuses bad tags, a SHA tag that is not HEAD, a dirty
+      # tree or an existing tag on --push, and pushes nothing unless every check passed.
+      - name: Release script guards (stub Docker, no registry)
+        run: scripts/release/test-release-guards.sh
       # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
       # passes its security tests against a mocked AWS provider — no credentials, no plan
       # against AWS, nothing created.
@@ -163,10 +167,6 @@ jobs:
           load: true
           tags: flexibx-worker:ci
           cache-from: type=gha
-      # FFmpeg in the worker image: the version, encoders and subtitle filter the worker
-      # needs (offline; no credentials, no storage, no provider).
-      # The image build already ran this check (it fails the build); run it again on the
-      # final image as the worker's user, offline, and prove the worker is not root.
       - name: Validate the staging Compose file (Pass 13)
         run: |
           cp deploy/staging/staging.env.example deploy/staging/staging.env
