@@ -496,3 +496,20 @@ app healthy in 5 s; scheduler ticks 200; **`STAGING CHECK PASSED`, 34 pass, 0 fa
 all labelled with the build's revision. The `backup` job, a refused restore over the
 source, a `VERIFIED` restore into a separate database, and `migrate` refused on that
 unmarked copy: BACKUP_RESTORE.md § 12. Release process: RELEASE_PIPELINE.md.
+
+## 16. Pass 19: the gate on the images of one release commit
+
+The three images were built and verified by `scripts/release/build-and-verify.sh` from
+commit `3e41054` (tag = the full SHA; every check passed: revision label, contents, size
+budgets 389 / 1229 / 1089 MB, ops self-check, media tools, vulnerability scan). On the
+local Compose stack with `FLEXIBX_TAG` = that SHA (SeaweedFS, local PostgreSQL 16, alert
+receiver; **not hosted**, 2026-10-20): `migrate` refused the unmarked database and the gate
+FAILED before the deploy (`database_environment`, 4 pass / 5 fail); after marking, the 37
+migrations applied; app healthy in 6 s; scheduler ticks 200 (automation tick, video
+retention); **`STAGING CHECK PASSED`, 34 pass, 0 fail, 0 not run**, test alert delivered
+to the local receiver; app runs as `flexibx`, worker and scheduler as `node`, all three
+labelled `3e41054…`. Then through the ops image: `backup` (77 tables), a restore naming the
+source database refused (exit 2), a restore into a separate database `RESTORED` and
+`VERIFIED` (row counts of 77 tables, 502 indexes and constraints, 37 migrations), and
+`migrate` refused on that unmarked restored copy. The simulator (SeaweedFS) and the local
+alert receiver stand in for S3 and a paging service: this is not evidence about AWS.

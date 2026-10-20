@@ -1,6 +1,7 @@
-# CI status and the GitHub Actions blocker (Passes 10–18)
+# CI status and the GitHub Actions blocker (Passes 10–19)
 
-**Verdict on 2026-10-19: CI is NOT verified.** Since run #43 (2026-10-17), no job of the
+**Verdict on 2026-10-20 (rechecked in Pass 19, run #62): CI is NOT verified.** Since run
+#43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
 the repository. Until a run actually executes, the project must not be described as
@@ -23,6 +24,9 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #54                | `4ef0a26` | 2026-10-19 12:46 | failure in 5 s, no runner (Pass 14 check)                       |
 | #55                | `069c2df` | 2026-10-19 14:33 | failure in 5 s, no runner (push)                                |
 | #56                | `069c2df` | 2026-10-19 14:46 | failure in 8 s, no runner (manual `workflow_dispatch`, Pass 15) |
+| #57–#60            | …         | 2026-10-19/20    | failure in 3–5 s each, no runner (Passes 16–18)                 |
+| #61                | `baa80be` | 2026-10-20 09:44 | failure in 5 s, no runner, 0 billable ms (Pass 18)              |
+| #62                | `3e41054` | 2026-10-20 10:19 | failure in 5 s, no runner, 0 billable ms (Pass 19)              |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
@@ -68,7 +72,8 @@ page, "Annotations"), not through the API this session can use.
 ## 2. What the owner must check (outside the repository; needs the account owner)
 
 1. **Read the annotation:** open
-   [run #56](https://github.com/sd343434/flexibx/actions/runs/39272010631), select a failed
+   [run #62](https://github.com/sd343434/flexibx/actions/runs/39407070274) (or
+   [run #56](https://github.com/sd343434/flexibx/actions/runs/39272010631)), select a failed
    job, and read the message under "Annotations". It names the cause, for example "The job
    was not started because your account is locked due to a billing issue".
 2. **Billing:** _Settings → Billing and licensing_ of the account `sd343434`.
@@ -156,6 +161,18 @@ and step logs. **Only a run whose four jobs complete green counts as CI passing.
   lock file (`deploy/staging/aws/.terraform.lock.hcl`, signature-verified checksums). No
   step in the workflow may fail softly (no `continue-on-error`, no `|| true`); the
   staging gate's NOT_RUN is exit 2, never a pass (`tests/unit/staging-predeploy.test.ts`).
+- **Pass 19:** run #61 (push of baa80be, 09:44 UTC) and run #62 (push of 3e41054, 10:19
+  UTC) failed like every run since #43. Read through the API for #62: all four jobs
+  `runner_id: 0`, empty `runner_name` and `runner_group_name`, started and completed within
+  2 s, `get_workflow_run_usage` 0 ms for each job, job logs HTTP 404 (none was written).
+  Same diagnosis as § 1 (account-level block); nothing in the repository can change it, and
+  no other account or runner was used to get around it. Workflow changes: the quality job
+  runs `scripts/release/test-release-guards.sh` (no Docker; proves that a failing check or
+  an existing tag pushes nothing); an orphaned comment was removed from the Docker job. No
+  new action (the allowed-actions list in § 2 is unchanged: eight entries, including
+  `hashicorp/setup-terraform`). Coverage once runners start: build (app/worker/ops), image
+  contents, size budgets, ops self-check, media tools, vulnerability scan, Terraform
+  fmt/validate/test, restore drill and its mutation test, S3 acceptance, e2e, gitleaks.
 - **Nothing was weakened.** No test was skipped and no job was removed. The order stays:
   `format:check` → `typecheck` → `lint` → `test`; then migrations → integration → drill →
   build → e2e.

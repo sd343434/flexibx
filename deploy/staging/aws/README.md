@@ -38,8 +38,9 @@ few dollars at staging volumes. No load balancer, NAT gateway or Multi-AZ.
 ```bash
 cd deploy/staging/aws && cp terraform.tfvars.example terraform.tfvars   # fill in
 terraform init && terraform plan -out staging.plan && terraform apply staging.plan
-# images: build from one commit, push with that commit as an immutable tag
-docker build --target runner -t <ecr>/app:<sha> --build-arg GIT_SHA=<sha> . && docker push …   # worker, ops likewise
+# images: from a clean checkout of one commit, build + verify + push with the commit as an
+# immutable tag (docs/runbooks/RELEASE_PIPELINE.md; nothing is pushed if a check fails)
+FLEXIBX_REGISTRY=<ecr> scripts/release/build-and-verify.sh <sha> --push
 # on the host (aws ssm start-session --target <host_instance_id>):
 #   fetch the env secret into /opt/flexibx/staging.env (mode 600), check out the same
 #   commit's deploy/staging/compose.yaml, then STAGING_CREATOR_STUDIO.md § 3:
@@ -119,3 +120,11 @@ push; the same images are scanned before by CI (Trivy).
 - Still **not planned or applied against AWS**; logs, alarms and their retention are
   owner decision R-7 (paid resources). RDS rotates its master password itself; the
   storage user's key is rotated by hand (open decision).
+
+## Pass 19
+
+- Launch publishes images with `scripts/release/build-and-verify.sh <sha> --push` (above):
+  nothing is pushed unless every check passed; a dirty tree or an existing tag is refused.
+- `terraform fmt -check`, `validate` and `test` re-run against the lock file: 11 runs pass.
+- Still **not planned or applied against AWS**: no account, region, cost approval or
+  secrets channel (RELEASE_READINESS_DECISIONS.md "Inputs for the first AWS deploy").

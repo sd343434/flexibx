@@ -1,11 +1,11 @@
-# Release pipeline: build, verify, publish one release (Pass 18)
+# Release pipeline: build, verify, publish one release (Passes 18–19)
 
 How a Flexibx release becomes three images, what proves they are fit to deploy, and how
 they reach the registry. The deployment itself is STAGING_CREATOR_STUDIO.md § 3 (and
 `deploy/staging/aws/README.md` for AWS); restoring after an incident is SERVICE_RESTORE.md.
 
-**Status (2026-10-20):** the pipeline and every check below run locally and are wired
-into CI, but CI has never run them (GitHub Actions gets no runner: CI_STATUS.md, decision
+**Status (2026-10-20, Pass 19):** the pipeline and every check below run locally and are
+wired into CI, but CI has never run them (GitHub Actions gets no runner: CI_STATUS.md, decision
 R-1) and nothing has been pushed to a registry (no AWS account yet: R-2/R-3).
 
 ## 1. Inputs are pinned
@@ -57,8 +57,18 @@ FLEXIBX_REGISTRY=<account>.dkr.ecr.<region>.amazonaws.com/flexibx-staging \
   scripts/release/build-and-verify.sh <commit-sha> --push
 ```
 
-Pushes only after every check passed, refuses `latest`, refuses a tag that already exists
-in the registry (ECR's repositories are immutable too), and prints the pushed digests.
+Pushes only after every check passed, refuses `latest`, a tag that is a commit SHA other
+than HEAD, a dirty working tree (uncommitted or untracked files: a release is published
+from a clean checkout of its commit) and a tag that already exists in the registry (ECR's
+repositories are immutable too), and prints the pushed digests.
+
+`scripts/release/test-release-guards.sh` (CI quality job, no Docker needed) proves these
+guards with a stub `docker` in a throwaway repository: refused tags and options build
+nothing; every image gets `GIT_SHA` = HEAD and is built from an archive of the commit; a
+failing check — a stub verifier, or the real `verify-images.sh` on a wrong commit label —
+and an existing tag push nothing; pushes come only after verification. Eight mutants of
+`build-and-verify.sh` (each guard removed, verification made non-fatal, push moved before
+verification, wrong `GIT_SHA`, build from the checkout) are all caught (Pass 19).
 Deploy by that tag (`FLEXIBX_TAG=<commit-sha>`); Compose refuses to run without one.
 ECR scans again on push (`scan_on_push`).
 
@@ -82,8 +92,41 @@ dependency manifests written in a different order (same 445 files in the sample 
 Identical OS packages here only mean no Ubuntu update landed between the two builds; a
 later rebuild may differ by design (security updates at build).
 
-Open option: `generateBuildId` from the commit would remove the `BUILD_ID` difference
-(not the per-build keys); not done in this pass.
+### Pass 19: the commit as the build ID
+
+`next.config.ts` sets `generateBuildId` from `GIT_SHA` (passed to the Dockerfile's build
+stage; `src/server/build-id.ts`, unit-tested). The SHA's letters a–f are written g–l, so
+the ID never contains "ad" (Next.js avoids such IDs because ad blockers block their
+asset URLs); anything but a full SHA keeps Next.js's random ID. The release image of
+`3e41054` has `BUILD_ID` `3k41054037371kj0l80g921lk21ii6477kk48i1k`.
+
+Measured again on `3e41054` (second build with `--no-cache`, same local options):
+
+| Image  | Image ID | Files compared | Differing files                                                               | OS packages    |
+| ------ | -------- | -------------- | ----------------------------------------------------------------------------- | -------------- |
+| app    | differs  | 2 601          | 194 (Pass 18: 212), all `.next/`                                              | 92, identical  |
+| worker | differs  | 5 687          | 1 (Pass 18: 2): pnpm's `.modules.yaml`                                        | 306, identical |
+| ops    | —        | —              | not compared: the second build ran out of disk in this environment (`ENOSPC`) | —              |
+
+What still differs in the app, and why it stays:
+
+- **Server Action IDs and the files that reference them** (59 page manifests under
+  `server/app`, the two root `server-reference-manifest` files, 72 server chunks, 13 client
+  chunks): Next.js derives the IDs with a per-build encryption key (`encryptionKey` in
+  `server-reference-manifest.json`). A fixed key would have to be supplied at build time
+  (`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`), i.e. baked into the image as a secret shared by
+  every build — not done.
+- **Preview-mode keys** (`prerender-manifest.json`, `preview-props.json`): per-build
+  secrets, rightly different.
+- **Output-trace file lists** (46 `.nft.json`): all 46 list the same files, in a different
+  order (checked file by file).
+- **pnpm's `.modules.yaml`** (worker, ops): an install timestamp in pnpm's own state file,
+  which pnpm reads on later installs; left alone (no image runs an install). The differing
+  `.bin` shim of Pass 18's worker did not recur in this measurement; the ops image was not
+  compared this time.
+
+So the builds are **still not byte-reproducible**; the random build ID is gone, and every
+remaining difference is a per-build secret or an ordering/timestamp artifact.
 
 ## 5. CI
 

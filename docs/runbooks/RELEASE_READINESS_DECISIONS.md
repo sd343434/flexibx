@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–18, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–19, 2026-10-20)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -23,36 +23,109 @@ environment exists.
 | R-8 | PITR / backup plan                 | RDS PITR 7 days + daily dump copied off-host; test PITR once                            | Any RPO promise                       |
 | R-9 | OS package patch policy for images | **Done in code (Pass 17):** security upgrades at build + Trivy in CI                    | — (owner: confirm the policy)         |
 
-## Status of every open item (Pass 18, 2026-10-20)
+## Status of every open item (Pass 19, 2026-10-20)
 
 `FIXED` = repaired and the repair proven by a test or a scan; `ACCEPTED` = a risk the
 owner accepted explicitly (none yet: no owner decision has been recorded); `BLOCKED` =
 waits on an owner decision, an account or a permission; `OPEN` = still needs work.
 Writing a document about an item never makes it `FIXED`.
 
-| Item                                                       | Where                  | Severity       | Status      | Evidence / what is needed                                                                                                                                |
-| ---------------------------------------------------------- | ---------------------- | -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#59: four jobs each, 0 billable ms. Owner: billing / Actions settings (CI_STATUS.md § 2)                                                        |
-| AWS account and region (R-2)                               | hosting                | —              | **BLOCKED** | Owner; D-1 (residency)                                                                                                                                   |
-| Cost approval (R-3)                                        | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                    |
-| Staging secrets channel (R-4)                              | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                    |
-| Hosted staging                                             | hosting                | —              | **BLOCKED** | Needs R-2, R-3, R-4; nothing created                                                                                                                     |
-| PITR exercised on the provider (R-8)                       | RDS                    | —              | **BLOCKED** | Configured in Terraform only; never tested (no hosted database)                                                                                          |
-| Alert destination, log shipping and RDS alarms (R-7)       | operations             | —              | **BLOCKED** | Owner; paid resources                                                                                                                                    |
-| `deepmerge-ts` 7.1.5 (CVE-2026-40345)                      | ops image (Prisma CLI) | HIGH           | **OPEN**    | Fixed by Prisma 7.10.1 (rehearsed, R-5); gated to 2026-10-22; scanner exception expires 2026-10-29                                                       |
-| `mysql2` 3.15.3 (GHSA-3f6p-5ww8-9rcr, GHSA-rgwj-5xj2-c3m3) | ops image (Prisma CLI) | HIGH, MEDIUM   | **OPEN**    | Same upgrade; never used (PostgreSQL only)                                                                                                               |
-| `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm)                       | lint tooling, no image | HIGH           | **OPEN**    | No fixed release exists (re-checked 2026-10-20)                                                                                                          |
-| `http-cache-semantics` 4.2.0 (GHSA-ch52-4w7c-c8xp)         | worker and ops (pnpm)  | HIGH           | **FIXED**   | pnpm 10.34.7 bundles 4.3.0 (fixed); Pass 18 scan: gone. Pass 17's "no fix" was wrong: Trivy's database listed no fixed version, the advisory names 4.3.0 |
-| Ubuntu packages without HIGH/CRITICAL                      | app / worker / ops     | MEDIUM, LOW    | **OPEN**    | app 21/4, worker 637/28 (FFmpeg's media libraries), ops 23/4 (MEDIUM/LOW); not gated; security updates applied at every build                            |
-| Debian and npm findings of the Pass 16 app image           | app image              | CRITICAL, HIGH | **FIXED**   | Pass 17: app on Ubuntu with `node` only; scans since: 0 HIGH/CRITICAL                                                                                    |
-| pnpm 10.28.0 advisories                                    | worker, ops            | HIGH           | **FIXED**   | pnpm 10.34.7; scan                                                                                                                                       |
-| OS patch policy (R-9)                                      | images                 | —              | **OPEN**    | Implemented (security updates at build + scan in CI); the owner has not confirmed the reproducibility trade-off                                          |
-| Prisma 7.10.1 upgrade (R-5)                                | dependencies           | —              | **OPEN**    | Rehearsed in full (Pass 17); the 2026-10-22 gate is not reached (checked 2026-10-20 08:37 UTC)                                                           |
-| Terraform provider checksums                               | `deploy/staging/aws`   | —              | **FIXED**   | `.terraform.lock.hcl` from the GPG-verified SHA256SUMS; an altered hash makes `terraform init` fail                                                      |
-| Restore drill blind spots (non-empty target, row counts)   | `restore-drill.sh`     | —              | **FIXED**   | Pass 18 mutation test: two defects went undetected; drill extended; 13/13 mutants now killed                                                             |
-| Storage user's access key rotation                         | IAM                    | —              | **OPEN**    | Manual rotation, or move the app to the host role; owner decision                                                                                        |
-| Static FFmpeg build (R-6)                                  | worker image           | —              | **OPEN**    | Recommendation: keep Ubuntu's FFmpeg; awaits the owner's confirmation                                                                                    |
-| Trivy image signature                                      | supply chain           | —              | **OPEN**    | Digest identical on Docker Hub and ghcr.io; cosign verification impossible here (sigstore unreachable) — to do where it is reachable                     |
+| Item                                                       | Where                  | Severity       | Status      | Evidence / what is needed                                                                                                                                           |
+| ---------------------------------------------------------- | ---------------------- | -------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub Actions gets no runner (R-1)                        | CI                     | —              | **BLOCKED** | Runs #43–#62: four jobs each, 0 billable ms, `runner_id` 0 (#62 on 3e41054). Owner: billing / Actions settings (CI_STATUS.md § 2)                                   |
+| AWS account and region (R-2)                               | hosting                | —              | **BLOCKED** | Owner; D-1 (residency)                                                                                                                                              |
+| Cost approval (R-3)                                        | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                               |
+| Staging secrets channel (R-4)                              | hosting                | —              | **BLOCKED** | Owner                                                                                                                                                               |
+| Hosted staging                                             | hosting                | —              | **BLOCKED** | Needs R-2, R-3, R-4; nothing created                                                                                                                                |
+| PITR exercised on the provider (R-8)                       | RDS                    | —              | **BLOCKED** | Configured in Terraform only; never tested (no hosted database)                                                                                                     |
+| Alert destination, log shipping and RDS alarms (R-7)       | operations             | —              | **BLOCKED** | Owner; paid resources                                                                                                                                               |
+| `deepmerge-ts` 7.1.5 (CVE-2026-40345)                      | ops image (Prisma CLI) | HIGH           | **OPEN**    | Pass 19: an ops image built with Prisma 7.10.1 scans clean with **no** exception (8.0.2 inside); applied with R-5 on/after 2026-10-22; exception expires 2026-10-29 |
+| `mysql2` 3.15.3 (GHSA-3f6p-5ww8-9rcr, GHSA-rgwj-5xj2-c3m3) | ops image (Prisma CLI) | HIGH, MEDIUM   | **OPEN**    | Same upgrade (3.24.4 inside the Pass 19 rehearsal image, no finding); never used (PostgreSQL only)                                                                  |
+| `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm)                       | lint tooling, no image | HIGH           | **OPEN**    | No fixed release exists (`pnpm audit` re-run in Pass 19: patched versions `<0.0.0`); next review with the Prisma upgrade on 2026-10-22                              |
+| `http-cache-semantics` 4.2.0 (GHSA-ch52-4w7c-c8xp)         | worker and ops (pnpm)  | HIGH           | **FIXED**   | pnpm 10.34.7 bundles 4.3.0 (fixed); Pass 18 scan: gone. Pass 17's "no fix" was wrong: Trivy's database listed no fixed version, the advisory names 4.3.0            |
+| Ubuntu packages without HIGH/CRITICAL                      | app / worker / ops     | MEDIUM, LOW    | **OPEN**    | Pass 19 images of 3e41054 (Trivy DB updated 2026-10-20 07:17 UTC): app 21/4, worker 637/28, ops 23/4 (MEDIUM/LOW); not gated; updates at every build                |
+| Debian and npm findings of the Pass 16 app image           | app image              | CRITICAL, HIGH | **FIXED**   | Pass 17: app on Ubuntu with `node` only; scans since: 0 HIGH/CRITICAL                                                                                               |
+| pnpm 10.28.0 advisories                                    | worker, ops            | HIGH           | **FIXED**   | pnpm 10.34.7; scan                                                                                                                                                  |
+| OS patch policy (R-9)                                      | images                 | —              | **OPEN**    | Implemented (security updates at build + scan in CI); the owner has not confirmed the reproducibility trade-off                                                     |
+| Prisma 7.10.1 upgrade (R-5)                                | dependencies           | —              | **OPEN**    | Rehearsed again in Pass 19 (see below); the 2026-10-22 gate is not reached (checked 2026-10-20 10:08 UTC); not adopted                                              |
+| Terraform provider checksums                               | `deploy/staging/aws`   | —              | **FIXED**   | `.terraform.lock.hcl` from the GPG-verified SHA256SUMS; an altered hash makes `terraform init` fail                                                                 |
+| Restore drill blind spots (non-empty target, row counts)   | `restore-drill.sh`     | —              | **FIXED**   | Pass 18 mutation test: two defects went undetected; drill extended; 13/13 mutants now killed                                                                        |
+| Storage user's access key rotation                         | IAM                    | —              | **OPEN**    | Manual rotation, or move the app to the host role; owner decision                                                                                                   |
+| Static FFmpeg build (R-6)                                  | worker image           | —              | **OPEN**    | Recommendation: keep Ubuntu's FFmpeg; awaits the owner's confirmation                                                                                               |
+| Trivy image signature                                      | supply chain           | —              | **OPEN**    | Digest identical on Docker Hub and ghcr.io; cosign verification impossible here (sigstore unreachable) — to do where it is reachable                                |
+| Release push without verification, or of a dirty tree      | `scripts/release`      | —              | **FIXED**   | Pass 19: SHA tag must be HEAD, `--push` refuses a dirty tree; `test-release-guards.sh` (CI) proves nothing is pushed after a failed check; 8/8 mutants              |
+| Random Next.js build ID per build                          | app image              | —              | **FIXED**   | Pass 19: build ID = the commit; app differences between two builds 212 → 194                                                                                        |
+| Builds not byte-reproducible                               | images                 | —              | **OPEN**    | Remaining: per-build Server Action key and preview keys (secrets), trace-list order, pnpm's `.modules.yaml` timestamp (RELEASE_PIPELINE.md § 4)                     |
+
+## Status on 2026-10-20 (Pass 19)
+
+No owner decision was recorded since Pass 16 (no commit, setting, message or approval in
+this repository), so **no item is `ACCEPTED`**. Decisions R-1 to R-9:
+
+| #   | Status      | Why                                                                                                                  |
+| --- | ----------- | -------------------------------------------------------------------------------------------------------------------- |
+| R-1 | **BLOCKED** | Run #62 (3e41054): four jobs, `runner_id` 0, 0 billable ms, logs 404. Account-level; owner steps in CI_STATUS.md § 2 |
+| R-2 | **BLOCKED** | No AWS account or region chosen (D-1 residency open); `terraform plan` against AWS impossible                        |
+| R-3 | **BLOCKED** | No cost approval; no budget alarm                                                                                    |
+| R-4 | **BLOCKED** | No secrets channel; no staging secret exists anywhere                                                                |
+| R-5 | **OPEN**    | Dated gate 2026-10-22 not reached; rehearsal passed again (below); not adopted                                       |
+| R-6 | **OPEN**    | Recommendation (keep Ubuntu's FFmpeg 6.1) awaits the owner's confirmation; blocks nothing                            |
+| R-7 | **BLOCKED** | No alert destination or log retention chosen (paid resources)                                                        |
+| R-8 | **BLOCKED** | PITR configured in Terraform only; no hosted database to exercise it                                                 |
+| R-9 | **OPEN**    | Implemented in code (security updates at build + Trivy gate); the owner has not confirmed the trade-off              |
+
+**R-5 rehearsal, Pass 19** (isolated worktree of 3e41054, never this checkout; the Pass 17
+patch applied unchanged: `package.json` and `pnpm-lock.yaml` only, Prisma's three packages
+7.10.0 → 7.10.1):
+
+- npm on 2026-10-20: 7.10.1 is `latest` for `@prisma/client` and `@prisma/adapter-pg`; no
+  7.10.2; `prisma`'s `latest` is still `8.0.0-rc.23` (release candidate, not used).
+- `pnpm install --frozen-lockfile` passes; `pnpm audit`: only `braces` remains (1 high).
+- `prisma validate`, typecheck, lint, 1135 unit tests: pass. Integration: 923 of 923 (59 files)
+  with the dedicated superuser test role the main gates use. (Three earlier runs are
+  not counted: one hit a full disk during a parallel image build, PostgreSQL error 53100;
+  two used a non-superuser role, where the same 3 tests fail identically on 7.10.0 — they
+  write `pg_index` / `session_replication_role`, and that role's password is a substring
+  of the database name.) Restore drill: PASSED; its mutation test: 13 of 13 killed.
+- Migrations: 7.10.0 and 7.10.1 (schema engine `0edf323` → `d1b3f37`) each applied the 37
+  migrations to a fresh database; schemas identical (`pg_dump --schema-only`, 7 881 lines,
+  apart from pg_dump's random `\restrict` key), migration names and checksums identical;
+  `migrate diff` against `schema.prisma`: empty both ways; 7.10.1 reports a
+  7.10.0-migrated database "up to date".
+- Ops image built from the rehearsal tree: self-check passes (Prisma CLI 7.10.1 offline),
+  and `scan-images.sh` with an **empty** exception file finds no fixable HIGH/CRITICAL and
+  no Node finding at all (`deepmerge-ts` 8.0.2, `mysql2` 3.24.4). So both exceptions in
+  `.trivyignore.yaml` can be deleted in the same commit as the upgrade — not before:
+  the images built from this branch still contain 7.1.5 / 3.15.3.
+- An expired exception fails the gate (re-tested: both entries dated 2026-10-19 → the
+  scan lists them as FIXABLE HIGH and exits 1).
+
+**On or after 2026-10-22**, if no 7.10.2 and no regression report for 7.10.1 appeared:
+apply that patch, delete both `.trivyignore.yaml` entries, rebuild with
+`scripts/release/build-and-verify.sh`, run the gates. If anything fails, keep 7.10.0 and
+the exceptions (expiry 2026-10-29), and record why.
+
+### Inputs for the first AWS deploy (owner)
+
+| Input                        | What exactly                                                                                          | Decision |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- | -------- |
+| Account and region           | A staging-only account in an AWS Organization; region from D-1 (`me-central-1` is only a placeholder) | R-2      |
+| Deploy identity              | An IAM Identity Center role for Terraform; root with MFA and no access keys                           | R-2      |
+| Terraform state              | A private S3 bucket with versioning (and locking) for the state                                       | R-2      |
+| Cost approval                | The ≈ USD 100–130 / month staging budget, and an AWS Budget alarm (USD 150 suggested)                 | R-3      |
+| Domain                       | `app_domain` and who edits its DNS (A record to the output `public_ip`)                               | R-2      |
+| Secrets channel              | Owner writes the env secret into the Secrets Manager container Terraform creates                      | R-4      |
+| Alert destination, logs      | One webhook relay (on-call + chat), CloudWatch log retention (30 days suggested)                      | R-7      |
+| Image and dependency updates | Confirm R-9 (security updates at every build, Trivy gate, pinned bases refreshed by reviewed PR)      | R-9      |
+| PITR and restore test        | Confirm 7-day PITR + daily off-host dump, and one point-in-time restore exercised before any RPO      | R-8      |
+| Mail provider                | A sending domain and API key for staging mail                                                         | R-4      |
+| CI                           | GitHub Actions running again (release images are verified in CI before any push)                      | R-1      |
+
+Once R-2 and R-3 are given: `terraform plan -out staging.plan` (reviewed before anything
+else), then a **separate** explicit approval for `terraform apply`; then
+`FLEXIBX_REGISTRY=<ecr> scripts/release/build-and-verify.sh <sha> --push` from a clean
+checkout (a separate approval for the push), then deploy/staging/aws/README.md "Launch".
+None of this was run in Pass 19: no credentials, account or approval exists.
 
 ## Status on 2026-10-20 (Pass 17)
 
