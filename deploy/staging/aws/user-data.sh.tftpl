@@ -4,6 +4,9 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends docker.io docker-compose-v2 caddy unattended-upgrades
+# AWS CLI v2 (Canonical-published snap; Ubuntu 24.04 has no awscli package): the host
+# reads the env secret with its instance role (scripts/ops/render-staging-env.sh).
+snap install aws-cli --classic
 # Bounded container logs (also set per service in compose.yaml): never fill the disk.
 install -d /etc/docker
 cat > /etc/docker/daemon.json <<'DOCKER'

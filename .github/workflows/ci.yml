@@ -46,6 +46,10 @@ jobs:
       # placeholder domain, a tracked variables file, an unpushed commit, a missing lock.
       - name: Staging preflight checks (stub Terraform, no AWS)
         run: scripts/release/test-staging-preflight.sh
+      # Pass 22: the host writes staging.env from Secrets Manager only when every key is
+      # present and real, mode 600, atomically, printing no value.
+      - name: Staging env from the secret (stub AWS CLI)
+        run: scripts/ops/test-render-staging-env.sh
       # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
       # passes its security tests against a mocked AWS provider — no credentials, no plan
       # against AWS, nothing created.

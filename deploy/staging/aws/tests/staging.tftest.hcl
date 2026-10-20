@@ -131,6 +131,10 @@ run "host_hardening" {
     condition     = strcontains(templatefile("${path.module}/user-data.sh.tftpl", { app_domain = "staging.example.com" }), "\"max-size\": \"10m\"")
     error_message = "the host rotates container logs"
   }
+  assert {
+    condition     = strcontains(templatefile("${path.module}/user-data.sh.tftpl", { app_domain = "staging.example.com" }), "snap install aws-cli --classic")
+    error_message = "the host has the AWS CLI to read the env secret (scripts/ops/render-staging-env.sh)"
+  }
 }
 
 run "no_secret_is_created_by_terraform" {
