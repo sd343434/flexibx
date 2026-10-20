@@ -18,6 +18,8 @@ const executablePath =
 
 export default defineConfig({
   testDir: "./e2e",
+  // Stops the run at once when the database is not migrated (e2e/global-setup.ts).
+  globalSetup: "./e2e/global-setup.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -60,7 +62,9 @@ export default defineConfig({
     url: `${baseURL}/api/health?scope=liveness`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    stdout: "ignore",
+    // The server's own log (pino, redacted) explains a failing run: always in CI, and
+    // locally with E2E_SERVER_LOG=1 (Pass 20: a local run failed with no server log).
+    stdout: process.env.CI || process.env.E2E_SERVER_LOG ? "pipe" : "ignore",
     stderr: "pipe",
   },
 });

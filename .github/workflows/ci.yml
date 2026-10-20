@@ -42,6 +42,10 @@ jobs:
       # tree or an existing tag on --push, and pushes nothing unless every check passed.
       - name: Release script guards (stub Docker, no registry)
         run: scripts/release/test-release-guards.sh
+      # Pass 20: the hosted-staging preflight (no AWS call, never plan/apply) refuses a
+      # placeholder domain, a tracked variables file, an unpushed commit, a missing lock.
+      - name: Staging preflight checks (stub Terraform, no AWS)
+        run: scripts/release/test-staging-preflight.sh
       # Pass 16: the staging infrastructure (deploy/staging/aws) is formatted, valid and
       # passes its security tests against a mocked AWS provider — no credentials, no plan
       # against AWS, nothing created.

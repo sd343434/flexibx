@@ -1,0 +1,2 @@
+# Unified diffs kept for a dated upgrade: their blank context lines are a single space.
+docs/runbooks/patches/*.patch -whitespace
