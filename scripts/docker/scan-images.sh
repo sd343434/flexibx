@@ -31,7 +31,7 @@ cache="${TRIVY_CACHE_VOLUME:-flexibx-trivy-cache}"
 
 # 1. The exception file: a strict reading of the only shape it may have.
 python3 - "$ignorefile" <<'PY'
-import datetime, re, sys
+import datetime, os, re, sys
 path = sys.argv[1]
 lines = [l.rstrip("\n") for l in open(path, encoding="utf-8")]
 entries, current, in_paths = [], None, False
@@ -64,6 +64,14 @@ for e in entries:
         sys.exit(f"{path}:{e['line']}: {e['id']} expires {expiry}: more than 30 days ahead")
     state = "EXPIRED (no longer applied)" if expiry < today else f"until {expiry}"
     print(f"exception {e['id']}: {state}")
+    # A week before expiry the gate says so on every scan (a GitHub annotation in CI):
+    # fix the finding or escalate; never move the date to keep the gate green.
+    days = (expiry - today).days
+    if 0 <= days <= 7:
+        note = f"exception {e['id']} expires in {days} day(s) ({expiry}): fix the finding or escalate"
+        print(f"WARNING {note}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::warning file={path},line={e['line']}::{note}")
 print(f"exceptions file OK: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
 PY
 
