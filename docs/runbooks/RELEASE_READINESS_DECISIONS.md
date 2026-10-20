@@ -206,7 +206,9 @@ pnpm test:integration && scripts/ops/restore-drill.sh && scripts/ops/restore-dri
 git commit …                                  # the patch, not yet the exceptions
 scripts/release/build-and-verify.sh <sha>     # images still pass WITH the exceptions
 TRIVY_IGNOREFILE=<file with only "vulnerabilities:"> scripts/docker/scan-images.sh <images>
-# only if that scan passes: delete both entries from .trivyignore.yaml, commit, rebuild
+# only if that scan passes (Pass 24: the exact change is committed as a patch):
+git apply docs/runbooks/patches/prisma-7.10.1-remove-exceptions.patch
+git commit …                                  # then rebuild + verify: build-and-verify.sh <sha>
 ```
 
 **Acceptance:** every command above exits 0; the scan without exceptions passes on the
