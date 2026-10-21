@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–24, 2026-10-20)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–25, 2026-10-21)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -61,6 +61,19 @@ Writing a document about an item never makes it `FIXED`.
 | Env file on the host from Secrets Manager                  | `scripts/ops`, host    | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
 | Host AWS CLI version not pinned (snap)                     | host (user-data)       | —              | **OPEN**    | Pinned alternative tested (Pass 23); Pass 24: its provenance is not established — `verify-aws-cli-signature.sh` refuses the only reachable key copy (expired 2026-07-07); needs the current key from AWS's documentation, then owner decision R-9                                   |
 | Preflight accepted a reserved domain (`.test`)             | `scripts/release`      | —              | **FIXED**   | Pass 23: `.test/.example/.invalid/.localhost/.local` refused; 4 new checks; mutant killed                                                                                                                                                                                           |
+
+## Status on 2026-10-21 (Pass 25)
+
+Checked 2026-10-21 07:54 UTC: the Prisma gate (2026-10-22) is **still not reached**, so
+neither patch is applied and **no release candidate is locked** (the candidate must carry
+7.10.1, or the exceptions expire under it on 10-29). Both patches apply to `4d48abe`.
+Re-scan with the Trivy database of **2026-10-21 07:13 UTC**: the 7.10.1 rehearsal images
+(`697fcdd`, local only) with no exception — 0 fixable HIGH/CRITICAL, no Node finding; the
+current images (`72565fc`, 7.10.0) — the two excepted findings and 1 Node MEDIUM in ops,
+nothing new. Fast gates on `4d48abe` pass (format, typecheck, lint, Prisma validate, 1135
+unit, the five script tests, Terraform 11, gitleaks, `git diff --check`). CI: no new run
+since #74 (no runner). AWS: nothing done. A one-time self check-in is scheduled for
+2026-10-22 00:20 UTC to run R-5 on the gate date.
 
 ## Status on 2026-10-20 (Pass 24)
 

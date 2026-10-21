@@ -1,22 +1,22 @@
-# CI status and the GitHub Actions blocker (Passes 10–24)
+# CI status and the GitHub Actions blocker (Passes 10–25)
 
-> **For the GitHub owner (`sd343434`), one page — Pass 24, 2026-10-20.**
-> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #71 on
-> `88f3929` (push, 19:09 UTC; #64–#70 the same) — four jobs, each `runner_id: 0` with no runner name,
+> **For the GitHub owner (`sd343434`), one page — Pass 25, 2026-10-21.**
+> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #74 on
+> `4d48abe` (push, 2026-10-20 22:40 UTC; #64–#73 the same) — four jobs, each `runner_id: 0` with no runner name,
 > created and completed within 4 s, 0 billable ms (`get_workflow_run_usage`), job logs
 > HTTP 404 (never written). Same for a manual `workflow_dispatch` (#56).
 > **Not the repository:** the workflow is valid and `active`, ran green before (#42),
 > uses only GitHub-hosted `ubuntu-latest`, no `environment`, no job condition,
 > `permissions: contents: read`; the public repository's hosted minutes are free.
 > **Action needed (account owner, outside the repository):** open
-> [run #71](https://github.com/sd343434/flexibx/actions/runs/39481015413) → a job →
+> [run #74](https://github.com/sd343434/flexibx/actions/runs/39509820245) → a job →
 > "Annotations" and read GitHub's reason; then check _Settings → Billing and licensing_
 > (a failed payment locks Actions for every repository of the account) and _Repository
 > → Settings → Actions → General_ (Actions allowed; the 8 actions in § 2 allowed). Then
 > _Actions → CI → Run workflow_ on `claude/amazing-sagan-pvouqy`. CI counts as passing
 > only when all four jobs show a runner, step logs and success.
 
-**Verdict on 2026-10-20 (rechecked in Pass 24, run #71): CI is NOT verified.** Since run
+**Verdict on 2026-10-20 (rechecked in Pass 25 on 2026-10-21, run #74): CI is NOT verified.** Since run
 #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
@@ -27,31 +27,32 @@ passing CI. The local gates (below) do not replace CI.
 
 Collected through the GitHub API (repository, workflow, runs, jobs, check runs and usage).
 
-| Run                | Commit    | Created (UTC)    | Result                                                          |
-| ------------------ | --------- | ---------------- | --------------------------------------------------------------- |
-| #41                | `ee1e886` | 2026-10-16 21:40 | success, about 14 minutes of real work                          |
-| #42                | `8820d9e` | 2026-10-16 22:27 | **success**: the last run that executed                         |
-| #43 (attempts 1–3) | `4c38dd3` | 2026-10-17 13:07 | failure in seconds, no runner                                   |
-| #44–#49            | …         | 2026-10-17/18    | failure in 2–4 s each, no runner                                |
-| #50                | `9941a87` | 2026-10-18 23:28 | failure in 4 s, no runner                                       |
-| #51                | `976c80d` | 2026-10-19 08:53 | failure in 4 s, no runner                                       |
-| #52                | `81cfd81` | 2026-10-19 09:56 | failure in 4 s, no runner (Pass 12 check)                       |
-| #53                | `99ae9c2` | 2026-10-19 11:14 | failure in 4 s, no runner (Pass 13 check)                       |
-| #54                | `4ef0a26` | 2026-10-19 12:46 | failure in 5 s, no runner (Pass 14 check)                       |
-| #55                | `069c2df` | 2026-10-19 14:33 | failure in 5 s, no runner (push)                                |
-| #56                | `069c2df` | 2026-10-19 14:46 | failure in 8 s, no runner (manual `workflow_dispatch`, Pass 15) |
-| #57–#60            | …         | 2026-10-19/20    | failure in 3–5 s each, no runner (Passes 16–18)                 |
-| #61                | `baa80be` | 2026-10-20 09:44 | failure in 5 s, no runner, 0 billable ms (Pass 18)              |
-| #62                | `3e41054` | 2026-10-20 10:19 | failure in 5 s, no runner, 0 billable ms (Pass 19)              |
-| #63                | `f7dfef6` | 2026-10-20 11:54 | failure in 5 s, no runner, 0 billable ms (Pass 20 check)        |
-| #64                | `6b5345a` | 2026-10-20 12:52 | failure in 5 s, no runner, 0 billable ms (Pass 21 check)        |
-| #65                | `c8f2218` | 2026-10-20 13:13 | failure in 6 s, no runner, 0 billable ms (Pass 21)              |
-| #66                | `7880c70` | 2026-10-20 13:50 | failure in 4 s, no runner, 0 billable ms                        |
-| #67                | `26ccada` | 2026-10-20 16:46 | failure in 4 s, no runner, 0 billable ms (Pass 22)              |
-| #68                | `c70624d` | 2026-10-20 17:25 | failure in 4 s, `runner_id` 0, 0 billable ms                    |
-| #69                | `72565fc` | 2026-10-20 18:37 | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 23)          |
-| #70                | `72bb73c` | 2026-10-20 18:41 | failure in 4 s, `runner_id` 0                                   |
-| #71                | `88f3929` | 2026-10-20 19:09 | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 24)          |
+| Run                | Commit                | Created (UTC)          | Result                                                          |
+| ------------------ | --------------------- | ---------------------- | --------------------------------------------------------------- |
+| #41                | `ee1e886`             | 2026-10-16 21:40       | success, about 14 minutes of real work                          |
+| #42                | `8820d9e`             | 2026-10-16 22:27       | **success**: the last run that executed                         |
+| #43 (attempts 1–3) | `4c38dd3`             | 2026-10-17 13:07       | failure in seconds, no runner                                   |
+| #44–#49            | …                     | 2026-10-17/18          | failure in 2–4 s each, no runner                                |
+| #50                | `9941a87`             | 2026-10-18 23:28       | failure in 4 s, no runner                                       |
+| #51                | `976c80d`             | 2026-10-19 08:53       | failure in 4 s, no runner                                       |
+| #52                | `81cfd81`             | 2026-10-19 09:56       | failure in 4 s, no runner (Pass 12 check)                       |
+| #53                | `99ae9c2`             | 2026-10-19 11:14       | failure in 4 s, no runner (Pass 13 check)                       |
+| #54                | `4ef0a26`             | 2026-10-19 12:46       | failure in 5 s, no runner (Pass 14 check)                       |
+| #55                | `069c2df`             | 2026-10-19 14:33       | failure in 5 s, no runner (push)                                |
+| #56                | `069c2df`             | 2026-10-19 14:46       | failure in 8 s, no runner (manual `workflow_dispatch`, Pass 15) |
+| #57–#60            | …                     | 2026-10-19/20          | failure in 3–5 s each, no runner (Passes 16–18)                 |
+| #61                | `baa80be`             | 2026-10-20 09:44       | failure in 5 s, no runner, 0 billable ms (Pass 18)              |
+| #62                | `3e41054`             | 2026-10-20 10:19       | failure in 5 s, no runner, 0 billable ms (Pass 19)              |
+| #63                | `f7dfef6`             | 2026-10-20 11:54       | failure in 5 s, no runner, 0 billable ms (Pass 20 check)        |
+| #64                | `6b5345a`             | 2026-10-20 12:52       | failure in 5 s, no runner, 0 billable ms (Pass 21 check)        |
+| #65                | `c8f2218`             | 2026-10-20 13:13       | failure in 6 s, no runner, 0 billable ms (Pass 21)              |
+| #66                | `7880c70`             | 2026-10-20 13:50       | failure in 4 s, no runner, 0 billable ms                        |
+| #67                | `26ccada`             | 2026-10-20 16:46       | failure in 4 s, no runner, 0 billable ms (Pass 22)              |
+| #68                | `c70624d`             | 2026-10-20 17:25       | failure in 4 s, `runner_id` 0, 0 billable ms                    |
+| #69                | `72565fc`             | 2026-10-20 18:37       | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 23)          |
+| #70                | `72bb73c`             | 2026-10-20 18:41       | failure in 4 s, `runner_id` 0                                   |
+| #71                | `88f3929`             | 2026-10-20 19:09       | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 24)          |
+| #72–#74            | `f55dc6f` … `4d48abe` | 2026-10-20 21:43–22:40 | failure in 4 s each, 0 billable ms (#73), no runner             |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:
