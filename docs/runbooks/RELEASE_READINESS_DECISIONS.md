@@ -72,6 +72,10 @@ R-5). Prisma's issue tracker could not be searched from this session (repository
 scope), so the "no regression report" condition of R-5 must be checked when the upgrade
 runs. CI run #75: no runner. AWS: nothing done.
 
+**Pass 27 (2026-10-21 10:49 UTC):** gate still closed, execution deferred again; HEAD
+`951f916`, both patches apply; npm unchanged (no 7.10.2); CI run #76 (`951f916`) failed in
+5 s without a runner. Nothing applied, built or pushed.
+
 ## Status on 2026-10-21 (Pass 25)
 
 Checked 2026-10-21 07:54 UTC: the Prisma gate (2026-10-22) is **still not reached**, so
