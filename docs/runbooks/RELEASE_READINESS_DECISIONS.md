@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–25, 2026-10-21)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–26, 2026-10-21)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -61,6 +61,16 @@ Writing a document about an item never makes it `FIXED`.
 | Env file on the host from Secrets Manager                  | `scripts/ops`, host    | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
 | Host AWS CLI version not pinned (snap)                     | host (user-data)       | —              | **OPEN**    | Pinned alternative tested (Pass 23); Pass 24: its provenance is not established — `verify-aws-cli-signature.sh` refuses the only reachable key copy (expired 2026-07-07); needs the current key from AWS's documentation, then owner decision R-9                                   |
 | Preflight accepted a reserved domain (`.test`)             | `scripts/release`      | —              | **FIXED**   | Pass 23: `.test/.example/.invalid/.localhost/.local` refused; 4 new checks; mutant killed                                                                                                                                                                                           |
+
+## Status on 2026-10-21 (Pass 26)
+
+Checked 2026-10-21 08:45 UTC: the gate (2026-10-22) is **not open**; the upgrade and the
+exception removal are **deferred**, no release candidate is locked. Both patches apply to
+`60338d9`. npm (2026-10-21): no Prisma 7.10.2 or 7.11 — 7.10.1 (published 2026-10-15) is
+the newest 7.x; npm's `latest` tag points to 8.0.0-rc.24, a release candidate (rejected,
+R-5). Prisma's issue tracker could not be searched from this session (repository out of
+scope), so the "no regression report" condition of R-5 must be checked when the upgrade
+runs. CI run #75: no runner. AWS: nothing done.
 
 ## Status on 2026-10-21 (Pass 25)
 
