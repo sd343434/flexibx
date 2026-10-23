@@ -172,6 +172,9 @@ describe("TOTP replay guard (claim before the session exists)", () => {
     const account = await enrolledAccount();
     const before = await sessions(account.id);
     const code = totp(account.key, 1);
+    // Taken now, not later: computed after a 30-second boundary, totp(key, 0) would equal
+    // `code` (already used). Both stay inside the server's ±1-step window if one is crossed.
+    const nextCode = totp(account.key, 0);
 
     // (The password step itself creates and drops a session: inject after it.)
     const pending = await challenge(account.email);
@@ -186,7 +189,7 @@ describe("TOTP replay guard (claim before the session exists)", () => {
     faults.sessionCreate = false;
     const reused = await verify(await challenge(account.email), code);
     expect(reused.ok).toBe(false);
-    const next = await verify(await challenge(account.email), totp(account.key, 0));
+    const next = await verify(await challenge(account.email), nextCode);
     expect(next.status).toBe(200);
     expect(await sessions(account.id)).toBe(before + 1);
   });
