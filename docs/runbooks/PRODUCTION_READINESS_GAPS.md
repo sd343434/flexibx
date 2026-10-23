@@ -820,3 +820,16 @@ reached); hosted staging not launched; nothing done on AWS; CI still without a r
 | AWS CLI (R-9)                        | **OPEN**: signature checker refuses the expired key copy → 2.38.2 pin unproven; snap unchanged; owner decision after the current key is checked.                                                                                                                                                       |
 | Staging package                      | Preflight: 17 checks (new: file without `app_domain`); env file 14 checks; local stack on 7.10.1 images 34/0/0, backup + `VERIFIED` restore.                                                                                                                                                           |
 | Local gates (main, 7.10.0)           | format, typecheck, lint, Prisma validate, phase file, 1135 unit, release-guard / preflight / env-file / AWS CLI / signature tests, migrate + status, 923 integration, drill PASSED, mutants 13/13, 5 S3 acceptance, build, Terraform 11, 43 E2E, gitleaks (no leaks), `git diff --check`. CI: not run. |
+
+## 30. Pass 29: Prisma 7.10.1 applied, exceptions removed, release candidate `a463d1c` — status by evidence
+
+2026-10-23. **Local evidence only; CI has no runner; nothing hosted, nothing on AWS.**
+
+| Area                      | Evidence                                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prisma 7.10.1 (R-5)       | **FIXED**: `1363d1d`; all gates on it; schema and 37 migration checksums identical to 7.10.0; drift empty. Regression-report precondition not verifiable from this session. |
+| `deepmerge-ts` / `mysql2` | **FIXED**: exceptions removed (`a463d1c`); release images scanned with no exception, no finding for either.                                                                 |
+| TOTP integration test     | **FIXED**: 30-second boundary flake (1 of 923 on `1363d1d`), reproduced deterministically, test-only fix `f3fe04a`; 923/923.                                                |
+| Release candidate         | `a463d1c`: built and verified (`build-and-verify.sh`); Trivy DB 2026-10-23 07:12 UTC; 0 fixable HIGH/CRITICAL; image IDs in RELEASE_READINESS_DECISIONS.md.                 |
+| New MEDIUM                | **OPEN**: `ip-address` 10.7.3 (CVE-2026-111997) inside pnpm 10.34.7's bundle in worker and ops; no pnpm 10.x fix; remedy pnpm 12 (owner).                                   |
+| Local staging             | `STAGING CHECK PASSED` 34/0/0 on the RC images; restore `VERIFIED` (77/502/37); unsafe operations refused.                                                                  |

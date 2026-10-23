@@ -1,22 +1,22 @@
-# CI status and the GitHub Actions blocker (Passes 10–26)
+# CI status and the GitHub Actions blocker (Passes 10–29)
 
-> **For the GitHub owner (`sd343434`), one page — Pass 26, 2026-10-21.**
-> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #75 on
-> `60338d9` (push, 2026-10-21 08:05 UTC; #64–#74 the same) — four jobs, each `runner_id: 0` with no runner name,
+> **For the GitHub owner (`sd343434`), one page — Pass 29, 2026-10-23.**
+> **Problem:** no `CI` job has run since run #43 (2026-10-17). Latest: run #78 on
+> `f3fe04a` (push, 2026-10-23 09:06 UTC; #64–#77 the same; #79 on `a463d1c` queued) — four jobs, each `runner_id: 0` with no runner name,
 > created and completed within 4 s, 0 billable ms (`get_workflow_run_usage`), job logs
 > HTTP 404 (never written). Same for a manual `workflow_dispatch` (#56).
 > **Not the repository:** the workflow is valid and `active`, ran green before (#42),
 > uses only GitHub-hosted `ubuntu-latest`, no `environment`, no job condition,
 > `permissions: contents: read`; the public repository's hosted minutes are free.
 > **Action needed (account owner, outside the repository):** open
-> [run #75](https://github.com/sd343434/flexibx/actions/runs/39566683498) → a job →
+> [run #78](https://github.com/sd343434/flexibx/actions/runs/39929454230) → a job →
 > "Annotations" and read GitHub's reason; then check _Settings → Billing and licensing_
 > (a failed payment locks Actions for every repository of the account) and _Repository
 > → Settings → Actions → General_ (Actions allowed; the 8 actions in § 2 allowed). Then
 > _Actions → CI → Run workflow_ on `claude/amazing-sagan-pvouqy`. CI counts as passing
 > only when all four jobs show a runner, step logs and success.
 
-**Verdict on 2026-10-20 (rechecked in Pass 26 on 2026-10-21, run #75): CI is NOT verified.** Since run
+**Verdict on 2026-10-20 (rechecked in Pass 29 on 2026-10-23, run #78): CI is NOT verified.** Since run
 #43 (2026-10-17), no job of the
 `CI` workflow has started. GitHub never assigned a runner, so no step ran. This is a block
 at the account or repository level, not a failing test. It cannot be fixed from inside
@@ -54,6 +54,8 @@ Collected through the GitHub API (repository, workflow, runs, jobs, check runs a
 | #71                | `88f3929`             | 2026-10-20 19:09       | failure in 4 s, `runner_id` 0, 0 billable ms (Pass 24)          |
 | #72–#74            | `f55dc6f` … `4d48abe` | 2026-10-20 21:43–22:40 | failure in 4 s each, 0 billable ms (#73), no runner             |
 | #75                | `60338d9`             | 2026-10-21 08:05       | failure in 5 s, 0 billable ms, no runner (Pass 26)              |
+| #76–#77            | `951f916`, `7f03ae9`  | 2026-10-21             | failure in 4–5 s each, no runner                                |
+| #78                | `f3fe04a`             | 2026-10-23 09:06       | failure in 5 s, no runner (Pass 29)                             |
 
 For runs #50 to #56, all four jobs ("Lint, typecheck, unit tests", "Integration, build,
 e2e", "Docker image builds", "Secret scan") show the same signs:

@@ -71,6 +71,11 @@ R-4), an access key for the output `storage_user` (into the env secret only).
 
 ## 4. Publish the images — **APPROVAL 3: push to ECR**
 
+Release candidate (Pass 29, 2026-10-23): `a463d1ce7b31ae1219fd9f06ec18a61cb806d41a`
+(Prisma 7.10.1, no vulnerability exception); its local evidence and image IDs are in
+RELEASE_READINESS_DECISIONS.md "Status on 2026-10-23 (Pass 29)". Built and verified locally
+only; nothing pushed.
+
 From a clean checkout of `<release-sha>`:
 
 ```bash
