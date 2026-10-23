@@ -32,8 +32,7 @@ echo "revision label OK: $sha"
 "$root/scripts/docker/check-image-size.sh" "$worker" 1400
 "$root/scripts/docker/check-image-size.sh" "$ops" 1250
 
-docker run --rm --network none --entrypoint bash -e COREPACK_ENABLE_NETWORK=0 "$ops" \
-  scripts/ops/check-ops-image.sh
+docker run --rm --network none --entrypoint bash "$ops" scripts/ops/check-ops-image.sh
 docker run --rm --network none "$worker" sh scripts/creator/check-media-tools.sh
 docker run --rm --network none "$worker" psql --version | grep -q " 16\." ||
   { echo "worker image: PostgreSQL client is not 16" >&2; exit 1; }

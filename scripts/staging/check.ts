@@ -2,8 +2,9 @@
 // image (it has FFmpeg, the PostgreSQL client and the scratch volume) with the deployment's
 // environment, after the app and the worker started and before the trial:
 //
-//   docker run --rm --env-file staging.env -v work:/work flexibx-worker pnpm staging:check
-//   … pnpm staging:check --send-test-alert     # also delivers one test alert
+//   docker run --rm --env-file staging.env -v work:/work flexibx-worker \
+//     node --import tsx --import ./scripts/video-retention/register.mjs scripts/staging/check.ts
+//   … scripts/staging/check.ts --send-test-alert   # also delivers one test alert
 //
 // Exit code 0: PASSED. 1: FAILED (a check found a problem). 2: INCOMPLETE (nothing failed,
 // but a check could not run here — not a pass). Writes only the preflight's random probe

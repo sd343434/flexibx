@@ -50,6 +50,14 @@ model it relies on is in `docs/runbooks/DATABASE_ROLES.md`.
      --operator "<operator name>" --reason "<ticket>: identity verified by <how>"
    ```
 
+   In the ops image, which carries no pnpm (Pass 36), the same command is (likewise
+   `scripts/admin/mfa-reset.ts`):
+
+   ```bash
+   node --import tsx --import ./scripts/video-retention/register.mjs scripts/admin/grant.ts \
+     --email … --confirm … --operator "…" --reason "…"
+   ```
+
    The script asks for the **current** 6-digit code. The person reads it from their own
    authenticator during the call; type it at the prompt. On a terminal nothing is echoed
    (not even asterisks) and the terminal is restored afterwards, including on Ctrl-C

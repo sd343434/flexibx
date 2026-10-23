@@ -26,9 +26,8 @@ ARG JOBS_IMAGE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ec
 ARG GIT_SHA=unknown
 
 FROM ${NODE_IMAGE} AS base
-# COREPACK_HOME: pnpm is fetched once at build time (as root) into a shared, world-readable
-# directory, so the `migrate` and `ops` jobs (USER node) run `pnpm` without network access
-# (the default cache is root's home, which node cannot read).
+# pnpm (through corepack) is used by the dependency and build stages only; no runtime image
+# carries it (Pass 36). COREPACK_HOME: its download lands in one shared directory.
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     COREPACK_HOME=/corepack \
@@ -60,14 +59,14 @@ RUN pnpm exec prisma generate && pnpm build \
 # load, traced from their entrypoints by scripts/docker/job-deps.mjs (Pass 14: the full
 # node_modules is 1.25 GB, the worker's 0.11 GB). The app's sources stay: tsx runs them.
 FROM build AS jobs-files
-RUN rm -rf .next node_modules
+# The package manager's own files go too: no job image runs pnpm (Pass 36).
+RUN rm -rf .next node_modules pnpm-lock.yaml pnpm-workspace.yaml .npmrc
 
-# Node for the job images: the runtime and corepack (pnpm), without npm/npx and the C
-# headers no job uses (-25 MB, and one package fewer to patch).
+# Node for the runtime images: they copy only its `node` binary — no npm, npx, corepack or
+# pnpm (Pass 17 for the app image, Pass 36 for the job images: pnpm's bundled packages
+# carried the job images' only Node finding). The build stages keep corepack and pnpm.
 FROM base AS node-runtime
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
-           /usr/local/include /usr/local/share/doc /usr/local/share/man \
- && node --version && corepack --version >/dev/null
+RUN node --version
 
 FROM build AS jobs-deps
 RUN node scripts/docker/job-deps.mjs /deps/worker worker \
@@ -77,20 +76,17 @@ RUN node scripts/docker/job-deps.mjs /deps/worker worker \
 # PostgreSQL 16 client (ops scripts; the worker image runs the staging gate, whose
 # database check is scripts/ops/db-verify.sh) ─────────────────────────────────────
 FROM ${JOBS_IMAGE} AS jobs-base
-ENV PNPM_HOME=/pnpm \
-    PATH=/pnpm:$PATH \
-    COREPACK_HOME=/corepack \
-    NEXT_TELEMETRY_DISABLED=1 \
+ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
-# /usr/local of the Node image: node and corepack with its pnpm shims (no npm).
-COPY --from=node-runtime /usr/local/ /usr/local/
+# Only the `node` binary of the Node image. Every job command is `node` or a binary of
+# node_modules/.bin (e.g. node_modules/.bin/prisma), never a package manager.
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 # Ubuntu's image ships a user `ubuntu` with uid 1000; the jobs run as `node` with that uid,
 # as in the Node image (volumes and the uid checks stay the same).
 RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
  && groupadd --gid 1000 node \
  && useradd --uid 1000 --gid node --create-home --shell /bin/bash node \
  && node --version \
- && corepack enable \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
  && apt-get install -y --no-install-recommends ca-certificates postgresql-client-16 \
@@ -100,7 +96,8 @@ WORKDIR /app
 # ── Operations jobs: the PostgreSQL 16 client + the app (migrate, operator CLIs) ─────
 #   docker build --target ops -t flexibx-ops .
 # For scripts/ops/sql/db-roles.sql (psql), db-backup.sh / db-restore.sh / db-verify.sh
-# (pg_dump, pg_restore, psql) and the operator CLIs (pnpm admin:grant, admin:mfa-reset),
+# (pg_dump, pg_restore, psql) and the operator CLIs (admin:grant, admin:mfa-reset, run with
+# `node --import tsx --import ./scripts/video-retention/register.mjs scripts/admin/<cli>.ts`),
 # run as one-off tasks next to a private database. postgresql-client-16 (jobs-base) comes
 # from Ubuntu's archive (signed by Ubuntu; same major as the server). Credentials arrive as
 # environment variables at run time (never baked in, never on a command line: the ops
@@ -111,7 +108,6 @@ ARG GIT_SHA
 LABEL org.opencontainers.image.source="https://github.com/sd343434/flexibx" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.title="flexibx-ops"
-COPY --from=build /corepack /corepack
 COPY --from=jobs-files /app ./
 COPY --from=jobs-deps /deps/ops/node_modules ./node_modules
 # Prisma's schema engine (migrate, db execute) is chosen by the platform's OpenSSL. The
@@ -121,7 +117,7 @@ COPY --from=jobs-deps /deps/ops/node_modules ./node_modules
 # /backups belongs to `node`: a new named volume mounted there (Compose `backup` job)
 # takes this owner and mode, so db-backup.sh can write to it (Pass 16: a root-owned volume
 # refused the first backup on a fresh host).
-RUN pnpm exec prisma version >/dev/null \
+RUN node_modules/.bin/prisma version >/dev/null \
  && node scripts/docker/job-deps.mjs --verify \
  && install -d -m 700 -o node -g node /backups
 USER node
@@ -130,14 +126,16 @@ CMD ["sh", "-c", "echo 'flexibx-ops: name the command to run' >&2; exit 64"]
 # ── Migrations (run as a one-off job before rolling out the app) ────────────────
 # The ops image with its command fixed: same Prisma CLI and engine, unprivileged user.
 FROM ops AS migrate
-CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
+# The Prisma CLI's own launcher (it ends in `exec node …`, so signals reach Prisma).
+CMD ["/app/node_modules/.bin/prisma", "migrate", "deploy"]
 
 # ── Creator Studio media worker ─────────────────────────────────────────────────
 #   docker build --target worker -t flexibx-worker .
 # The only process that runs FFmpeg, one job at a time; scale by running more
 # containers. Needs the app's DATABASE_URL and storage settings, no inbound port, and a
 # writable scratch volume at /work (about 3x the largest source per job).
-# Before a trial: `docker run … flexibx-worker pnpm creator:preflight`
+# Before a trial: `docker run … flexibx-worker node --import tsx --import
+# ./scripts/video-retention/register.mjs scripts/creator/preflight.ts`
 # (docs/runbooks/STAGING_CREATOR_STUDIO.md). FFmpeg, ffprobe, libass and a subtitle font
 # come from Ubuntu's archive; the application files are the build stage's.
 FROM jobs-base AS worker
@@ -150,7 +148,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /work && chown node:node /work
-COPY --from=build /corepack /corepack
 COPY --from=jobs-files /app ./
 COPY --from=jobs-deps /deps/worker/node_modules ./node_modules
 RUN node scripts/docker/job-deps.mjs --verify
@@ -160,9 +157,9 @@ USER node
 # works — run as the unprivileged user the worker runs as.
 RUN sh scripts/creator/check-media-tools.sh
 VOLUME ["/work"]
-# Node itself is PID 1, not pnpm: `docker stop` sends SIGTERM to PID 1 only, and pnpm exits
-# on it without passing it on, so the worker would be killed mid-job without handing the
-# job back. Same command as `pnpm creator:worker` (no .env in the image).
+# Node itself is PID 1: `docker stop` sends SIGTERM to PID 1 only, and a wrapper such as
+# pnpm exits on it without passing it on, so the worker would be killed mid-job without
+# handing the job back. Same command as `pnpm creator:worker` (no .env in the image).
 STOPSIGNAL SIGTERM
 CMD ["node", "--import", "tsx", "--import", "./scripts/video-retention/register.mjs", "scripts/creator/worker.ts"]
 

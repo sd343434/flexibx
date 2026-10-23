@@ -7,8 +7,9 @@
 #   be read from (/app, /home, /etc, /tmp), and no secret in the image's environment;
 # - nothing from the checkout that no command reads: repository history, deployment
 #   definitions, CI files, docs, tests, agent or development-process state;
-# - the app image carries no package manager (npm, npx, corepack, pnpm): the server never
-#   runs one, and their bundled packages were most of its scanner findings;
+# - no image carries a package manager (npm, npx, corepack, pnpm, yarn): no runtime command
+#   runs one, and their bundled packages were the scanner findings of the app image
+#   (Pass 17) and the only Node finding of the job images (Pass 36);
 # - the scratch volume of the worker (/work) and the backup volume of ops (/backups) are
 #   writable by the image's user (a new named volume takes that directory's owner).
 # Offline (--network none); never starts the application.
@@ -47,14 +48,15 @@ docker run --rm --network none --entrypoint sh -e KIND="$kind" "$image" -c '
     .phase-status.json AGENTS.md CLAUDE.md .terraform; do
     [ ! -e "/app/$path" ] || bad "/app/$path is in the image"
   done
+  for tool in npm npx corepack pnpm yarn; do
+    ! command -v "$tool" >/dev/null 2>&1 || bad "package manager $tool in the $KIND image"
+  done
+  for path in /usr/local/lib/node_modules /corepack /pnpm /root/.cache/node/corepack \
+    /home/node/.cache/node/corepack /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc; do
+    [ ! -e "$path" ] || bad "$path in the $KIND image"
+  done
   case "$KIND" in
-    app)
-      for tool in npm npx corepack pnpm yarn; do
-        ! command -v "$tool" >/dev/null 2>&1 || bad "package manager $tool in the app image"
-      done
-      [ ! -e /usr/local/lib/node_modules ] || bad "/usr/local/lib/node_modules in the app image"
-      [ -f /app/server.js ] || bad "server.js missing"
-      ;;
+    app) [ -f /app/server.js ] || bad "server.js missing" ;;
     worker) [ -d /work ] && [ -w /work ] || bad "/work missing or not writable by $(id -un)" ;;
     ops) [ -d /backups ] && [ -w /backups ] || bad "/backups missing or not writable by $(id -un)" ;;
   esac

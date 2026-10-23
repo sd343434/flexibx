@@ -127,8 +127,9 @@ On a Docker host (any container platform runs the same five services):
      indexes and constraints, integrity checks including disabled guard triggers).
 3. **Start:** `docker compose … up -d app worker scheduler`. The scheduler starts once the
    app is healthy and calls the tick every 2 minutes and video retention daily.
-4. **Gate:** `docker compose … run --rm check` (`pnpm staging:check --send-test-alert` in
-   the worker image). It must print `STAGING CHECK PASSED`:
+4. **Gate:** `docker compose … run --rm check` (`staging:check --send-test-alert` in the
+   worker image, run by `node` — the job images carry no pnpm since Pass 36). It must print
+   `STAGING CHECK PASSED`:
    - environment: required variables set and the app's own startup validation (names,
      never values);
    - database: marked `staging` (`database_environment`), then as above; media tools, scratch space, private bucket, signed links,
@@ -140,7 +141,14 @@ On a Docker host (any container platform runs the same five services):
    Exit 1 (`FAILED`) names what is wrong; exit 2 (`INCOMPLETE`) means a check could not run
    there — not a pass. Fix and run it again.
 
-5. Run `pnpm creator:retention-report` once (ops image): starting counts, deletes nothing.
+5. Run `creator:retention-report` once (ops image): starting counts, deletes nothing. The
+   job images carry no pnpm (Pass 36): in them a `pnpm <script>` of package.json runs as
+   `node --import tsx --import ./scripts/video-retention/register.mjs <its .ts file>`:
+
+   ```bash
+   docker run --rm --env-file staging.env <registry>/ops:<tag> node --import tsx \
+     --import ./scripts/video-retention/register.mjs scripts/creator/retention-report.ts
+   ```
 
 ## 4. Test script (in order; record each result)
 

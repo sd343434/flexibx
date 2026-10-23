@@ -76,22 +76,31 @@ services:
     <<: *env
     image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
-    environment:
-      COREPACK_ENABLE_NETWORK: "0"
     # Refuses unless the database is marked staging (scripts/ops/db-environment.sh).
     entrypoint: ["bash", "-c"]
     command:
-      ["scripts/ops/db-environment.sh assert staging && exec pnpm exec prisma migrate deploy"]
+      [
+        "scripts/ops/db-environment.sh assert staging && exec node_modules/.bin/prisma migrate deploy",
+      ]
 
   check:
     <<: *env
     image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     environment:
-      COREPACK_ENABLE_NETWORK: "0"
       # The gate reaches the app the way the worker does, inside this network.
       STAGING_CHECK_APP_URL: http://app:3000
-    command: ["pnpm", "staging:check", "--send-test-alert"]
+    # `pnpm staging:check --send-test-alert` without pnpm (not in the image): node runs it.
+    command:
+      [
+        "node",
+        "--import",
+        "tsx",
+        "--import",
+        "./scripts/video-retention/register.mjs",
+        "scripts/staging/check.ts",
+        "--send-test-alert",
+      ]
     volumes:
       - work:/work
 
