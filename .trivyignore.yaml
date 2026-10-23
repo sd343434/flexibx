@@ -2,17 +2,6 @@
 # names the advisory, where it is, why it is accepted and until when: after `expired_at`
 # the scan fails on it again. Add nothing here to make a scan green without that review.
 vulnerabilities:
-  # ops image only: the Prisma CLI (migrate job) pulls these in; the app and the worker do
-  # not contain them, and no code connects to MySQL. Fixed by Prisma 7.10.1, whose adoption
-  # is gated to 2026-10-22 (PRODUCTION_READINESS_GAPS.md § 2, RELEASE_READINESS_DECISIONS.md
-  # R-5; rehearsed in Pass 17: no schema or migration difference).
-  - id: CVE-2026-40345
-    paths:
-      - "app/node_modules/.pnpm/deepmerge-ts@7.1.5/node_modules/deepmerge-ts/package.json"
-    statement: "deepmerge-ts 7.1.5 via prisma CLI in the ops image; fixed by the dated Prisma 7.10.1 upgrade (R-5)"
-    expired_at: 2026-10-29
-  - id: GHSA-3f6p-5ww8-9rcr
-    paths:
-      - "app/node_modules/.pnpm/mysql2@3.15.3/node_modules/mysql2/package.json"
-    statement: "mysql2 3.15.3 via prisma CLI in the ops image, never used (PostgreSQL only); fixed by the dated Prisma 7.10.1 upgrade (R-5)"
-    expired_at: 2026-10-29
+  # None. The two Prisma CLI findings in the ops image (CVE-2026-40345 deepmerge-ts 7.1.5,
+  # GHSA-3f6p-5ww8-9rcr mysql2 3.15.3) were removed with the Prisma 7.10.1 upgrade (R-5),
+  # which brings deepmerge-ts 8.0.2 and mysql2 3.24.4.
