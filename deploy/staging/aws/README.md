@@ -42,10 +42,12 @@ terraform init && terraform plan -out staging.plan && terraform apply staging.pl
 # immutable tag (docs/runbooks/RELEASE_PIPELINE.md; nothing is pushed if a check fails)
 FLEXIBX_REGISTRY=<ecr> scripts/release/build-and-verify.sh <sha> --push
 # on the host (aws ssm start-session --target <host_instance_id>):
-#   fetch the env secret into /opt/flexibx/staging.env (mode 600), check out the same
-#   commit's deploy/staging/compose.yaml, then STAGING_CREATOR_STUDIO.md § 3:
+#   fetch the env secret into /opt/flexibx/staging.env (mode 600), write staging-owner.env
+#   (owner login, mode 600, from its own secret), check out the same commit's
+#   deploy/staging/compose.yaml, then docs/runbooks/STAGING_LAUNCH.md § 5:
 scripts/ops/db-environment.sh mark staging --confirm-database flexibx_staging   # once (ops image)
-FLEXIBX_REGISTRY=<ecr> FLEXIBX_TAG=<sha> docker compose run --rm migrate
+FLEXIBX_REGISTRY=<ecr> FLEXIBX_TAG=<sha> docker compose run --rm migrate        # owner login
+psql … -f scripts/ops/sql/db-roles.sql   # owner login, after every migration (DATABASE_ROLES.md)
 FLEXIBX_REGISTRY=<ecr> FLEXIBX_TAG=<sha> docker compose up -d app worker scheduler
 FLEXIBX_REGISTRY=<ecr> FLEXIBX_TAG=<sha> docker compose run --rm check      # must say PASSED
 ```
@@ -76,7 +78,7 @@ Checked and unchanged: RDS private (no public access, security group from the ho
 TLS required — RDS default `rds.force_ssl = 1` for PostgreSQL 15+, and `sslmode=require` in the URL), storage encrypted (RDS, EBS root, S3 SSE), master password
 managed by RDS in Secrets Manager (never in Terraform state), deletion protection and a
 final snapshot, ECR immutable tags and scan on push, host reached through SSM only (no SSH,
-no inbound except 80/443 for Caddy, which renews its certificates itself), versions constrained in `versions.tf` (AWS provider `~> 6.69`, Terraform `>= 1.6`; tested with 6.69.1 and 1.13.4) — **not exact pins**: no `.terraform.lock.hcl` is committed yet because the registry is not reachable from this environment; commit the one the first `terraform init` writes, which pins the provider version and its checksums, no secret created by Terraform.
+no inbound except 80/443 for Caddy, which renews its certificates itself), versions constrained in `versions.tf` (AWS provider `~> 6.69`, Terraform `>= 1.6`; tested with 6.69.1 and 1.13.4) and pinned with checksums in the committed `.terraform.lock.hcl` (hashicorp/aws 6.69.1, from the GPG-verified SHA256SUMS; `scripts/release/staging-preflight.sh` checks it), no secret created by Terraform.
 
 **Owner decisions left open** (RELEASE_READINESS_DECISIONS.md): region and account (R-2),
 cost (R-3), ECR lifecycle (keep the last N tags), CloudWatch log shipping and retention

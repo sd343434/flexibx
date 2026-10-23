@@ -96,16 +96,25 @@ digests. ECR scans again on push.
    atomic; prints no value — `scripts/ops/test-render-staging-env.sh`, CI):
    `scripts/ops/render-staging-env.sh <env_secret_arn> /opt/flexibx/staging.env`
    (the AWS CLI comes from the host's first boot, `user-data.sh.tftpl`).
-2. Database roles (`docs/runbooks/DATABASE_ROLES.md`) with the RDS-managed master secret.
-   Then write `staging-owner.env` (`OWNER_DATABASE_URL` = the owner login, mode 600) from the
-   owner credential's own secret — never the app's env secret (R-4). Compose gives it only to
-   `migrate`, `backup` and `check` (`scripts/staging/check-compose-credentials.sh`, CI): the
-   runtime login cannot migrate, dump or read `_prisma_migrations` (Pass 37, reproduced).
-3. Mark the database once: `scripts/ops/db-environment.sh mark staging --confirm-database <name>`.
+2. The database's logins (`docs/runbooks/DATABASE_ROLES.md` § 2, with the RDS-managed master
+   secret): owner, runtime and grant. Write `staging-owner.env` (`OWNER_DATABASE_URL` = the
+   owner login, mode 600) from the owner credential's own secret — never the app's env
+   secret (R-4). Compose gives it only to `migrate`, `backup` and `check`
+   (`scripts/staging/check-compose-credentials.sh`, CI): the runtime login cannot migrate,
+   dump or read `_prisma_migrations` (Pass 37, reproduced).
+3. Mark the database once (owner login):
+   `scripts/ops/db-environment.sh mark staging --confirm-database <name>`.
 4. `docker compose run --rm migrate` (as the owner login; refuses an unmarked database).
-5. `docker compose up -d app worker scheduler`.
-6. `docker compose run --rm check` — must print `STAGING CHECK PASSED` with 0 fail and
+5. Apply `scripts/ops/sql/db-roles.sql` (owner login) — **after** the migration, and again
+   after every later one. On an empty database it fails (it needs `users`): Pass 37 ran it
+   there and got exit 3; after `migrate` it passed.
+6. `docker compose up -d app worker scheduler` (runtime login).
+7. `docker compose run --rm check` — must print `STAGING CHECK PASSED` with 0 fail and
    0 not run, including `alert_destination` (a real test alert reached the destination).
+
+Local rehearsal of steps 2–7 with the roles in force (Pass 37, not hosted): owner login only
+in migrate/backup/check; app healthy on the runtime login; gate 34 / 0 / 0; a backup taken
+while the runtime login wrote restored `VERIFIED` (77 / 502 / 37).
 
 ## 6. Acceptance (all must hold; record each with its evidence)
 
