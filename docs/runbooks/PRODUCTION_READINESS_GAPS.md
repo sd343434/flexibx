@@ -845,3 +845,17 @@ reached); hosted staging not launched; nothing done on AWS; CI still without a r
 | Behaviour change    | `pnpm <script>` no longer works inside the job images (exit 127); runbooks give the `node --import tsx …` form. Hosts with the source still use pnpm.                             |
 | Gates on `d6141e6`  | format, lint, typecheck, unit 1135, integration 923, Prisma validate, migrate/schema/37 checksums/drift, restore drill, 13/13 mutants, S3 acceptance 5, build, Terraform, E2E 43. |
 | Local staging       | `STAGING CHECK PASSED` 34/0/0 on the `d6141e6` images; restore `VERIFIED` (77/502/37); unsafe operations refused.                                                                 |
+
+## 32. Pass 37: commercial launch readiness — evidence (2026-10-23)
+
+**Local evidence only; CI has no runner (run #80: `runner_id` 0); nothing hosted, nothing on
+AWS.** Assessment and launch requirements: `COMMERCIAL_LAUNCH_READINESS.md` (verdict: not
+ready).
+
+| Area                   | Evidence                                                                                                                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch blockers fixed  | `fbd49ce`: one-off jobs on the owner login (`staging-owner.env`), snapshot-consistent backups, four backup files; `eebb3a0`: migrate before `db-roles.sql`. All reproduced first with the roles applied.             |
+| Images `fbd49ce`       | `build-and-verify.sh`: contents, sizes 389 / 1197 / 1056 MB, ops self-check, media tools OK; Trivy (DB 2026-10-23 07:12 UTC, no exception): 0 HIGH/CRITICAL, OS 21/4, 637/28, 23/4, Node none.                       |
+| Role-separated staging | First local cycle with `db-roles.sql` in force: owner login only in migrate/backup/check; app healthy on the runtime login; `STAGING CHECK PASSED` 34/0/0; backup under live writes restored `VERIFIED` (77/502/37). |
+| Gates on `eebb3a0`     | format, lint, typecheck, unit 1136, integration 923, Prisma validate, migrate/schema/37 checksums/drift, restore drill, 13/13 mutants, S3 acceptance 5, build, Terraform 11, E2E 43 — all exit 0.                    |
+| Still open (blockers)  | payments (none), legal/privacy pages and flows, auth client-IP header for the proxy, alerting/uptime, off-host and media backups, hosted staging A1–A10, production design.                                          |
