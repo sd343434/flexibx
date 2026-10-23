@@ -11,11 +11,44 @@
 // lease expires. Signals must reach this process: pnpm does not pass SIGTERM on, so the
 // container runs node directly (Dockerfile `worker`). Run it with a memory limit and a
 // private scratch directory (CREATOR_WORK_DIR): docs/runbooks/CREATOR_STUDIO.md.
+// It also runs the scheduler watchdog (Pass 38, src/server/monitoring/scheduler-watchdog.ts):
+// every SCHEDULER_WATCHDOG_SECONDS (default 300; 0 = off) it alerts when the automation
+// tick is stale or failed — the one condition the tick cannot report itself.
 
 import { runWorker } from "@/server/creator/worker";
 import { getCreatorDeps } from "@/server/creator/runtime";
 import { getSystemDb } from "@/server/db/client";
 import { logger } from "@/server/logger";
+import { alert } from "@/server/monitoring/alerts";
+import { collectOpsStatus } from "@/server/monitoring/ops-status";
+import {
+  checkScheduler,
+  schedulerWatchdogIntervalMs,
+} from "@/server/monitoring/scheduler-watchdog";
+
+async function watchScheduler(signal: AbortSignal): Promise<void> {
+  const everyMs = schedulerWatchdogIntervalMs(process.env.SCHEDULER_WATCHDOG_SECONDS);
+  if (everyMs === 0) return;
+  while (!signal.aborted) {
+    try {
+      const failing = await checkScheduler({
+        collect: () => collectOpsStatus(getSystemDb(), new Date()),
+        alert,
+      });
+      if (failing.length > 0) logger.warn({ checks: failing }, "Scheduler watchdog: alerting");
+    } catch (error: unknown) {
+      // Best effort: the watchdog never stops the worker.
+      logger.warn({ err: error }, "Scheduler watchdog check failed");
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, everyMs);
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+}
 
 async function main(): Promise<void> {
   const stop = new AbortController();
@@ -25,8 +58,15 @@ async function main(): Promise<void> {
       stop.abort();
     });
   }
-  const { jobs } = await runWorker(getCreatorDeps(), getSystemDb(), { signal: stop.signal });
-  logger.info({ jobs }, "Creator worker stopped");
+  const watchdog = watchScheduler(stop.signal);
+  try {
+    const { jobs } = await runWorker(getCreatorDeps(), getSystemDb(), { signal: stop.signal });
+    logger.info({ jobs }, "Creator worker stopped");
+  } finally {
+    // Also when the worker fails: a pending watchdog timer must not keep the process alive.
+    stop.abort();
+    await watchdog;
+  }
 }
 
 main()

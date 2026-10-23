@@ -33,6 +33,9 @@ function fakeFetch(respond: () => Response | Promise<Response>) {
 }
 
 const failure = async (promise: Promise<unknown>) => promise.catch((caught: unknown) => caught);
+const instant = () => Promise.resolve();
+const keyOf = (call: { init: RequestInit } | undefined) =>
+  (call?.init.headers as Record<string, string> | undefined)?.["idempotency-key"];
 
 describe("Resend mailer", () => {
   it("sends the rendered message and reports sent only with an id", async () => {
@@ -78,9 +81,66 @@ describe("Resend mailer", () => {
       Promise.reject(new TypeError("fetch failed")),
     ) as unknown as typeof fetch;
     const error = await failure(
-      new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: down }).send(message),
+      new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: down, sleep: instant }).send(message),
     );
     expect(isAppError(error) && error.metadata.reason).toBe("mail_provider_unreachable");
+    expect(down).toHaveBeenCalledTimes(3);
+  });
+
+  // Pass 38: retries reuse ONE idempotency key, so Resend delivers an email at most once
+  // even when an accepted attempt's answer was lost.
+  it("retries a lost answer, a 429 and a 5xx with the same idempotency key", async () => {
+    const answers: (() => Response | Promise<Response>)[] = [
+      () => Promise.reject(new TypeError("socket hang up")),
+      () => new Response("{}", { status: 503 }),
+      () => Response.json({ id: "email_2" }),
+    ];
+    const fake = fakeFetch(() => (answers.shift() ?? (() => new Response("", { status: 500 })))());
+    const waits: number[] = [];
+    const mailer = new ResendMailer({
+      apiKey: KEY,
+      from: "a@b.c",
+      fetch: fake.fetch,
+      sleep: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+    await expect(mailer.send(message)).resolves.toEqual({ status: "sent" });
+    expect(fake.calls).toHaveLength(3);
+    const keys = fake.calls.map(keyOf);
+    expect(keys[0]).toMatch(/^flexibx-mail-[0-9a-f-]{36}$/);
+    expect(new Set(keys).size).toBe(1);
+    expect(new Set(fake.calls.map((call) => call.init.body)).size).toBe(1);
+    expect(waits).toEqual([500, 1500]);
+    // A new email gets a new key.
+    const other = fakeFetch(() => Response.json({ id: "email_3" }));
+    await new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: other.fetch }).send(message);
+    expect(keyOf(other.calls[0])).not.toBe(keys[0]);
+  });
+
+  it("gives up after three attempts on 429, reporting the provider's status", async () => {
+    const fake = fakeFetch(() => new Response("{}", { status: 429 }));
+    const error = await failure(
+      new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: fake.fetch, sleep: instant }).send(
+        message,
+      ),
+    );
+    expect(fake.calls).toHaveLength(3);
+    expect(isAppError(error) && error.metadata).toMatchObject({
+      reason: "mail_provider_rejected",
+      status: 429,
+    });
+  });
+
+  it("does not retry a request the provider refused (4xx other than 429)", async () => {
+    const fake = fakeFetch(() => new Response("{}", { status: 422 }));
+    await failure(
+      new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: fake.fetch, sleep: instant }).send(
+        message,
+      ),
+    );
+    expect(fake.calls).toHaveLength(1);
   });
 
   it("is selected only explicitly, with its key and sender", () => {

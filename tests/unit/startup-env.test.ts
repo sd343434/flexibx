@@ -15,6 +15,7 @@ const prod = (extra: Record<string, string> = {}) => ({
   APP_URL: "https://app.flexibx.example",
   DATABASE_URL: "postgresql://u:p@db.example:5432/flexibx",
   AUTH_SECRET: SECRET,
+  AUTH_IP_HEADER: "x-real-ip",
   ...extra,
 });
 
@@ -75,6 +76,23 @@ describe("start-up validation", () => {
     expect(report.errors).toEqual([]);
     expect(report.warnings.join("\n")).toMatch(/AUTOMATION_CRON_SECRET/);
     expect(report.warnings.join("\n")).toMatch(/ENCRYPTION_KEY/);
+  });
+
+  it("refuses a public production start without a trusted client-IP header (Pass 38)", () => {
+    const { AUTH_IP_HEADER: _unused, ...withoutHeader } = prod();
+    expect(() => assertStartupEnv(withoutHeader)).toThrow(/AUTH_IP_HEADER is not set/);
+    expect(() => assertStartupEnv({ ...withoutHeader, AUTH_IP_HEADER: " " })).toThrow(
+      /AUTH_IP_HEADER is not set/,
+    );
+    // Local production runs (e2e, the local staging rehearsal) are not public.
+    for (const appUrl of ["http://127.0.0.1:3100", "http://localhost:3000"]) {
+      expect(checkStartupEnv({ ...withoutHeader, APP_URL: appUrl }).errors).toEqual([]);
+    }
+    expect(checkStartupEnv(prod()).errors).toEqual([]);
+    // Development never needs it.
+    expect(
+      checkStartupEnv({ ...withoutHeader, NODE_ENV: "development" }).errors.join("\n"),
+    ).not.toMatch(/AUTH_IP_HEADER/);
   });
 
   it("reports but never stops development", () => {

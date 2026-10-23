@@ -17,7 +17,11 @@ systemctl enable --now docker
 cat > /etc/caddy/Caddyfile <<'CADDY'
 ${app_domain} {
   encode gzip
-  reverse_proxy 127.0.0.1:3000
+  # The app's sign-in rate limits key on this header (AUTH_IP_HEADER=x-real-ip): Caddy is
+  # the only entry point and always overwrites it with the peer address.
+  reverse_proxy 127.0.0.1:3000 {
+    header_up X-Real-IP {remote_host}
+  }
 }
 CADDY
 systemctl restart caddy

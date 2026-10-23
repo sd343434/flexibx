@@ -173,16 +173,26 @@ export interface ResendOptions {
   /** Verified sender, e.g. `Flexibx <no-reply@mail.example.com>`. */
   readonly from: string;
   readonly fetch?: typeof fetch;
+  /** Per attempt. */
   readonly timeoutMs?: number;
+  /** Waits between attempts (tests pass an instant one). */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export const RESEND_ENDPOINT = "https://api.resend.com/emails";
+/** Pauses before the 2nd and 3rd attempt: at most three, ≈ 26 s worst case in all. */
+export const RESEND_RETRY_DELAYS_MS = [500, 1500] as const;
 
 /**
  * Real delivery. "sent" only when Resend accepted the message (2xx with an id); anything
  * else throws SERVICE_UNAVAILABLE so callers never report an unsent email as sent. The
  * API key travels in the Authorization header only and is never logged; errors carry the
  * HTTP status, never the response body (it can echo the recipient).
+ *
+ * Pass 38: a lost connection, a timeout, 429 or 5xx is retried (three attempts in all)
+ * with ONE Idempotency-Key per email, so an attempt that Resend accepted but whose answer
+ * was lost is not delivered twice (Resend keeps the key 24 h); a 4xx other than 429 is
+ * the request's own fault and is not retried.
  */
 export class ResendMailer implements Mailer {
   readonly transport = "resend";
@@ -196,6 +206,13 @@ export class ResendMailer implements Mailer {
 
   async send(message: MailMessage): Promise<{ readonly status: MailDeliveryStatus }> {
     const rendered = renderMail(message);
+    const idempotencyKey = `flexibx-mail-${randomUUID()}`;
+    const sleep =
+      this.options.sleep ??
+      ((ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }));
     const fail = (reason: string, status?: number) =>
       new AppError("SERVICE_UNAVAILABLE", {
         message: "The email provider did not accept the email",
@@ -205,29 +222,39 @@ export class ResendMailer implements Mailer {
           ...(status === undefined ? {} : { status }),
         },
       });
-    let response: Response;
-    try {
-      response = await this.fetchImpl(RESEND_ENDPOINT, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.options.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          from: this.options.from,
-          to: [message.to],
-          subject: rendered.subject,
-          text: rendered.text,
-          html: rendered.html,
-        }),
-        signal: AbortSignal.timeout(this.options.timeoutMs ?? 15_000),
-      });
-    } catch {
-      throw fail("mail_provider_unreachable");
+    const body = JSON.stringify({
+      from: this.options.from,
+      to: [message.to],
+      subject: rendered.subject,
+      text: rendered.text,
+      html: rendered.html,
+    });
+    let response: Response | undefined;
+    for (let attempt = 0; ; attempt += 1) {
+      const delay = attempt === 0 ? 0 : RESEND_RETRY_DELAYS_MS[attempt - 1];
+      if (delay === undefined) break;
+      if (delay > 0) await sleep(delay);
+      try {
+        response = await this.fetchImpl(RESEND_ENDPOINT, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.options.apiKey}`,
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+          },
+          body,
+          signal: AbortSignal.timeout(this.options.timeoutMs ?? 8_000),
+        });
+      } catch {
+        response = undefined;
+        continue;
+      }
+      if (response.ok || (response.status !== 429 && response.status < 500)) break;
     }
+    if (response === undefined) throw fail("mail_provider_unreachable");
     if (!response.ok) throw fail("mail_provider_rejected", response.status);
-    const body = (await response.json().catch(() => null)) as { id?: unknown } | null;
-    if (typeof body?.id !== "string") throw fail("mail_provider_unexpected", response.status);
+    const answer = (await response.json().catch(() => null)) as { id?: unknown } | null;
+    if (typeof answer?.id !== "string") throw fail("mail_provider_unexpected", response.status);
     return { status: "sent" };
   }
 }

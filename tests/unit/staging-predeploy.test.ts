@@ -18,6 +18,7 @@ const ENV = {
   APP_URL: "https://staging.flexibx.example",
   DATABASE_URL: "postgresql://u:db-password@db.example:5432/flexibx_staging",
   AUTH_SECRET: SECRET,
+  AUTH_IP_HEADER: "x-real-ip",
   ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
   S3_REGION: "eu-central-1",
   S3_BUCKET: "flexibx-staging",
@@ -128,6 +129,13 @@ describe("staging pre-rollout gate", () => {
       detail: "not set: OPS_STATUS_SECRET, ALERT_WEBHOOK_URL",
     });
     expect(byName(summary.results, "ops_status")?.status).toBe("not_run");
+    expect(summary.exitCode).toBe(1);
+  });
+
+  it("fails a public deployment without a trusted client-IP header (Pass 38)", async () => {
+    const summary = await runPredeployGate(deps({ env: { ...ENV, AUTH_IP_HEADER: undefined } }).d);
+    expect(byName(summary.results, "env_valid")).toMatchObject({ status: "fail" });
+    expect(byName(summary.results, "env_valid")?.detail).toContain("AUTH_IP_HEADER");
     expect(summary.exitCode).toBe(1);
   });
 

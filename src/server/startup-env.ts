@@ -57,6 +57,19 @@ export function checkStartupEnv(source: EnvSource): StartupEnvReport {
       );
     }
   }
+  // Pass 37/38: without a trusted client-IP header, Better Auth rate-limits every client of a
+  // public deployment in ONE bucket per entry point, so ten sign-ins a minute anywhere lock
+  // everyone out. A public production server refuses to start without it (local production
+  // runs — e2e, the local staging rehearsal — keep the shared bucket they always had).
+  if (
+    source.NODE_ENV === "production" &&
+    !isLocalAppUrl(source.APP_URL) &&
+    (source.AUTH_IP_HEADER ?? "").trim() === ""
+  ) {
+    errors.push(
+      "AUTH_IP_HEADER is not set: every client would share one sign-in rate-limit bucket; set it to the header your proxy overwrites (staging: x-real-ip, deploy/staging/aws/user-data.sh.tftpl)",
+    );
+  }
   const warnings: string[] = [];
   if (source.NODE_ENV === "production") {
     if (source.FLEXIBX_TEST_PROVIDERS === "allow" && testProvidersAllowed(source)) {
@@ -82,6 +95,15 @@ export function checkStartupEnv(source: EnvSource): StartupEnvReport {
     }
   }
   return { errors, warnings };
+}
+
+function isLocalAppUrl(appUrl: string | undefined): boolean {
+  try {
+    const host = new URL(appUrl ?? "").hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
 }
 
 /** Throws (production) or returns the report; the caller logs it. */
