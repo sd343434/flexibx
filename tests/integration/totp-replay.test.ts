@@ -25,13 +25,9 @@ function bindAll<T extends object>(target: T, overrides: Record<string, unknown>
     },
   });
 }
-/** The auth instance's client: injects a failure into the claim or the session insert. */
-const faulty: PrismaClient = bindAll<PrismaClient>(system, {
-  $queryRaw: (...args: unknown[]) =>
-    faults.claim
-      ? Promise.reject(new Error("injected: claim failed"))
-      : (system.$queryRaw as (...a: unknown[]) => Promise<unknown>).apply(system, args),
-  session: new Proxy(system.session, {
+/** A session delegate whose `create` fails while `faults.sessionCreate` is set. */
+function faultySessions<T extends object>(sessions: T): T {
+  return new Proxy(sessions, {
     get(delegate, property, receiver) {
       if (property === "create" && faults.sessionCreate) {
         return () => Promise.reject(new Error("injected: session insert failed"));
@@ -41,7 +37,21 @@ const faulty: PrismaClient = bindAll<PrismaClient>(system, {
         ? (value as (...a: unknown[]) => unknown).bind(delegate)
         : value;
     },
-  }),
+  });
+}
+/** The auth instance's client: injects a failure into the claim or the session insert. */
+const faulty: PrismaClient = bindAll<PrismaClient>(system, {
+  $queryRaw: (...args: unknown[]) =>
+    faults.claim
+      ? Promise.reject(new Error("injected: claim failed"))
+      : (system.$queryRaw as (...a: unknown[]) => Promise<unknown>).apply(system, args),
+  session: faultySessions(system.session),
+  // Better Auth's adapter gets an extended client (session-token-hash.ts): keep the
+  // injected insert failure on it too.
+  $extends: (...args: unknown[]) => {
+    const extended = (system.$extends as unknown as (...a: unknown[]) => PrismaClient)(...args);
+    return bindAll<PrismaClient>(extended, { session: faultySessions(extended.session) });
+  },
 });
 
 const test = createTestAuth(faulty, SECRET);

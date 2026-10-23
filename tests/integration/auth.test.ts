@@ -1,11 +1,14 @@
 // Better Auth on the real schema + migration (Phase 2, step 2). The auth instance is
 // built with the production factory (createAuth) and the system client.
+import { createHmac } from "node:crypto";
+
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { AppError } from "@/server/errors/app-error";
 import { createAuth, type AuthLogLevel } from "@/server/auth/auth-config";
+import { hashSessionToken } from "@/server/auth/session-token-hash";
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
 import { MemoryMailer } from "@/server/mail/mailer";
 
@@ -16,6 +19,9 @@ const { system, db } = createTestDb();
 
 const BASE = "http://localhost:3000";
 const SECRET = ["integration", "test", "only", "secret", "0123456789abcdef"].join("-");
+/** A cookie value signed with AUTH_SECRET the way Better Auth signs it (HMAC-SHA256). */
+const signed = (value: string) =>
+  `${value}.${createHmac("sha256", SECRET).update(value).digest("base64")}`;
 const PASSWORD = "correct horse battery";
 const COOKIE = "flexibx.session_token";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -36,6 +42,8 @@ function sessionSetCookie(setCookie: readonly string[]): string {
 const cookieValue = (setCookie: string) =>
   decodeURIComponent(setCookie.split(";")[0]?.slice(COOKIE.length + 1) ?? "");
 const tokenOf = (cookie: string) => cookie.split(".")[0] ?? "";
+/** The stored form of a cookie's session token (session-token-hash.ts, Pass 39). */
+const storedOf = (cookie: string) => hashSessionToken(tokenOf(cookie));
 const cookieHeader = (value: string) => `${COOKIE}=${encodeURIComponent(value)}`;
 const headersWith = (value: string) => new Headers({ cookie: cookieHeader(value) });
 
@@ -156,7 +164,7 @@ describe("sign-in", () => {
   it("signs in with the right password and creates a database session", async () => {
     await register("login@example.com");
     const cookie = await signIn("login@example.com");
-    const session = await system.session.findUniqueOrThrow({ where: { token: tokenOf(cookie) } });
+    const session = await system.session.findUniqueOrThrow({ where: { token: storedOf(cookie) } });
     expect(session.id).toMatch(UUID);
     expect(session.expiresAt.getTime()).toBeGreaterThan(Date.now() + 6.9 * 86_400_000);
   });
@@ -214,12 +222,24 @@ describe("sessions", () => {
     );
   });
 
-  it("stores the raw token, but only a cookie signed with AUTH_SECRET is accepted", async () => {
+  it("stores only a hash of the token; a stolen stored value does not sign in (Pass 39)", async () => {
     await register("raw@example.com");
     const cookie = await signIn("raw@example.com");
     const token = tokenOf(cookie);
-    expect(await system.session.count({ where: { token } })).toBe(1);
-    // No custom hashing layer: a database copy of the token alone cannot be used.
+    const [row] = await system.session.findMany({ where: { user: { email: "raw@example.com" } } });
+    expect(row?.token).toBe(hashSessionToken(token));
+    expect(row?.token).not.toContain(token);
+    expect(await system.session.count({ where: { token } })).toBe(0);
+    // The database value, even correctly signed with AUTH_SECRET (both leaked), is refused:
+    // it is hashed again before the lookup.
+    expect(signed(token)).toBe(cookie); // the signer below reproduces Better Auth's cookie
+    expect(
+      await auth.api.getSession({ headers: headersWith(signed(row?.token ?? "")) }),
+    ).toBeNull();
+    expect((await auth.api.getSession({ headers: headersWith(cookie) }))?.user.email).toBe(
+      "raw@example.com",
+    );
+    // An unsigned or forged cookie is refused as before.
     expect(await auth.api.getSession({ headers: headersWith(token) })).toBeNull();
     expect(await auth.api.getSession({ headers: headersWith(`${token}.forged`) })).toBeNull();
 
@@ -241,7 +261,7 @@ describe("sessions", () => {
     await register("expiry@example.com");
     const cookie = await signIn("expiry@example.com");
     await system.session.update({
-      where: { token: tokenOf(cookie) },
+      where: { token: storedOf(cookie) },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
     expect(await auth.api.getSession({ headers: headersWith(cookie) })).toBeNull();
@@ -250,7 +270,7 @@ describe("sessions", () => {
   it("rolls a session forward to 7 days once it is older than a day", async () => {
     await register("rolling@example.com");
     const cookie = await signIn("rolling@example.com");
-    const where = { token: tokenOf(cookie) };
+    const where = { token: storedOf(cookie) };
     await system.session.update({
       where,
       data: { expiresAt: new Date(Date.now() + 5 * 86_400_000) },
@@ -271,7 +291,7 @@ describe("sessions", () => {
     const response = await post("/sign-out", { cookie: cookieHeader(cookie), origin: BASE });
     expect(response.status).toBe(200);
     expect(sessionSetCookie(response.headers.getSetCookie())).toMatch(/Max-Age=0/);
-    expect(await system.session.count({ where: { token: tokenOf(cookie) } })).toBe(0);
+    expect(await system.session.count({ where: { token: storedOf(cookie) } })).toBe(0);
     expect(await auth.api.getSession({ headers: headersWith(cookie) })).toBeNull();
   });
 
@@ -345,7 +365,7 @@ describe("origin and CSRF protection", () => {
       origin: "https://evil.example",
     });
     expect(response.status).toBe(403);
-    expect(await system.session.count({ where: { token: tokenOf(cookie) } })).toBe(1);
+    expect(await system.session.count({ where: { token: storedOf(cookie) } })).toBe(1);
   });
 
   it("rejects cross-site mutations with no Origin/Referer, or a cross-site Referer", async () => {
@@ -363,7 +383,7 @@ describe("origin and CSRF protection", () => {
           origin: "https://evil.example",
         })
       ).status,
-    ).toBe(403);
+    ).toBe(404); // disabled since Pass 39 (tokens of other sessions are stored hashed)
     // Password change is not on the HTTP surface at all (Flexibx server action only).
     expect(
       (

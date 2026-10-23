@@ -11,6 +11,7 @@ import type { Mailer, MailMessage } from "../mail/mailer";
 import { redactString } from "../redact";
 
 import { betterAuthCustomRules, RATE_LIMIT_CHECKPOINT_PREFIX } from "./rate-limit-policy";
+import { withHashedSessionTokens } from "./session-token-hash";
 import { claimTotpCode } from "./totp-replay";
 
 // Pure factory (no `server-only`), so integration tests can build the exact production
@@ -60,6 +61,13 @@ export const DISABLED_HTTP_PATHS = [
   "/two-factor/generate-backup-codes",
   "/two-factor/send-otp",
   "/two-factor/verify-otp",
+  // Session tokens are stored hashed (session-token-hash.ts, Pass 39): these routes return
+  // or take the tokens of OTHER sessions, which only exist hashed. No Flexibx screen uses
+  // them; password change/reset still end the other sessions (by user, not by token).
+  "/list-sessions",
+  "/revoke-session",
+  "/revoke-sessions",
+  "/revoke-other-sessions",
 ] as const;
 
 /** Issuer shown in authenticator apps. */
@@ -239,7 +247,8 @@ export function createAuth(input: AuthConfigInput) {
     secret: input.secret,
     baseURL: input.baseURL,
     trustedOrigins: [new URL(input.baseURL).origin],
-    database: prismaAdapter(input.db, { provider: "postgresql" }),
+    // Session tokens hashed at rest (session-token-hash.ts).
+    database: prismaAdapter(withHashedSessionTokens(input.db), { provider: "postgresql" }),
     disabledPaths: [...DISABLED_HTTP_PATHS],
     // Must stay the LAST plugin. Server actions and route handlers that call auth.api.*
     // get their session cookies written (and refreshed) through next/headers. In a

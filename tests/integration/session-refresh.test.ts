@@ -7,6 +7,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInWithEmail, signUpWithEmail } from "@/server/auth/credentials";
 import { hasSessionCookie, refreshSessionCookies } from "@/server/auth/session-refresh";
+import { hashSessionToken } from "@/server/auth/session-token-hash";
 import { getSystemDb } from "@/server/db/client";
 
 import { createTestAuth, depsFor, type TestAuth } from "./auth-harness";
@@ -70,14 +71,17 @@ async function signedIn(test: TestAuth = harness) {
 }
 
 /** Pretend the session was last refreshed `daysAgo` days ago (7-day sessions). */
-async function age(token: string, daysAgo: number) {
+async function age(rawToken: string, daysAgo: number) {
+  const token = hashSessionToken(rawToken);
   await system.session.update({
     where: { token },
     data: { expiresAt: new Date(Date.now() + (7 - daysAgo) * DAY) },
   });
 }
 const expiresAt = async (token: string) =>
-  (await system.session.findUniqueOrThrow({ where: { token } })).expiresAt.getTime();
+  (
+    await system.session.findUniqueOrThrow({ where: { token: hashSessionToken(token) } })
+  ).expiresAt.getTime();
 const attribute = (setCookie: string, name: string) =>
   new RegExp(`;\\s*${name}(=([^;]*))?`, "i").exec(setCookie)?.[2];
 
@@ -114,11 +118,11 @@ describe("proxy-side refresh (page requests)", () => {
   it("clears the cookie of an expired or revoked session", async () => {
     const expired = await signedIn();
     await system.session.update({
-      where: { token: expired.token },
+      where: { token: hashSessionToken(expired.token) },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
     const revoked = await signedIn();
-    await system.session.delete({ where: { token: revoked.token } });
+    await system.session.delete({ where: { token: hashSessionToken(revoked.token) } });
 
     for (const user of [expired, revoked]) {
       const cookies = await refreshSessionCookies(auth, user.cookieHeader, BASE);
