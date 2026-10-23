@@ -47,6 +47,13 @@ export function sniffContainer(head: Uint8Array): Container | null {
   return null;
 }
 
+const CONTAINERS: readonly Container[] = ["mp4", "mov", "m4a", "webm", "mp3", "wav"];
+
+/** A stored container name (creator_sources.container), or undefined when unknown. */
+export function asContainer(value: string | null | undefined): Container | undefined {
+  return CONTAINERS.find((container) => container === value);
+}
+
 /** Which recognised containers a declared content type may turn out to be. */
 const FAMILIES: Readonly<Record<SourceContentType, readonly Container[]>> = {
   // Phones label MOV and MP4 interchangeably; both are ISO base media.

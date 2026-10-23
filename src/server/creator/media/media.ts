@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
+import type { Container } from "./sniff";
 import { MediaToolError, runMediaTool } from "./tools";
 
 // What the worker does with FFmpeg: read a file's properties, extract its audio for
@@ -30,6 +31,23 @@ export interface MediaInfo {
 
 const LOCAL_ONLY = ["-protocol_whitelist", "file"] as const;
 const file = (path: string) => `file:${path}`;
+
+/**
+ * Pass 39: FFmpeg's demuxer for each container the upload check recognises. A customer
+ * file is read with exactly this demuxer (`-f` before the input), so FFmpeg never probes
+ * its ~300 others (playlists, image sequences, exotic formats with their own parsers) on
+ * untrusted bytes — the sniffed header alone no longer decides which parser runs.
+ */
+export const DEMUXERS: Readonly<Record<Container, string>> = {
+  mp4: "mov",
+  mov: "mov",
+  m4a: "mov",
+  webm: "matroska",
+  mp3: "mp3",
+  wav: "wav",
+};
+const inputFormat = (container: Container | undefined) =>
+  container === undefined ? [] : ["-f", DEMUXERS[container]];
 
 const probeSchema = z.object({
   format: z.object({
@@ -65,7 +83,12 @@ function fpsMilli(rate: string | undefined): number | null {
 export async function probeMedia(
   tools: MediaTools,
   path: string,
-  options: { readonly timeoutMs: number; readonly signal?: AbortSignal },
+  options: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal;
+    /** The sniffed container of a customer file: read with its demuxer only. */
+    readonly container?: Container;
+  },
 ): Promise<MediaInfo> {
   const { stdout } = await runMediaTool(
     tools.ffprobe,
@@ -77,6 +100,7 @@ export async function probeMedia(
       "json",
       "-show_format",
       "-show_streams",
+      ...inputFormat(options.container),
       file(path),
     ],
     options,
@@ -133,6 +157,7 @@ export async function encodeAudioPiece(
       (piece.startMs / 1000).toFixed(3),
       "-t",
       (piece.durationMs / 1000).toFixed(3),
+      ...inputFormat("wav"), // our own extracted WAV
       "-i",
       file(input),
       "-vn",
@@ -161,7 +186,12 @@ export async function extractAudio(
   tools: MediaTools,
   input: string,
   output: string,
-  options: { readonly timeoutMs: number; readonly signal?: AbortSignal },
+  options: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal;
+    /** The sniffed container of the customer file. */
+    readonly container?: Container;
+  },
 ): Promise<void> {
   await runMediaTool(
     tools.ffmpeg,
@@ -171,6 +201,7 @@ export async function extractAudio(
       "-v",
       "error",
       ...LOCAL_ONLY,
+      ...inputFormat(options.container),
       "-i",
       file(input),
       "-vn",
@@ -295,6 +326,8 @@ export interface RenderRequest {
   readonly subtitles: readonly SubtitleCue[] | null;
   /** Hard cap of the output file (FFmpeg stops writing beyond it). */
   readonly maxBytes: number;
+  /** The sniffed container of the customer file. */
+  readonly container?: Container;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
 }
@@ -332,6 +365,7 @@ export async function renderClip(tools: MediaTools, request: RenderRequest): Pro
       ...LOCAL_ONLY,
       "-ss",
       (request.startMs / 1000).toFixed(3),
+      ...inputFormat(request.container),
       "-i",
       file(request.input),
       "-t",

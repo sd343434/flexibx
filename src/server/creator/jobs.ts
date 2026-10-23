@@ -37,7 +37,13 @@ import {
   verifyRender,
   type AspectRatio,
 } from "./media/media";
-import { containerMatches, isSourceContentType, SNIFF_BYTES, sniffContainer } from "./media/sniff";
+import {
+  asContainer,
+  containerMatches,
+  isSourceContentType,
+  SNIFF_BYTES,
+  sniffContainer,
+} from "./media/sniff";
 import { MediaToolError } from "./media/tools";
 import { createWorkDir, removeWorkDir } from "./media/workdir";
 import { LANGUAGE_PATTERN, validateTimedText, type TimedText } from "./providers/types";
@@ -695,6 +701,12 @@ async function holdForStep(
   });
 }
 
+/** The verified source's container, for FFmpeg's demuxer (media.ts DEMUXERS). */
+function containerOf(source: { readonly container: string | null }) {
+  const container = asContainer(source.container);
+  return container === undefined ? {} : { container };
+}
+
 async function verifiedSource(ctx: StepContext) {
   const source = await ctx.deps.db.creatorSource.findFirst({
     where: { id: ctx.job.sourceId, workspaceId: ctx.job.workspaceId },
@@ -858,7 +870,7 @@ async function verify(ctx: StepContext): Promise<void> {
   let info;
   try {
     info = await timed(costs, () =>
-      probeMedia(deps.tools, path, { timeoutMs: 60_000, signal: ctx.signal }),
+      probeMedia(deps.tools, path, { timeoutMs: 60_000, signal: ctx.signal, container }),
     );
   } catch (error) {
     if (error instanceof MediaToolError && error.code === "failed") {
@@ -993,7 +1005,11 @@ async function transcribe(ctx: StepContext): Promise<void> {
   const { path } = await downloadSource(ctx, source);
   const audioPath = join(ctx.workDir, "audio.wav");
   await timed(costs, () =>
-    extractAudio(deps.tools, path, audioPath, { timeoutMs: 5 * 60_000, signal: ctx.signal }),
+    extractAudio(deps.tools, path, audioPath, {
+      timeoutMs: 5 * 60_000,
+      signal: ctx.signal,
+      ...containerOf(source),
+    }),
   );
   let language: string;
   let raw: TimedText[];
@@ -1365,6 +1381,7 @@ async function render(ctx: StepContext): Promise<void> {
       maxBytes: EXPORT_MAX_BYTES,
       timeoutMs: 8 * 60_000,
       signal: ctx.signal,
+      ...containerOf(source),
     }),
   );
   const info = await timed(costs, () =>
