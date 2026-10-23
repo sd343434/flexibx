@@ -36,6 +36,40 @@ export async function checkScheduler(deps: SchedulerWatchdogDeps): Promise<reado
   return failing.map((check) => check.name);
 }
 
+/**
+ * Pass 39: consecutive runs that could not read the operational status (database down or
+ * unreachable) before the watchdog alerts on that instead — one blip stays quiet.
+ */
+export const WATCHDOG_FAILURES_BEFORE_ALERT = 2;
+
+/**
+ * checkScheduler, repeated: a run that cannot read the status still throws (the caller
+ * logs it), and from the WATCHDOG_FAILURES_BEFORE_ALERT-th consecutive one on also alerts.
+ * The alert sink falls back to its in-process throttle when the database is down.
+ */
+export function schedulerWatchdog(deps: SchedulerWatchdogDeps): () => Promise<readonly string[]> {
+  let failures = 0;
+  return async () => {
+    let status: OpsStatus;
+    try {
+      status = await deps.collect();
+    } catch (error: unknown) {
+      failures += 1;
+      if (failures >= WATCHDOG_FAILURES_BEFORE_ALERT) {
+        await deps.alert({
+          key: "ops:scheduler_watchdog_status_unavailable",
+          severity: "critical",
+          title: "Scheduler watchdog cannot read the operational status",
+          details: { consecutiveFailures: failures },
+        });
+      }
+      throw error;
+    }
+    failures = 0;
+    return checkScheduler({ ...deps, collect: () => Promise.resolve(status) });
+  };
+}
+
 /** SCHEDULER_WATCHDOG_SECONDS → milliseconds; 0 disables it; anything invalid → default. */
 export function schedulerWatchdogIntervalMs(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return SCHEDULER_WATCHDOG_DEFAULT_SECONDS * 1000;

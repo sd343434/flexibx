@@ -7,7 +7,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createAlertSink, databaseAlertThrottle } from "@/server/monitoring/alert-sink";
 import { recordJobFinished } from "@/server/monitoring/heartbeat";
 import { collectOpsStatus, TICK_STALE_SECONDS } from "@/server/monitoring/ops-status";
-import { checkScheduler } from "@/server/monitoring/scheduler-watchdog";
+import { checkScheduler, schedulerWatchdog } from "@/server/monitoring/scheduler-watchdog";
+import { createPrismaClient } from "@/server/db/prisma";
 
 import { createTestDb, resetDatabase } from "./helpers";
 
@@ -20,12 +21,12 @@ afterAll(async () => {
   await system.$disconnect();
 });
 
-function sinkWithFakeWebhook() {
+function sinkWithFakeWebhook(db = system) {
   const delivered: { title: string; severity: string }[] = [];
   const sink = createAlertSink({
     webhookUrl: "https://alerts.example/hook",
     environment: "test",
-    throttle: databaseAlertThrottle(system),
+    throttle: databaseAlertThrottle(db),
     fetch: ((_url: string, init?: RequestInit) => {
       delivered.push(JSON.parse(init?.body as string) as { title: string; severity: string });
       return Promise.resolve(new Response(null, { status: 204 }));
@@ -63,5 +64,24 @@ describe("scheduler watchdog (real database)", () => {
       await checkScheduler({ collect: () => collectOpsStatus(system, now), alert: sink }),
     ).toEqual([]);
     expect(delivered).toEqual([]);
+  });
+
+  // Pass 39: the database itself is down. The watchdog cannot read the status, and its
+  // alert still goes out — the sink falls back to its in-process throttle — once.
+  it("alerts once when the database is unreachable", async () => {
+    const down = createPrismaClient("postgresql://nobody:wrong@127.0.0.1:1/none?connect_timeout=1");
+    try {
+      const { sink, delivered } = sinkWithFakeWebhook(down);
+      const check = schedulerWatchdog({
+        collect: () => collectOpsStatus(down, new Date()),
+        alert: sink,
+      });
+      for (let run = 0; run < 4; run += 1) await expect(check()).rejects.toBeDefined();
+      expect(delivered.map((alert) => [alert.severity, alert.title])).toEqual([
+        ["critical", "Scheduler watchdog cannot read the operational status"],
+      ]);
+    } finally {
+      await down.$disconnect();
+    }
   });
 });

@@ -22,19 +22,20 @@ import { logger } from "@/server/logger";
 import { alert } from "@/server/monitoring/alerts";
 import { collectOpsStatus } from "@/server/monitoring/ops-status";
 import {
-  checkScheduler,
+  schedulerWatchdog,
   schedulerWatchdogIntervalMs,
 } from "@/server/monitoring/scheduler-watchdog";
 
 async function watchScheduler(signal: AbortSignal): Promise<void> {
   const everyMs = schedulerWatchdogIntervalMs(process.env.SCHEDULER_WATCHDOG_SECONDS);
   if (everyMs === 0) return;
+  const check = schedulerWatchdog({
+    collect: () => collectOpsStatus(getSystemDb(), new Date()),
+    alert,
+  });
   while (!signal.aborted) {
     try {
-      const failing = await checkScheduler({
-        collect: () => collectOpsStatus(getSystemDb(), new Date()),
-        alert,
-      });
+      const failing = await check();
       if (failing.length > 0) logger.warn({ checks: failing }, "Scheduler watchdog: alerting");
     } catch (error: unknown) {
       // Best effort: the watchdog never stops the worker.

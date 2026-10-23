@@ -119,6 +119,36 @@ describe("Resend mailer", () => {
     expect(keyOf(other.calls[0])).not.toBe(keys[0]);
   });
 
+  // Pass 39: an attempt that hangs is cut off by its own timeout and retried with the
+  // same key — the provider may have accepted it, so the key keeps it to one email.
+  it("cuts off a hanging attempt at its timeout and retries it with the same key", async () => {
+    let attempts = 0;
+    const fake = fakeFetch(() => Response.json({ id: "email_4" }));
+    const hanging = ((url: string, init: RequestInit) => {
+      attempts += 1;
+      if (attempts > 1) return fake.fetch(url, init);
+      fake.calls.push({ url, init });
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(init.signal?.reason as Error);
+        });
+      });
+    }) as unknown as typeof fetch;
+    const started = Date.now();
+    await expect(
+      new ResendMailer({
+        apiKey: KEY,
+        from: "a@b.c",
+        fetch: hanging,
+        sleep: instant,
+        timeoutMs: 50,
+      }).send(message),
+    ).resolves.toEqual({ status: "sent" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(fake.calls).toHaveLength(2);
+    expect(new Set(fake.calls.map(keyOf)).size).toBe(1);
+  });
+
   it("gives up after three attempts on 429, reporting the provider's status", async () => {
     const fake = fakeFetch(() => new Response("{}", { status: 429 }));
     const error = await failure(
