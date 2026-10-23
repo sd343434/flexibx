@@ -1,4 +1,4 @@
-# Payments and billing — requirements and design (Pass 38, 2026-10-23)
+# Payments and billing — requirements and design (Pass 38, extended Pass 39, 2026-10-23)
 
 **Status: no payment provider exists. Customers cannot pay.** Nothing below is
 implemented; this is the design to implement once the owner has chosen a provider and
@@ -91,3 +91,85 @@ amount, currency, idempotency key UNIQUE, provider checkout id, status, timestam
 | Final prices, plans, recurring vs. prepaid           | `pricing.ts` is provisional                         |
 | VAT registration and e-invoicing responsibility      | Invoices cannot be issued without it (tax adviser)  |
 | Refund and negative-balance policy                   | Ledger behaviour on refunds/chargebacks             |
+
+## 6. Ledger versus the provider's financial truth (Pass 39)
+
+Two records, never confused:
+
+| Record                         | Owner                | Answers                                       | Never used for                               |
+| ------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------- |
+| Provider payments, settlements | The payment provider | Was money taken, refunded, disputed, paid out | —                                            |
+| `payment_intents` / `events`   | Flexibx (mirror)     | What we asked for, which events we processed  | Proving money moved (only the provider does) |
+| Credits ledger                 | Flexibx              | What a workspace may consume                  | Accounting, tax, revenue — it is not money   |
+
+Rules: credits are granted **only** by the server, from a verified provider event or a
+server-side `getPayment` lookup, once per provider payment id; the reconciliation job (§ 2.7)
+treats the provider as the truth and alerts on any difference instead of "fixing" the
+provider side.
+
+**The client cannot change payment state — verified in the code today:** the only billing
+server action available to workspace users (`submitCreditSettings`) sets caps and the
+auto top-up preference (owners only, versioned); credits are added only by
+`submitAddCredits` / `submitChangePlan` in the platform admin area (platform admin with
+fresh MFA, idempotent); no route or action accepts a payment status, amount or payment id
+from the browser. The future checkout keeps this: the success redirect shows "processing"
+and reads the state the webhook wrote; it never writes.
+
+## 7. Webhook test design (to implement with the provider; sandbox only)
+
+| Case                         | Input                                                          | Expected                                                                       |
+| ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Valid event                  | Signed `payment.succeeded`, amount = intent                    | One credit entry; event row processed; 200 after commit                        |
+| Replay (same event id)       | The same body and signature again, minutes or days later       | 200, no second credit (UNIQUE provider event id); counted as duplicate         |
+| Replay outside the window    | Valid signature, timestamp older than the provider's tolerance | 400, nothing written                                                           |
+| Duplicate payment, new event | Two different event ids for one provider payment id            | One credit (UNIQUE `provider_payment_id` on the ledger entry)                  |
+| Tampered body / wrong secret | Body changed after signing; signature from another secret      | 400, nothing written, alert after N in a window                                |
+| Amount mismatch              | Event amount or currency ≠ the intent's                        | No credit; intent `NEEDS_REVIEW`; critical alert; manual resolution with audit |
+| Unknown intent               | Event for an id we never created                               | 200 (stop retries), recorded, alert                                            |
+| Out of order                 | `refund` before `succeeded`; `succeeded` after `failed`        | Final state from a `getPayment` lookup, never from arrival order               |
+| Webhook lost                 | Redirect back, no event                                        | Status lookup job resolves PENDING intents; credit once                        |
+| Database down at delivery    | Commit fails                                                   | 5xx so the provider retries; no partial credit (one transaction)               |
+| Refund / partial / dispute   | Signed events                                                  | Ledger removal per the refund policy; dispute freezes purchases + alert        |
+
+## 8. Provider acceptance criteria and comparison (no provider chosen)
+
+A provider is acceptable only if **all** of these hold (answers come from its contract and
+documentation, verified by the owner — not assumed here):
+
+1. Licensed to acquire in the target market(s) and settles to the owner's bank in the
+   chosen currency.
+2. Hosted checkout or hosted fields (card data never on Flexibx servers).
+3. The local methods the market expects (e.g. mada, Apple Pay in Saudi Arabia) if required.
+4. Signed webhooks with event ids, retries, and a replay tolerance; a payment-status API.
+5. Idempotency keys on create/charge/refund.
+6. A sandbox with test cards, 3-D Secure and failure simulations, and webhook delivery to
+   a non-production URL.
+7. Refund (full/partial) and dispute APIs and events; settlement/payout reports via API.
+8. Saved payment methods (for auto top-up) under the scheme's rules, if auto top-up stays.
+9. Invoice or e-invoicing support, or clean data for Flexibx to issue them (tax adviser).
+10. Fees, payout schedule, reserve and chargeback terms acceptable to the owner.
+
+Comparison matrix for the owner to fill (one column per candidate; leave "unknown" until
+confirmed by the provider in writing):
+
+| Criterion (above)                   | Candidate A | Candidate B | Candidate C |
+| ----------------------------------- | ----------- | ----------- | ----------- |
+| 1 Market licence / settlement       |             |             |             |
+| 2 Hosted checkout                   |             |             |             |
+| 3 Local methods                     |             |             |             |
+| 4 Signed webhooks + status API      |             |             |             |
+| 5 Idempotency keys                  |             |             |             |
+| 6 Sandbox quality                   |             |             |             |
+| 7 Refunds, disputes, settlement API |             |             |             |
+| 8 Saved methods                     |             |             |             |
+| 9 Invoices / e-invoicing            |             |             |             |
+| 10 Fees and terms                   |             |             |             |
+
+## 9. Acceptance criteria before taking real money
+
+All § 7 cases pass against the chosen provider's **sandbox** from hosted staging; the
+reconciliation job runs a full day of sandbox payments with zero unexplained differences;
+the payments kill switch stops checkout without affecting existing credits; refund and
+dispute flows tested; the refund/cancellation policy, terms and invoice handling approved
+by counsel and the tax adviser; then one controlled live transaction **only with the
+owner's explicit approval**.

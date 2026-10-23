@@ -1,4 +1,4 @@
-# Legal, privacy and tax checklist for a commercial launch (Pass 38, 2026-10-23)
+# Legal, privacy and tax checklist for a commercial launch (Pass 38, re-verified Pass 39, 2026-10-23)
 
 **This is not legal advice and nothing here states that Flexibx is compliant.** It lists
 what exists in the product, what is missing, and the questions a qualified lawyer and a
@@ -44,3 +44,33 @@ Publish the pages (ar/en, versioned), record acceptance per user and version, bu
 self-service account deletion and workspace export, a retention job per category, a
 subprocessor page, and the payment/invoice flows. Estimates in
 `COMMERCIAL_LAUNCH_READINESS.md` § 9 start only once the approved texts exist.
+
+## 5. Re-verified in the code (Pass 39)
+
+- **Account deletion: does not exist for users.** Better Auth's `POST /delete-user` and
+  `GET /delete-user/callback` pass the route allowlist but are disabled in the auth
+  configuration: they answer 404 before reading the password (integration test
+  `auth-entry-points.test.ts`, "no allowlisted endpoint checks a password…"; the user row
+  stays). Workspaces are soft-deleted only. Building self-service deletion needs counsel's
+  answers on deadlines, retained records (ledger, audit log) and backups first.
+- **Data export: partial.** Only a Creator Studio project's data can be exported (project
+  page, `studio-data-export`); there is no account- or workspace-wide export.
+- **Session tokens are now stored hashed** (Pass 39): a database copy (including a backup)
+  no longer contains usable session tokens — relevant to the breach-impact assessment.
+- **Media uploads**: retained per the existing schedule; FFmpeg processing is local to the
+  worker (no third party) unless the AI provider is enabled (then audio leaves for the
+  provider — a subprocessor and transfer question, § 1 and § 2).
+
+## 6. Decisions and reviews needed before selling (none taken here)
+
+| Needs                                     | Who            | Blocks                                      |
+| ----------------------------------------- | -------------- | ------------------------------------------- |
+| Target markets and selling entity         | Owner          | Every row below                             |
+| Terms, privacy policy, DPA, cookies       | Lawyer         | Sign-up acceptance, public launch           |
+| Refund / cancellation policy              | Lawyer + owner | Payments (PAYMENTS_DESIGN.md § 9)           |
+| Retention per category, deletion scope    | Lawyer         | Account deletion feature, backup retention  |
+| Cross-border transfer (region, AI)        | Lawyer         | R-2 region choice, enabling the AI provider |
+| VAT, e-invoicing, commercial registration | Tax adviser    | Invoices, prices shown with tax             |
+| Breach notification procedure             | Lawyer         | Incident runbook completion                 |
+
+Nothing in this repository states or implies compliance with any law.
