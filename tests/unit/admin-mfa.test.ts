@@ -104,7 +104,7 @@ describe("TOTP sign-in claim (session.create.before)", () => {
 
 describe("two-factor configuration", () => {
   const auth = createAuth({
-    db: {} as PrismaClient,
+    db: { $extends: () => ({}) } as unknown as PrismaClient, // never queried here
     secret: "s".repeat(40),
     baseURL: "https://app.flexibx.test",
     appUrl: "https://app.flexibx.test",

@@ -40,7 +40,8 @@ const APP = "https://app.flexibx.test";
 
 function build(overrides: Partial<Parameters<typeof createAuth>[0]> = {}) {
   return createAuth({
-    db: {} as PrismaClient, // never queried here
+    // never queried here; $extends: the adapter client hashes session tokens (Pass 39)
+    db: { $extends: () => ({}) } as unknown as PrismaClient,
     secret: SECRET,
     baseURL: APP,
     appUrl: APP,

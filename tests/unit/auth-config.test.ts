@@ -15,7 +15,8 @@ const SECRET = "x".repeat(40);
 
 function build(overrides: Partial<Parameters<typeof createAuth>[0]> = {}) {
   return createAuth({
-    db: {} as PrismaClient, // never queried here
+    // never queried here; $extends: the adapter client hashes session tokens (Pass 39)
+    db: { $extends: () => ({}) } as unknown as PrismaClient,
     secret: SECRET,
     baseURL: "http://localhost:3000",
     appUrl: "http://localhost:3000",
