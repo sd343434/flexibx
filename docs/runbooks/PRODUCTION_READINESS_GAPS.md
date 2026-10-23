@@ -833,3 +833,15 @@ reached); hosted staging not launched; nothing done on AWS; CI still without a r
 | Release candidate         | `a463d1c`: built and verified (`build-and-verify.sh`); Trivy DB 2026-10-23 07:12 UTC; 0 fixable HIGH/CRITICAL; image IDs in RELEASE_READINESS_DECISIONS.md.                 |
 | New MEDIUM                | **OPEN**: `ip-address` 10.7.3 (CVE-2026-111997) inside pnpm 10.34.7's bundle in worker and ops; no pnpm 10.x fix; remedy pnpm 12 (owner).                                   |
 | Local staging             | `STAGING CHECK PASSED` 34/0/0 on the RC images; restore `VERIFIED` (77/502/37); unsafe operations refused.                                                                  |
+
+## 31. Pass 36: no package manager in the job images — release candidate `d6141e6` (proposed)
+
+2026-10-23. **Local evidence only; CI has no runner; nothing hosted, nothing on AWS.**
+
+| Area                | Evidence                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ip-address` MEDIUM | **FIXED** in `d6141e6`: pnpm and corepack removed from the worker and ops images; Trivy with no exception: no Node finding; no `ip-address` file in either image.                 |
+| Runtime commands    | migrate: `node_modules/.bin/prisma migrate deploy` (launcher ends in `exec node`); gate: `node --import tsx … scripts/staging/check.ts`; worker and scheduler unchanged.          |
+| Behaviour change    | `pnpm <script>` no longer works inside the job images (exit 127); runbooks give the `node --import tsx …` form. Hosts with the source still use pnpm.                             |
+| Gates on `d6141e6`  | format, lint, typecheck, unit 1135, integration 923, Prisma validate, migrate/schema/37 checksums/drift, restore drill, 13/13 mutants, S3 acceptance 5, build, Terraform, E2E 43. |
+| Local staging       | `STAGING CHECK PASSED` 34/0/0 on the `d6141e6` images; restore `VERIFIED` (77/502/37); unsafe operations refused.                                                                 |

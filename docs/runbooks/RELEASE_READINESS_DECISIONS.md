@@ -1,4 +1,4 @@
-# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–29, 2026-10-23)
+# Release readiness decisions (Pass 16, 2026-10-19; status updated Passes 17–36, 2026-10-23)
 
 Decisions only the owner can take before Flexibx staging can be hosted and a release
 promoted. None of them can be made from the repository: each needs an account, money, a
@@ -60,7 +60,7 @@ Writing a document about an item never makes it `FIXED`.
 | Hosted-staging preflight                                   | `scripts/release`               | —              | **FIXED**   | Pass 20: `staging-preflight.sh` (no AWS call) and its test in CI, 6/6 mutants killed; STAGING_LAUNCH.md                                                                                                                                                                             |
 | Env file on the host from Secrets Manager                  | `scripts/ops`, host             | —              | **FIXED**   | Pass 22: the host had no AWS CLI, so its role could not be used to read the env secret; user-data installs it (asserted in tftest); `render-staging-env.sh` validates and writes it (14 checks, 11/11 mutants)                                                                      |
 | Host AWS CLI version not pinned (snap)                     | host (user-data)                | —              | **OPEN**    | Pinned alternative tested (Pass 23); Pass 24: its provenance is not established — `verify-aws-cli-signature.sh` refuses the only reachable key copy (expired 2026-07-07); needs the current key from AWS's documentation, then owner decision R-9                                   |
-| `ip-address` 10.7.3 (CVE-2026-111997)                      | worker, ops (pnpm's own bundle) | MEDIUM         | **OPEN**    | New in the Trivy DB of 2026-10-23; inside pnpm 10.34.7 (corepack cache), not an app dependency; fixed in 10.7.4, no pnpm 10.x ships it (10.34.7 is the newest 10.x); remedy: pnpm 12 (owner decision)                                                                               |
+| `ip-address` 10.7.3 (CVE-2026-111997)                      | worker, ops (pnpm's own bundle) | MEDIUM         | **FIXED**   | Pass 36: `d6141e6` removes pnpm and corepack from the job images (pnpm stays in the build stages); images of `d6141e6` scanned with no exception: no Node finding, no `ip-address` file. The `a463d1c` images still carry it                                                        |
 | Preflight accepted a reserved domain (`.test`)             | `scripts/release`               | —              | **FIXED**   | Pass 23: `.test/.example/.invalid/.localhost/.local` refused; 4 new checks; mutant killed                                                                                                                                                                                           |
 
 ## Status on 2026-10-23 (Pass 29): Prisma 7.10.1 applied, release candidate `a463d1c`
@@ -99,6 +99,24 @@ fixed by an ECR push, approval 3):
 | `flexibx/app:a463d1c…`    | `sha256:065ba9ebd780595cb3ab800ae57ef93f454f2d47706d41136485682523c17430` |
 | `flexibx/worker:a463d1c…` | `sha256:c50205e4be9d45cd7cbc1978c4e28b16a9bfb05d553ec70adabd7ec5add01bcd` |
 | `flexibx/ops:a463d1c…`    | `sha256:e1fc8baf85fee3e597ac4793e76a8fbb0e5787c8ce67bfb6eda0a028912197b9` |
+
+**Pass 36 release candidate `d6141e6`** (proposed; supersedes `a463d1c` once approved):
+the worker and ops images carry only the `node` binary of the Node image — no pnpm,
+corepack, npm or yarn, and no pnpm lockfile, workspace file or `.npmrc`. `build-and-verify.sh
+d6141e6…`: labels, contents (the package-manager check now covers all three images), sizes
+389 / 1197 / 1056 MB, ops self-check (prisma and tsx offline, no package manager), media
+tools — OK. Trivy DB 2026-10-23 07:12 UTC, scanned 11:40 UTC, **no exception**: 0 fixable
+HIGH/CRITICAL; OS MEDIUM/LOW app 21/4, worker 637/28, ops 23/4 (unchanged); Node: none in
+any image. Node inventory: worker 160 → 69, ops 344 → 253 packages; every removed entry was
+under pnpm's corepack bundle or corepack itself. The new checks fail on the `a463d1c` images
+(positive control). Local staging on these images: `STAGING CHECK PASSED` 34 / 0 / 0, restore
+`VERIFIED` (77 / 502 / 37), unmarked databases refused.
+
+| Image                     | ID                                                                        |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `flexibx/app:d6141e6…`    | `sha256:ed3f1b0a18cce80b3abb906990c0382f1311cf51597cff5b4eeea5fa6dfea168` |
+| `flexibx/worker:d6141e6…` | `sha256:c89cc16b46390b46325c65019e116194c9f0a8f31e325e605979104feb59832d` |
+| `flexibx/ops:d6141e6…`    | `sha256:e2848f51b3b468e1f263b3ff5f56e29b81bbf535d732e16f2cbee5e47ba55e7e` |
 
 **Local staging (not AWS):** migrate refused the unmarked database; gate before marking
 FAILED on `database_environment`; after marking `STAGING CHECK PASSED` 34 / 0 / 0; app,
