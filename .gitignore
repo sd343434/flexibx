@@ -21,6 +21,7 @@ blob-report/
 .env.*
 !.env.example
 deploy/staging/staging.env
+deploy/staging/staging-owner.env
 # Terraform working files and state (state lives in the owner's backend, never in Git)
 deploy/staging/aws/.terraform/
 deploy/staging/aws/*.tfstate

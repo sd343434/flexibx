@@ -157,6 +157,23 @@ describe("staging pre-rollout gate", () => {
     expect(summarize(missing.results).verdict).toBe("INCOMPLETE");
   });
 
+  it("verifies the database with the owner login when the job has it (Pass 37)", async () => {
+    const owner = "postgresql://flexibx_owner:owner-password@db.example:5432/flexibx_staging";
+    const { d, runs } = deps({ env: { ...ENV, OWNER_DATABASE_URL: owner } });
+    const summary = await runPredeployGate(d);
+    expect(byName(summary.results, "database")?.status).toBe("pass");
+    // db-verify gets the owner login; the marker check and the app keep the runtime login.
+    expect(runs.find((r) => r.name === "db-verify")?.env).toEqual({ VERIFY_DATABASE_URL: owner });
+    expect(runs.find((r) => r.name === "db-environment")?.env.DATABASE_URL).toBe(ENV.DATABASE_URL);
+    expect(JSON.stringify(summary)).not.toContain("owner-password");
+    // Without it, the runtime login is used, as before.
+    const { d: plain, runs: plainRuns } = deps();
+    await runPredeployGate(plain);
+    expect(plainRuns.find((r) => r.name === "db-verify")?.env).toEqual({
+      VERIFY_DATABASE_URL: ENV.DATABASE_URL,
+    });
+  });
+
   it("fails on a database that is not marked staging, naming what it is", async () => {
     const { d, runs } = deps({
       dbEnvironment: {

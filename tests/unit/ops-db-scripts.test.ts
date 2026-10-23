@@ -47,6 +47,10 @@ case "$tool" in
     for arg in "$@"; do [[ "$arg" == --file=* ]] && printf 'PGDMP fake' > "\${arg#--file=}"; done ;;
   psql)
     args="$*"
+    # Script on stdin (db-backup.sh's snapshot session): answer pg_export_snapshot().
+    if [[ "$args" != *" -c "* && "$args" != *" -f "* ]]; then
+      echo "00000003-0000001B-1"; cat >/dev/null; exit 0
+    fi
     if [[ "$args" == *current_database* ]]; then echo "\${PGDATABASE:-}"
     elif [[ "$args" == *information_schema.tables* ]]; then echo "\${FAKE_TABLES:-0}"
     elif [[ "$args" == *row-counts.sql* ]]; then printf 'users\\t3\\nworkspaces\\t1\\n'
@@ -162,8 +166,14 @@ describe("ops database scripts keep the URL off the command line", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "OK", tables: 2 });
     expectNoSecretAnywhere(result);
 
-    const [dump, counts] = calls();
+    const [snapshot, dump, counts] = calls();
+    // Dump and row counts come from one exported snapshot (Pass 37): a database in use
+    // changes between two separate reads and the manifest would never match the dump.
+    expect(snapshot?.tool).toBe("psql");
     expect(dump?.tool).toBe("pg_dump");
+    expect(dump?.argv).toContain("--snapshot=00000003-0000001B-1");
+    expect(counts?.argv).toContain("SET TRANSACTION SNAPSHOT '00000003-0000001B-1'");
+    expect(snapshot?.env.PGPASSFILE).toBe(dump?.env.PGPASSFILE);
     expect(dump?.argv.some((arg) => arg.startsWith("--dbname"))).toBe(false);
     expect(dump?.env).toMatchObject({
       PGHOST: "db.internal",
@@ -195,7 +205,7 @@ describe("ops database scripts keep the URL off the command line", () => {
       PGPASSWORD: "from-env",
     });
     expect(result.code).toBe(0);
-    const [dump] = calls();
+    const dump = calls().find((call) => call.tool === "pg_dump");
     expect(dump?.env.PGPASSFILE).toBeUndefined();
     expect(dump?.env.PGPASSWORD).toBe("from-env");
     expect(dump?.env).toMatchObject({ PGHOST: "localhost", PGUSER: "ops", PGDATABASE: "flexibx" });

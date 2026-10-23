@@ -23,6 +23,18 @@ x-env: &env
     - path: staging.env
       required: true
 
+# The owner login of the database (staging-owner.env: OWNER_DATABASE_URL, Pass 37) reaches
+# only the one-off jobs that need it — migrate, backup and the gate's db-verify — never the
+# app, the worker or the scheduler, which run as the runtime login (DATABASE_URL). Once
+# scripts/ops/sql/db-roles.sql is applied, that login cannot run migrations, cannot dump the
+# database and cannot read _prisma_migrations (docs/runbooks/DATABASE_ROLES.md § 5).
+x-owner-env: &owner-env
+  env_file:
+    - path: staging.env
+      required: true
+    - path: staging-owner.env
+      required: true
+
 # Container logs rotate (5 × 10 MB per service): a long-running host never fills its disk
 # with logs. The platform's log shipping, if any, reads them before rotation.
 x-logging: &logging
@@ -73,18 +85,19 @@ services:
 
   # ── One-off jobs (`docker compose run --rm <job>`) ──────────────────────────────
   migrate:
-    <<: *env
+    <<: *owner-env
     image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
-    # Refuses unless the database is marked staging (scripts/ops/db-environment.sh).
+    # As the owner login; refuses unless the database is marked staging
+    # (scripts/ops/db-environment.sh).
     entrypoint: ["bash", "-c"]
     command:
       [
-        "scripts/ops/db-environment.sh assert staging && exec node_modules/.bin/prisma migrate deploy",
+        'export DATABASE_URL="$${OWNER_DATABASE_URL:?OWNER_DATABASE_URL is not set (staging-owner.env)}" && scripts/ops/db-environment.sh assert staging && exec node_modules/.bin/prisma migrate deploy',
       ]
 
   check:
-    <<: *env
+    <<: *owner-env
     image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     environment:
@@ -105,13 +118,16 @@ services:
       - work:/work
 
   backup:
-    <<: *env
+    <<: *owner-env
     image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     entrypoint: ["bash", "-c"]
     # Writes the dump, its manifest and checksums to the `backups` volume; copy them off
     # the host (BACKUP_RESTORE.md). Restores go to a NEW database (db-restore.sh).
-    command: ['BACKUP_DATABASE_URL="$$DATABASE_URL" scripts/ops/db-backup.sh /backups/staging']
+    command:
+      [
+        'BACKUP_DATABASE_URL="$${OWNER_DATABASE_URL:?OWNER_DATABASE_URL is not set (staging-owner.env)}" scripts/ops/db-backup.sh /backups/staging',
+      ]
     volumes:
       - backups:/backups
 

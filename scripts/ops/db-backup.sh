@@ -7,7 +7,9 @@
 # be committed), readable by the current user only:
 #   flexibx-<UTC timestamp>.dump         pg_dump custom format (compressed)
 #   flexibx-<UTC timestamp>.dump.sha256  SHA-256 of the dump (checked before any restore)
-#   flexibx-<UTC timestamp>.counts.tsv   exact row count per table (compared after restore)
+#   flexibx-<UTC timestamp>.counts.tsv   exact row count per table (compared after restore),
+#                                        taken from the SAME snapshot as the dump (Pass 37:
+#                                        counted afterwards, a database in use never matched)
 #   flexibx-<UTC timestamp>.counts.tsv.sha256  SHA-256 of the manifest (checked by db-verify.sh)
 # Prints one JSON line (path, size, hash). Never prints the connection string or data.
 # The URL never reaches a command line (lib/pgenv.sh): its parts go to libpq environment
@@ -33,13 +35,33 @@ mkdir -p "$target"
 chmod 700 "$target"
 base="$target/flexibx-$(date -u +%Y%m%dT%H%M%SZ)"
 # A failed or interrupted run leaves no partial dump that could be mistaken for a backup.
-cleanup() { rm -f "$base.dump" "$base.dump.sha256" "$base.counts.tsv" "$base.counts.tsv.sha256"; }
+snap_pid=""
+cleanup() {
+  rm -f "$base.dump" "$base.dump.sha256" "$base.counts.tsv" "$base.counts.tsv.sha256"
+  if [[ -n "$snap_pid" ]]; then kill "$snap_pid" 2>/dev/null || true; fi
+}
 trap 'cleanup; echo "{\"status\":\"FAILED\"}" >&2; exit 1' ERR INT TERM
 
-pg_dump --format=custom --compress=6 --no-owner --no-privileges --file="$base.dump"
+# One snapshot for the dump and the row counts: a read-only REPEATABLE READ transaction
+# exports it and stays open until both are taken. Rows written meanwhile are in neither.
+coproc SNAP { psql -X -q -A -t -v ON_ERROR_STOP=1 2>/dev/null; }
+snap_pid="$SNAP_PID"
+printf 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();\n' >&"${SNAP[1]}"
+snapshot=""
+IFS= read -r -t 60 snapshot <&"${SNAP[0]}" || true
+[[ "$snapshot" =~ ^[0-9A-F]+-[0-9A-F]+-[0-9]+$ ]] || false
+
+pg_dump --format=custom --compress=6 --no-owner --no-privileges --snapshot="$snapshot" \
+  --file="$base.dump"
 sha256sum "$base.dump" | cut -d' ' -f1 > "$base.dump.sha256"
-psql -X -q -A -t -F $'\t' -v ON_ERROR_STOP=1 -f "$here/sql/row-counts.sql" > "$base.counts.tsv"
+psql -X -q -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" \
+  -c "SET TRANSACTION SNAPSHOT '$snapshot'" -f "$here/sql/row-counts.sql" -c "COMMIT" \
+  > "$base.counts.tsv"
 sha256sum "$base.counts.tsv" | cut -d' ' -f1 > "$base.counts.tsv.sha256"
+printf 'COMMIT;\n' >&"${SNAP[1]}"
+exec {SNAP[1]}>&-
+wait "$snap_pid" || true
+snap_pid=""
 
 trap - ERR INT TERM
 printf '{"status":"OK","dump":"%s","bytes":%s,"sha256":"%s","tables":%s}\n' \

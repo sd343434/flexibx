@@ -97,7 +97,9 @@ shell history) to set passwords.
 4. **Grant path**: on the staging copy, `pnpm admin:grant` with `ADMIN_GRANT_DATABASE_URL`
    = the grant role works (§ 3) — before anyone depends on it in production.
 5. **Switch credentials** in the deployment configuration (secret manager references only;
-   never in `.env` files in the repository, CI logs or chat):
+   never in `.env` files in the repository, CI logs or chat). In the staging Compose file
+   (Pass 37) the owner login is `OWNER_DATABASE_URL` in `staging-owner.env`, given only to
+   `migrate`, `backup` and `check`; `DATABASE_URL` in `staging.env` is the runtime login:
    - web app and scheduled jobs: `DATABASE_URL` = `flexibx_app`;
    - migrate job: `DATABASE_URL` = the owner (`prisma migrate deploy` runs as the owner
      **login itself** — default privileges only cover objects the owner creates; a

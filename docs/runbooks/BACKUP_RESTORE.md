@@ -68,10 +68,16 @@ Output (one JSON line): dump path, size, SHA-256, table count. Files (mode 600, 
   (consistent snapshot; restorable into any database with the same extensions:
   `pgcrypto`, `citext`).
 - `flexibx-<UTC>.dump.sha256` — checked before any restore.
-- `flexibx-<UTC>.counts.tsv` — exact row count per table, taken right after the dump. Exact
-  when writes were stopped (maintenance window); approximate on a live database.
+- `flexibx-<UTC>.counts.tsv` — exact row count per table, taken from the **same snapshot**
+  as the dump (Pass 37: an exported snapshot, `pg_dump --snapshot`), so it matches the dump
+  even while the application writes. (Counted afterwards, as before Pass 37, a database in
+  use failed `db-verify.sh` with a row-count mismatch.)
+- `flexibx-<UTC>.counts.tsv.sha256` — the manifest's checksum (`db-verify.sh` refuses a
+  manifest without it).
 
-Then copy the three files to the backup storage (§ 2) and delete the local copies.
+Run it as the database's **owner** login: the runtime login cannot dump the database once
+the roles are applied (DATABASE_ROLES.md § 5; Compose `backup` uses `OWNER_DATABASE_URL`).
+Then copy the **four** files to the backup storage (§ 2) and delete the local copies.
 
 ## 4. Restoring
 

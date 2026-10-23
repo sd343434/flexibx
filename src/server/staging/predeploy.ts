@@ -149,7 +149,11 @@ async function environmentMarkerCheck(deps: PredeployDeps): Promise<GateResult> 
 }
 
 async function databaseCheck(deps: PredeployDeps): Promise<GateResult> {
-  const url = deps.env.DATABASE_URL;
+  // db-verify reads _prisma_migrations, which the runtime login cannot read once the roles
+  // are applied (docs/runbooks/DATABASE_ROLES.md): with the owner login of the one-off jobs
+  // (OWNER_DATABASE_URL, Compose `check`) it uses that one (Pass 37).
+  const owner = deps.env.OWNER_DATABASE_URL;
+  const url = isSet(owner) ? owner : deps.env.DATABASE_URL;
   if (!isSet(url)) return result("database", "not_run", "DATABASE_URL is not set");
   const outcome = await deps.run("db-verify", { VERIFY_DATABASE_URL: url ?? "" });
   if (outcome.kind === "missing")

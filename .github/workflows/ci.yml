@@ -186,12 +186,15 @@ jobs:
       - name: Validate the staging Compose file (Pass 13)
         run: |
           cp deploy/staging/staging.env.example deploy/staging/staging.env
+          cp deploy/staging/staging-owner.env.example deploy/staging/staging-owner.env
           FLEXIBX_TAG=ci docker compose -f deploy/staging/compose.yaml --profile jobs config --quiet
           # Without an explicit release tag the Compose file must refuse to render.
           if docker compose -f deploy/staging/compose.yaml config --quiet 2>/dev/null; then
             echo "compose accepted a missing FLEXIBX_TAG" >&2; exit 1
           fi
-          rm deploy/staging/staging.env
+          # Pass 37: the owner login reaches migrate, backup and check only.
+          FLEXIBX_TAG=ci scripts/staging/check-compose-credentials.sh
+          rm deploy/staging/staging.env deploy/staging/staging-owner.env
       # Pass 18: every release check in one script, shared with scripts/release/build-and-verify.sh:
       # revision label = this commit; contents (non-root, no secrets/state/tests, no package
       # manager in the app image, /work and /backups writable); size budgets (measured 389 /
