@@ -104,8 +104,11 @@ for (const { locale, dir, notSent } of [
     await invitee.goto(path);
     await expect(invitee.getByTestId("invitation-invalid")).toBeVisible();
 
-    // The owner sees the new member, changes the role, then removes them.
+    // The owner sees the new member, changes the role, then removes them. After the reload
+    // the form is used only once the page is hydrated (Pass 42: choosing a role before
+    // hydration was undone by it, and the submit then kept EDITOR — a test race).
     await owner.reload();
+    await owner.waitForLoadState("networkidle");
     await expect(owner.getByTestId("member-row")).toHaveCount(2);
     await expect(owner.getByTestId("pending-empty")).toBeVisible();
     const row = owner.locator(`[data-testid="member-row"][data-email="${email}"]`);

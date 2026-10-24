@@ -1,6 +1,7 @@
 # FFmpeg in the worker image — evidence and decision (Pass 40, 2026-10-24)
 
-**Status: OPEN — needs an owner decision (Pass 41 recommendation: D, see § 6).** Nothing here is applied; no paid service was
+**Status: PARTLY MITIGATED — D implemented and tested locally (Pass 42, § 7); the CVEs
+themselves remain open and A still needs an owner decision.** Nothing here is applied; no paid service was
 used. Mitigations reduce exposure; they do not remove a single CVE.
 
 ## 1. What is installed (verified)
@@ -117,3 +118,42 @@ costs the most to maintain; E (signed acceptance) leaves everything open.
 
 Nothing here was bought or built: D is an architecture change and A is a paid service, so
 both need the owner's approval.
+
+## 7. Pass 42 update (2026-10-24, evening): D implemented, CVEs unchanged
+
+**D is implemented** — `MEDIA_ISOLATION.md`: FFmpeg and ffprobe run only in the `media`
+service (the worker image, another command) with no env file, no network, a read-only root,
+its own PID namespace and only the work volume; the worker reaches it through a 0600 Unix
+socket; the runner re-validates every argument; no fallback anywhere (local path refuses,
+production worker refuses to start without it, no job is claimed while it is down).
+Proven locally on the release images `729d8f6` (container cycle, `LAUNCH_HARDENING_PASS_42.md`
+§ 4): no credential name in any environment visible inside `media`, the synthetic secret
+values found nowhere it can read (control: found in the worker), only `lo`, no Docker
+socket, no secret file, CapEff 0, NoNewPrivs 1, Seccomp 2. **Not yet validated on hosted
+staging** (A5 + the new A14 in `LAUNCH_CLOSURE_MATRIX.md`).
+
+**CVE status re-checked** (Canonical API, 2026-10-24 evening;
+[`evidence/ffmpeg-cves-2026-10-24-pass42.tsv`](evidence/ffmpeg-cves-2026-10-24-pass42.tsv),
+identical to the Pass 41 recheck): **61 released only in esm-apps** (`+esm1`…`+esm15`),
+**4 deferred** with no fix anywhere (CVE-2023-6601, CVE-2023-6602, CVE-2023-6604,
+CVE-2025-25467). ESM Apps index still dated 2026-10-12. The public archive (noble,
+noble-updates, noble-security; indices of 2026-10-24) still has only `7:6.1.1-3ubuntu5`.
+Trivy 0.76.0 on the final worker image: 665 OS findings (637 MEDIUM, 28 LOW), 585 in the
+FFmpeg libraries (65 CVEs), **0 fixable**; app and ops images: 25 and 27, 0 fixable.
+
+| Group                              | CVEs | Fixable by us now?                                    | What contains it after Pass 42                                                |
+| ---------------------------------- | ---- | ----------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Released in esm-apps               | 61   | Only with Ubuntu Pro (A) — owner decision, not bought | Runner isolation (no credential, no network); demuxer pinning; caps; timeouts |
+| Deferred, demuxer-related (3)      | 3    | No fix exists                                         | Demuxer pinned (HLS/TTY/XBIN never selected — tested); isolation              |
+| Deferred, CVE-2025-25467 (libx264) | 1    | No fix exists (upstream fix not merged)               | Isolation only — reachable on every render                                    |
+
+**Not claimed:** no CVE is "handled". None was reproduced; isolation limits the impact of
+an exploit to the runner (a crash, CPU/memory up to its caps, and read/write access to
+other jobs' scratch files on `/work`) — it does not prevent the exploit.
+
+**A (Ubuntu Pro) evaluated alongside, not instead:** still the only way to install the 61
+published fixes from the same supplier. It needs a subscription (price to be quoted by
+Canonical for this use — not checked, nothing bought), a build change (attach with a
+BuildKit secret, install `+esm`, detach in the same layer; ≈1 day), and a Trivy run to
+confirm the scanner reads `+esm` versions as fixed. Recommended **in addition** to D;
+the decision stays with the owner (`OWNER_DECISIONS.md`).
