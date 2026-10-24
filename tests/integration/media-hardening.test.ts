@@ -145,4 +145,24 @@ describe("FFmpeg on untrusted files (Pass 39)", () => {
     const info = await probeMedia(tools, at("out.wav"), { timeoutMs: 30_000, container: "wav" });
     expect(info.hasAudio).toBe(true);
   });
+
+  // Pass 40: four FFmpeg CVEs have no fix even in Ubuntu Pro (status "deferred" for noble on
+  // 2026-10-24). Three of them live in demuxers FFmpeg only reaches by auto-detecting the
+  // input: HLS (CVE-2023-6601), TTY via HLS (CVE-2023-6602), XBIN (CVE-2023-6604). Every
+  // container we accept pins one of four demuxers, so those are never selected — this test
+  // proves the selection, not an exploit (the CVEs were not reproduced). CVE-2025-25467
+  // (AAC) stays open behind the container caps.
+  it("never lets FFmpeg pick the HLS, TTY or XBIN demuxer, whatever container is pinned", async () => {
+    const pinned = new Set(Object.values(DEMUXERS));
+    expect([...pinned].sort()).toEqual(["matroska", "mov", "mp3", "wav"]);
+    const playlist = at("deferred.m3u8");
+    writeFileSync(
+      playlist,
+      `#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfile:${WAV}\n#EXT-X-ENDLIST\n`,
+    );
+    for (const container of Object.keys(DEMUXERS) as (keyof typeof DEMUXERS)[]) {
+      const error = await failure(probeMedia(tools, playlist, { timeoutMs: 30_000, container }));
+      expect(error, container).toBeInstanceOf(MediaToolError);
+    }
+  });
 });

@@ -25,11 +25,14 @@ for name in ("app", "worker", "scheduler"):
         problems.append("capabilities not dropped")
     if "no-new-privileges:true" not in (s.get("security_opt") or []):
         problems.append("no-new-privileges missing")
+    # Pass 40: the default Docker seccomp and AppArmor profiles stay on (FFmpeg CVEs open).
+    if any(o.replace("=", ":").endswith(":unconfined") for o in (s.get("security_opt") or [])):
+        problems.append("seccomp/apparmor unconfined")
     if not s.get("pids_limit") or s.get("privileged"):
         problems.append("no PID cap or privileged")
     if name == "worker" and not (s.get("mem_limit") and s.get("memswap_limit") == s.get("mem_limit") and s.get("cpus")):
         problems.append("worker memory/CPU caps missing")
     if problems:
         sys.exit(f"{name}: " + ", ".join(problems))
-print("hardening: app worker scheduler without capabilities, no-new-privileges, PID caps; worker memory/CPU capped")
+print("hardening: app worker scheduler without capabilities, no-new-privileges, default seccomp, PID caps; worker memory/CPU capped")
 '
