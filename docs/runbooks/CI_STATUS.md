@@ -254,3 +254,32 @@ recorded in the readiness register:
 
 **Not reproduced locally:** GitHub-hosted conditions (Ubuntu image, Node from `.nvmrc`, the
 gitleaks action).
+
+## Pass 40 (2026-10-24): still BLOCKED at the account level
+
+**Facts (GitHub Actions API, read 2026-10-24):** the newest run is still #80
+(`39930805326`, push of `42aa713`, 2026-10-23 09:17 UTC). All four jobs ended `failure`
+within 0–4 s with `runner_id` 0, empty runner name and group, and the run's usage is
+0 billable ms; the check runs carry no output. Runs #43–#80 look the same.
+
+**Why it is not the repository:** a workflow error (YAML, missing secret, failing step)
+reaches a runner and produces logs and billable time; here no job was ever assigned a
+runner. The workflow file is unchanged in substance since runs that did execute, and every
+step it contains was run locally in Pass 40 (see `LAUNCH_HARDENING_PASS_40.md`). This is the
+pattern GitHub shows when Actions cannot start jobs for the account (billing or spending
+limit, a locked account, or Actions disabled) — the exact reason is visible only to the
+account owner.
+
+**Recovery steps (repository owner, in GitHub settings — not done here, not bypassed):**
+
+1. Account → _Billing and plans_: check for a failed payment, a spending limit of 0 for
+   Actions, or a notice about a locked account; fix it.
+2. Repository → _Settings → Actions → General_: Actions allowed; workflow permissions as
+   before.
+3. Re-run run #80 (or push the approved candidate) and confirm in the job page that a runner
+   was assigned (a runner name appears) and steps produced logs.
+4. Then CI must be green on the **release commit** (all four jobs) before staging approval
+   (1) `terraform plan`.
+
+Not used, by rule: another account, a self-hosted or alternative runner, or edits to the
+workflow to get around the block.
