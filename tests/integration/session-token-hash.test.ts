@@ -127,4 +127,41 @@ describe("session tokens stored hashed (Pass 39)", () => {
       .catch((error: unknown) => ({ error }));
     expect("session" in outcome ? outcome.session : null).toBeNull();
   });
+
+  // Pass 40: rollback and roll-forward, with the previous release simulated as the same
+  // Better Auth configuration without the hashing layer (what a463d1c runs).
+  it("rollback signs users out once without errors; roll-forward needs the statement re-run", async () => {
+    const previous = createTestAuth(
+      new Proxy(system, {
+        get: (target, key): unknown =>
+          key === "$extends" ? () => target : (Reflect.get(target, key, target) as unknown),
+      }),
+      SECRET,
+    );
+    const previousEmailOf = async (cookie: string) =>
+      (await previous.auth.api.getSession({ headers: headersWith(cookie) }))?.user.email ?? null;
+    const before = await device("multi@example.com"); // signed in on the new release
+
+    // Rolled back: the hashed row is not found — signed out, no error, the row is kept.
+    expect(await previousEmailOf(before)).toBeNull();
+    expect(await system.session.count()).toBe(1);
+    // Signing in again on the previous release stores a raw token, as it always did.
+    const result = await signInWithEmail(
+      previous.auth,
+      { email: "multi@example.com", password: PASSWORD },
+      depsFor(previous),
+    );
+    if (result.status !== "SIGNED_IN") throw new Error(result.status);
+    const during = cookieValue(result.setCookie);
+    expect(await previousEmailOf(during)).toBe("multi@example.com");
+
+    // Rolled forward: the session from before the rollback is valid again (its row stayed);
+    // the one created during the rollback is not — until the hashing statement runs again
+    // (Prisma will not re-run an applied migration: SESSION_TOKENS.md § rollback).
+    expect(await emailOf(before)).toBe("multi@example.com");
+    expect(await emailOf(during)).toBeNull();
+    await migrate();
+    expect(await emailOf(during)).toBe("multi@example.com");
+    expect(await emailOf(before)).toBe("multi@example.com");
+  });
 });
