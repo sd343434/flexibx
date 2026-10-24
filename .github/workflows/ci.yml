@@ -108,6 +108,10 @@ jobs:
         run: pnpm exec prisma migrate deploy
       - name: Verify migration status
         run: pnpm exec prisma migrate status
+      # Pass 41: the migrated database must match schema.prisma exactly (no drift), as in
+      # the local gates.
+      - name: Schema drift (migrations vs schema.prisma)
+        run: pnpm exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
       # Creator Studio integration tests cut and render real media with FFmpeg (libx264,
       # libass for burned-in subtitles) and a font for the subtitles.
       - name: Install FFmpeg
