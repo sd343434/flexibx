@@ -40,3 +40,77 @@ nothing further, report.
 alert destination and on-call person — R-7; backup bucket account/region/retention — R-8;
 re-scan cadence and the FFmpeg option — R-9; AWS CLI signing key verified from the official
 page (S6); CI unblocked — R-1.
+
+## Pass 41 — execution package (nothing below was run against AWS)
+
+### 1. `deploy/staging/aws/terraform.tfvars` (owner fills in; git-ignored)
+
+| Variable                   | Default             | Who decides                     | Note                                                                  |
+| -------------------------- | ------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| `region`                   | **none (required)** | Owner, data residency (D-1/R-2) | The example's value is an example, not a recommendation               |
+| `app_domain`               | **none (required)** | Owner                           | Must resolve publicly (preflight refuses `.test`, `.example`, …)      |
+| `name`                     | `flexibx-staging`   | —                               | Resource prefix                                                       |
+| `host_instance_type`       | `t3.large`          | Owner (cost)                    | 2 vCPU / 8 GiB: app + worker (2 GiB cap) + scheduler                  |
+| `host_disk_gb`             | `80`                | Owner (cost)                    | ≥ 3 × largest upload for the worker's `/work`; gate checks free space |
+| `db_instance_class`        | `db.t4g.small`      | Owner (cost)                    |                                                                       |
+| `db_storage_gb`            | `20`                | Owner (cost)                    |                                                                       |
+| `db_backup_retention_days` | `7`                 | Owner (R-8)                     | PITR window; 0 refused by Terraform                                   |
+
+### 2. IAM and secrets — names, never values
+
+Before `plan`: read `iam.tf` and its tests (`deploy/staging/aws/tests`); confirm the instance
+role can read only the env secret (and the owner secret only if host backups are chosen,
+R-8). After `apply`: `aws secretsmanager describe-secret` (metadata only) for each secret;
+`render-staging-env.sh` refuses missing, empty or placeholder values and prints no value.
+
+### 3–4. Plan review, images, tags, digests
+
+`terraform plan -out staging.plan` (approval 1) → reviewer checks: resource count, no public
+database, deletion protection on, backup retention = tfvars, security groups, IAM policies.
+Images: `build-and-verify.sh <release-sha>` on the approved commit → push (approval 3) →
+compare each pushed digest (`docker buildx imagetools inspect`) with the verified local
+image; the host runs `FLEXIBX_TAG=<release-sha>` and A3 checks the revision label.
+
+### 5. Deploy and rollback (from `STAGING_LAUNCH.md` § 5 and § 8)
+
+env → logins → mark → `migrate` (ends with the session rehash) → `db-roles.sql` →
+`up -d app worker scheduler` → **`run --rm rehash-sessions`** → `run --rm check`. Rollback:
+previous tag `up -d`; to a pre-Pass-39 tag everyone signs in again once; roll-forward again =
+`migrate` + `rehash-sessions` (`SESSION_TOKENS.md`). Database: restore into a new database,
+never migrate backwards.
+
+### 6. Acceptance A1–A13
+
+A1–A12 as in `LAUNCH_CLOSURE_MATRIX.md` § 2, plus **A13 — sessions survive the deploy**: one
+test account signed in on the previous release before the deploy is still signed in after it,
+and `rehash-sessions` reports `"rehashed"` ≥ 0 with no error. Evidence: the job's JSON line and
+a screenshot of the account page after the switch.
+
+### 7–9. Restore, off-host backup, PITR — with measured RPO/RTO
+
+- Restore into an isolated new database: `backup` job → `db-restore.sh` into `*_restore` →
+  `db-verify.sh` → `VERIFIED`. Record wall-clock times.
+- Off-host: copy the set to the backup bucket (R-8: account, region, versioning, retention);
+  then restore **from the bucket copy**, not the host copy.
+- PITR: note the time T of a known write; restore RDS to T into a new instance
+  (`SERVICE_RESTORE.md` § 3a); RPO = T − last write present; RTO = request → restored
+  instance accepts the app's readiness check. Both measured, not estimated.
+
+### 10. External monitoring with proof of delivery
+
+An uptime check on `/api/health?scope=liveness` and `?scope=readiness` (R-7 service); proof =
+a test failure that reaches the on-call person, with a timestamp, and the recovery notice.
+
+### 11. Database outage and recovery on the host
+
+Quiet window, owner present: stop the RDS instance; expect readiness 503 / liveness 200, the
+watchdog's "cannot read the operational status" alert within two intervals, no container
+restart; start it; expect readiness 200 and fresh heartbeats.
+
+### 12. Local versus staging
+
+Proven locally (Pass 41, commit and images in `LAUNCH_HARDENING_PASS_41.md`): gate 34/0/0,
+migrate + rehash jobs, backup under writes → VERIFIED, restore over the source refused,
+watchdog and alert retry, database outage and recovery, container hardening. **Not proven
+anywhere yet:** TLS, real mail, ECR digests, RDS PITR, off-host copy, external monitoring,
+real log retention, A1–A13.

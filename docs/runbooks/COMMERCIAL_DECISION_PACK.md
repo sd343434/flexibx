@@ -65,3 +65,26 @@ the texts exist).
 2. Engage a lawyer and a tax adviser in those markets.
 3. Payment provider (after § 2 answers) and a sandbox account.
 4. Refund and negative-balance policy.
+
+## 7. Work list to take customer money (Pass 41)
+
+Columns: **E** = engineering (can be built and tested here), **O** = owner/commercial
+approval, **L** = lawyer, **T** = tax adviser. Nothing in this table is done unless marked.
+
+| #   | Item                                                                                                  | E (product work)                                                                                                                   | O / L / T (approval)                                         | Done?                     |
+| --- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------- |
+| 1   | Target markets and selling entity                                                                     | —                                                                                                                                  | O decides; L confirms what that entity must do               | No                        |
+| 2   | Payment provider and merchant account                                                                 | Fill the comparison matrix from the providers' written answers (`PAYMENTS_DESIGN.md` § 8)                                          | O chooses, signs, opens sandbox; no real money               | No                        |
+| 3   | Sandbox integration                                                                                   | Checkout, signed webhooks, `payment_intents` / `payment_events`, status lookup, kill switch                                        | O provides sandbox keys                                      | No                        |
+| 4   | Webhook tests: replay, duplicate, amount/currency mismatch, out of order, lost webhook, database down | Automated tests per `PAYMENTS_DESIGN.md` § 7                                                                                       | —                                                            | No (design only)          |
+| 5   | Ledger ↔ provider reconciliation                                                                      | Daily job; mismatch alert; finance report                                                                                          | O names who reviews mismatches                               | No                        |
+| 6   | Customers cannot forge payment or raise a balance                                                     | **Done for today's paths**: only a platform admin with fresh MFA adds credits (tested, Pass 40/41); must hold for the checkout too | —                                                            | Partly (no checkout yet)  |
+| 7   | Account deletion                                                                                      | Self-service deletion with the approved scope and deadline; backup handling                                                        | L: deadlines, what is kept (ledger, audit), backups          | No (feature absent)       |
+| 8   | Data export                                                                                           | Account/workspace export in the approved scope and format                                                                          | L: scope of access/portability                               | Partly (per project only) |
+| 9   | Retention schedule                                                                                    | Retention jobs per category                                                                                                        | L: maximum per category                                      | Partly (videos, media)    |
+| 10  | Terms, privacy policy, DPA, cookie notice, refund policy, complaints procedure                        | Publish versioned pages (ar/en); record acceptance at sign-up; complaint contact                                                   | L writes/approves each text; O approves refund policy        | No                        |
+| 11  | VAT and e-invoicing (e.g. ZATCA in Saudi Arabia if it applies)                                        | Invoice data and flow per the adviser's answer                                                                                     | T: registration, rate, e-invoicing phase, invoice fields     | No                        |
+| 12  | Legal and tax review of the whole flow before the first live payment                                  | —                                                                                                                                  | L and T sign off; O approves one controlled live transaction | No                        |
+
+No item above claims compliance; "Done" means the product behaviour exists and is tested
+locally, not that it satisfies any law.

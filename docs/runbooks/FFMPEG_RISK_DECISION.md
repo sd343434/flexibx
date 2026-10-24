@@ -1,6 +1,6 @@
 # FFmpeg in the worker image — evidence and decision (Pass 40, 2026-10-24)
 
-**Status: OPEN — needs an owner decision.** Nothing here is applied; no paid service was
+**Status: OPEN — needs an owner decision (Pass 41 recommendation: D, see § 6).** Nothing here is applied; no paid service was
 used. Mitigations reduce exposure; they do not remove a single CVE.
 
 ## 1. What is installed (verified)
@@ -67,3 +67,53 @@ Acceptance for closing this risk: the worker image built with A shows the `+esm`
 versions; a Trivy scan of that image (no exception) lists only the deferred CVEs for
 FFmpeg; the media tests and the container cycle pass; the 4 deferred CVEs are either
 contained by D or covered by a signed acceptance (E).
+
+## 6. Pass 41 update (2026-10-24, later the same day)
+
+**Re-checked:** the 65 CVEs against Canonical's API again — no status changed (61 released
+in esm-apps, 4 deferred; [`evidence/ffmpeg-cves-2026-10-24-recheck.tsv`](evidence/ffmpeg-cves-2026-10-24-recheck.tsv));
+the ESM Apps index is still dated 2026-10-12 (`+esm15`); the worker built in Pass 41 has the
+same 65 CVEs.
+
+**CVE-2025-25467 is in libx264, not in a demuxer.** Canonical lists it against `x264`
+(and `ffmpeg`, which links it) as _deferred_ for noble; their note says the upstream fix was
+proposed and closed without being merged. We use libx264 to render clips. Ubuntu Pro does
+**not** fix it, demuxer pinning does **not** touch it, and nothing here reproduces it. Only
+isolation limits what it can reach.
+
+**Measured: what code running inside FFmpeg could reach.** In the worker image, under the
+same caps as Compose (no capabilities, no-new-privileges, seccomp filter on, uid 1000):
+
+| Check                                                                  | Result                                                         |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| FFmpeg's own environment (`runMediaTool` passes `PATH` only)           | No secret (0)                                                  |
+| The worker's environment, read by FFmpeg from `/proc/<parent>/environ` | **Readable** (same uid) — database and S3 credentials included |
+| Seccomp / no-new-privileges / capabilities in the child                | Filter on (Seccomp 2), NoNewPrivs 1, CapEff 0                  |
+
+So an FFmpeg exploit is a credential exposure, whatever is patched — the caps cannot stop a
+process from reading its own user's parent. The local cycle lists the variable **names**
+readable this way (values never printed).
+
+**Also done in Pass 41:** the job steps now refuse to run FFmpeg when the stored container has
+no pinned demuxer (it used to fall back to auto-detection), with a job-level test.
+
+### Recommendation (one, preferred): D — FFmpeg in its own container without credentials
+
+Run every FFmpeg/ffprobe call in a separate, short-lived container (or a long-lived sidecar)
+that receives only the input file and a scratch directory: no database or S3 credentials,
+no network (`network_mode: none`), read-only root, the same caps and seccomp. The worker
+keeps its credentials and moves files in and out of a shared work volume.
+
+| Why D first                                                                          | Cost / risk                                                                                                    |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Contains **all 65** CVEs, including the 4 nobody fixes and the reachable libx264 one | 3–7 engineering days: a small media runner, a job hand-off through the work volume, tests, the container cycle |
+| No subscription, no new supplier                                                     | One more moving part on the host; a little latency per call                                                    |
+| Turns "code execution in FFmpeg" from a credential leak into a contained crash       | Must be re-validated on staging (A5)                                                                           |
+
+**Alternatives:** A (Ubuntu Pro in the build) removes 61 of 65 but leaves the credentials
+reachable by the 4 others — recommended **in addition** to D once its price is known; B (a
+maintained third-party FFmpeg) changes the supplier, not the exposure; C (own minimal build)
+costs the most to maintain; E (signed acceptance) leaves everything open.
+
+Nothing here was bought or built: D is an architecture change and A is a paid service, so
+both need the owner's approval.
