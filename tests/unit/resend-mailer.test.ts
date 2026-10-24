@@ -149,6 +149,20 @@ describe("Resend mailer", () => {
     expect(new Set(fake.calls.map(keyOf)).size).toBe(1);
   });
 
+  // Pass 41: Resend answers 409 while a request with the same Idempotency-Key is still in
+  // progress (e.g. the attempt that timed out here). Retried, not reported as a failure.
+  it("retries a 409 for the same idempotency key, then succeeds once", async () => {
+    const answers = [() => new Response("{}", { status: 409 }), () => Response.json({ id: "e5" })];
+    const fake = fakeFetch(() => (answers.shift() ?? (() => new Response("", { status: 500 })))());
+    await expect(
+      new ResendMailer({ apiKey: KEY, from: "a@b.c", fetch: fake.fetch, sleep: instant }).send(
+        message,
+      ),
+    ).resolves.toEqual({ status: "sent" });
+    expect(fake.calls).toHaveLength(2);
+    expect(new Set(fake.calls.map(keyOf)).size).toBe(1);
+  });
+
   it("gives up after three attempts on 429, reporting the provider's status", async () => {
     const fake = fakeFetch(() => new Response("{}", { status: 429 }));
     const error = await failure(

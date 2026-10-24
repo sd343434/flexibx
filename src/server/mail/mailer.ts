@@ -192,7 +192,8 @@ export const RESEND_RETRY_DELAYS_MS = [500, 1500] as const;
  * Pass 38: a lost connection, a timeout, 429 or 5xx is retried (three attempts in all)
  * with ONE Idempotency-Key per email, so an attempt that Resend accepted but whose answer
  * was lost is not delivered twice (Resend keeps the key 24 h); a 4xx other than 429 is
- * the request's own fault and is not retried.
+ * the request's own fault and is not retried — except 409 (Pass 41), Resend's answer while
+ * the same key is still being processed.
  */
 export class ResendMailer implements Mailer {
   readonly transport = "resend";
@@ -249,7 +250,11 @@ export class ResendMailer implements Mailer {
         response = undefined;
         continue;
       }
-      if (response.ok || (response.status !== 429 && response.status < 500)) break;
+      // 409: the same Idempotency-Key is still being processed (an earlier attempt that
+      // timed out here) — wait and ask again rather than report a failure (Pass 41).
+      const retryable =
+        response.status === 409 || response.status === 429 || response.status >= 500;
+      if (response.ok || !retryable) break;
     }
     if (response === undefined) throw fail("mail_provider_unreachable");
     if (!response.ok) throw fail("mail_provider_rejected", response.status);

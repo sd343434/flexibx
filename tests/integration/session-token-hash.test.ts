@@ -98,7 +98,12 @@ describe("session tokens stored hashed (Pass 39)", () => {
 
   it("serves the disabled token routes as 404", async () => {
     const cookie = await device("multi@example.com");
-    for (const path of ["/list-sessions", "/revoke-session", "/revoke-sessions"]) {
+    for (const path of [
+      "/list-sessions",
+      "/revoke-session",
+      "/revoke-sessions",
+      "/revoke-other-sessions",
+    ]) {
       const response = await auth.handler(
         new Request(`http://localhost:3000/api/auth${path}`, {
           method: path === "/list-sessions" ? "GET" : "POST",

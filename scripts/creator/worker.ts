@@ -15,6 +15,8 @@
 // every SCHEDULER_WATCHDOG_SECONDS (default 300; 0 = off) it alerts when the automation
 // tick is stale or failed — the one condition the tick cannot report itself.
 
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { runWorker } from "@/server/creator/worker";
 import { getCreatorDeps } from "@/server/creator/runtime";
 import { getSystemDb } from "@/server/db/client";
@@ -41,13 +43,9 @@ async function watchScheduler(signal: AbortSignal): Promise<void> {
       // Best effort: the watchdog never stops the worker.
       logger.warn({ err: error }, "Scheduler watchdog check failed");
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, everyMs);
-      signal.addEventListener("abort", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
+    // Removes its abort listener when the wait ends (Pass 41: a hand-made listener leaked one
+    // per interval); an abort ends the wait at once.
+    await sleep(everyMs, undefined, { signal }).catch(() => undefined);
   }
 }
 

@@ -194,30 +194,56 @@ describe("platform admin MFA gate", () => {
     expect(await adminAccess()).toBe("NOT_FOUND");
   });
 
-  // Pass 40: the only paths that add credits or change a plan. A signed-in customer with
-  // two-factor — whatever workspaces they own — sending a well-formed request is refused
-  // before the input is read, and nothing reaches the ledger.
-  it("a customer cannot add credits or change a plan, even with a valid request", async () => {
+  // Pass 40/41: the only paths that add credits or change a plan. A signed-in customer with
+  // two-factor who OWNS the workspace sends the exact request a platform admin sends; the
+  // customer is refused before the input is read and nothing reaches the ledger, while the
+  // admin's identical request succeeds (so the request itself is valid).
+  it("a customer cannot add credits to their own workspace; an admin's same request works", async () => {
     const customer = await newAccount();
+    const workspace = await system.workspace.create({
+      data: { name: "Customer Co", slug: `customer-${Date.now().toString(36)}` },
+    });
+    await system.workspaceMember.create({
+      data: { workspaceId: workspace.id, userId: customer.id, role: "OWNER" },
+    });
+    const grant = (requestKey: string) => ({
+      workspaceId: workspace.id,
+      kind: "PURCHASE",
+      amount: 1000,
+      externalRef: "INV-1",
+      note: "",
+      requestKey,
+    });
+
     await passwordStep(customer.email);
     await enroll();
-    const workspaceId = randomUUID();
-    const results = [
-      await addCreditsAdminAction({
-        workspaceId,
-        kind: "PURCHASE",
-        amount: 1000,
-        externalRef: "INV-1",
-        note: "",
-        requestKey: randomUUID(),
+    const refused = [
+      await addCreditsAdminAction(grant(randomUUID())),
+      await changePlanAdminAction({
+        workspaceId: workspace.id,
+        expectedVersion: 0,
+        planCode: "growth",
       }),
-      await changePlanAdminAction({ workspaceId, expectedVersion: 0, planCode: "growth" }),
     ];
-    expect(results.map((result) => (result.ok ? "ok" : result.error.code))).toEqual([
+    expect(refused.map((result) => (result.ok ? "ok" : result.error.code))).toEqual([
       "NOT_FOUND",
       "NOT_FOUND",
     ]);
-    expect(await system.creditLedgerEntry.count()).toBe(0);
+    expect(await system.creditLedgerEntry.count({ where: { workspaceId: workspace.id } })).toBe(0);
+
+    // Control: the same grant from a platform administrator with a fresh second factor.
+    const admin = await newAccount({ admin: true });
+    await passwordStep(admin.email);
+    await enroll(admin);
+    const granted = await addCreditsAdminAction(grant(randomUUID()));
+    expect(granted.ok ? "ok" : granted.error.code).toBe("ok");
+    // The account opens with its plan allowance; the grant itself is one PURCHASE of 1000.
+    expect(
+      await system.creditLedgerEntry.findMany({
+        where: { workspaceId: workspace.id, kind: "PURCHASE" },
+        select: { amount: true },
+      }),
+    ).toEqual([{ amount: 1000 }]);
   });
 
   it("enrolls with password + first code; only the new session gets admin access", async () => {
