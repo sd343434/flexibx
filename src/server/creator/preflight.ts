@@ -42,7 +42,7 @@ export type PreflightHttp = (
 export interface PreflightDeps {
   readonly tools: MediaTools;
   readonly runTool: (
-    binary: string,
+    tool: "ffmpeg" | "ffprobe",
     args: readonly string[],
   ) => Promise<{ readonly stdout: string }>;
   readonly workDir: string;
@@ -60,6 +60,11 @@ export interface PreflightDeps {
     readonly externalApproved: boolean;
     readonly nodeEnv: string;
   };
+  /**
+   * Pass 42: whether FFmpeg runs in the isolated media runner (then `runTool` goes there,
+   * so the FFmpeg checks above prove the runner answers and has the right build).
+   */
+  readonly mediaRunner: boolean;
 }
 
 /** The reserved workspace id of probe objects: no real workspace has it. */
@@ -107,7 +112,7 @@ function linkSeconds(url: string): number | null {
 async function mediaChecks(deps: PreflightDeps): Promise<PreflightResult[]> {
   const results: PreflightResult[] = [];
   try {
-    const { stdout } = await deps.runTool(deps.tools.ffmpeg, ["-hide_banner", "-version"]);
+    const { stdout } = await deps.runTool("ffmpeg", ["-hide_banner", "-version"]);
     const major = Number(/ffmpeg version n?(\d+)/.exec(stdout)?.[1] ?? Number.NaN);
     results.push(
       Number.isNaN(major)
@@ -125,7 +130,7 @@ async function mediaChecks(deps: PreflightDeps): Promise<PreflightResult[]> {
     return results;
   }
   try {
-    const { stdout } = await deps.runTool(deps.tools.ffmpeg, ["-hide_banner", "-encoders"]);
+    const { stdout } = await deps.runTool("ffmpeg", ["-hide_banner", "-encoders"]);
     const missing = REQUIRED_ENCODERS.filter(
       (encoder) => !new RegExp(`\\s${encoder}\\s`).test(stdout),
     );
@@ -138,7 +143,7 @@ async function mediaChecks(deps: PreflightDeps): Promise<PreflightResult[]> {
     results.push(result("ffmpeg_encoders", "fail", errorName(error)));
   }
   try {
-    const { stdout } = await deps.runTool(deps.tools.ffmpeg, ["-hide_banner", "-filters"]);
+    const { stdout } = await deps.runTool("ffmpeg", ["-hide_banner", "-filters"]);
     results.push(
       /\ssubtitles\s/.test(stdout)
         ? result("ffmpeg_subtitles", "pass", "libass subtitles filter")
@@ -148,7 +153,7 @@ async function mediaChecks(deps: PreflightDeps): Promise<PreflightResult[]> {
     results.push(result("ffmpeg_subtitles", "fail", errorName(error)));
   }
   try {
-    await deps.runTool(deps.tools.ffprobe, ["-hide_banner", "-version"]);
+    await deps.runTool("ffprobe", ["-hide_banner", "-version"]);
     results.push(result("ffprobe", "pass", "runnable"));
   } catch (error) {
     results.push(result("ffprobe", "fail", `ffprobe not runnable (${errorName(error)})`));
@@ -368,6 +373,16 @@ async function bucketRuleChecks(deps: PreflightDeps): Promise<PreflightResult[]>
   ];
 }
 
+/** Pass 42: FFmpeg next to the credentials is refused in production, flagged elsewhere. */
+function mediaIsolationCheck(deps: PreflightDeps): PreflightResult {
+  if (deps.mediaRunner) {
+    return result("media_isolation", "pass", "FFmpeg runs in the isolated media runner");
+  }
+  return deps.provider.nodeEnv === "production"
+    ? result("media_isolation", "fail", "no media runner: FFmpeg would run beside the credentials")
+    : result("media_isolation", "warn", "FFmpeg runs in this process's container (development)");
+}
+
 /** What the configuration allows; never a call to the provider. */
 function providerCheck(deps: PreflightDeps): PreflightResult {
   const { configured, externalApproved, nodeEnv } = deps.provider;
@@ -405,5 +420,6 @@ export async function runPreflight(deps: PreflightDeps): Promise<{
   }
   results.push(...(await bucketRuleChecks(deps)));
   results.push(providerCheck(deps));
+  results.push(mediaIsolationCheck(deps));
   return { ok: results.every((entry) => entry.status !== "fail"), results };
 }

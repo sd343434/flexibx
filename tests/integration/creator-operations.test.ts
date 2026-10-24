@@ -405,6 +405,47 @@ describe("duplicates, limits and the worker", () => {
     expect(check("creator_worker_last_seen_age_seconds")?.level).toBe("ok");
     expect(check("creator_worker_cleanup_failed")).toMatchObject({ value: 0, level: "ok" });
   }, 90_000);
+
+  it("claims nothing while the media runner is down, and resumes when it answers (Pass 42)", async () => {
+    const ctx = await createTenant(system);
+    const { deps } = harness();
+    await queuedAnalysis(deps, ctx, "Waits for the runner");
+    let ready = false;
+    let asked = 0;
+    const stop = new AbortController();
+    const worker = runWorker(deps, system, {
+      signal: stop.signal,
+      pollMs: 30,
+      heartbeatEveryMs: 50,
+      minFreeBytes: 1,
+      mediaReady: () => {
+        asked += 1;
+        return Promise.resolve(ready);
+      },
+    });
+    for (let i = 0; i < 60; i += 1) {
+      const beat = await system.systemHeartbeat.findUnique({ where: { name: "creator-worker" } });
+      if (asked > 5 && beat?.failedPhases.includes("media_runner") === true) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    // The job was never claimed: no attempt spent, still queued.
+    const waiting = await system.creatorJob.findFirstOrThrow({ where: { kind: "ANALYZE" } });
+    expect(waiting).toMatchObject({ state: "QUEUED", attempts: 0 });
+    const beat = await system.systemHeartbeat.findUniqueOrThrow({
+      where: { name: "creator-worker" },
+    });
+    expect(beat.failedPhases).toContain("media_runner");
+    ready = true;
+    for (let i = 0; i < 300; i += 1) {
+      const job = await system.creatorJob.findFirstOrThrow({ where: { kind: "ANALYZE" } });
+      if (job.state === "SUCCEEDED") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    stop.abort();
+    await worker;
+    const done = await system.creatorJob.findFirstOrThrow({ where: { kind: "ANALYZE" } });
+    expect(done).toMatchObject({ state: "SUCCEEDED", attempts: 1 });
+  }, 90_000);
 });
 
 describe("a stopped worker, seen from the scheduler (Pass 16)", () => {

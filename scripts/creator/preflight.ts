@@ -11,7 +11,7 @@
 
 import { tmpdir } from "node:os";
 
-import { runMediaTool } from "@/server/creator/media/tools";
+import { runTool } from "@/server/creator/media/media";
 import { SCRATCH_MARGIN_BYTES } from "@/server/creator/jobs";
 import { runPreflight, type PreflightHttp } from "@/server/creator/preflight";
 import { getCreatorDeps } from "@/server/creator/runtime";
@@ -43,7 +43,12 @@ async function main(): Promise<void> {
   const appUrl = process.env.APP_URL ?? "";
   const { ok, results } = await runPreflight({
     tools: deps.tools,
-    runTool: (binary, args) => runMediaTool(binary, args, { timeoutMs: 30_000 }),
+    // Pass 42: through the media runner when configured, as the worker runs FFmpeg.
+    runTool: (tool, args) =>
+      runTool(deps.tools, tool, args, {
+        timeoutMs: 30_000,
+        maxStdoutBytes: 4 * 1024 * 1024,
+      }),
     workDir: deps.workDir ?? tmpdir(),
     minFreeBytes: 2 * deps.limits.maxUploadBytes + SCRATCH_MARGIN_BYTES,
     storage: target.storage,
@@ -55,6 +60,7 @@ async function main(): Promise<void> {
       externalApproved: env.CREATOR_EXTERNAL_PROCESSING === "approved",
       nodeEnv: env.NODE_ENV,
     },
+    mediaRunner: deps.tools.run !== undefined,
   });
   for (const entry of results) {
     process.stdout.write(

@@ -45,6 +45,8 @@ const PROFILES = {
   worker: {
     entrypoints: [
       "scripts/creator/worker.ts",
+      // Pass 42: the isolated media runner runs from the worker image (service `media`).
+      "scripts/creator/media-runner.ts",
       "scripts/creator/preflight.ts",
       "scripts/creator/retention-report.ts",
       "scripts/staging/check.ts",

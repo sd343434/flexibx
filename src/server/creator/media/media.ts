@@ -3,8 +3,10 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
+import type { MediaRun } from "./runner-client";
+import type { MediaToolName } from "./runner-protocol";
 import type { Container } from "./sniff";
-import { MediaToolError, runMediaTool } from "./tools";
+import { MediaToolError, runMediaTool, type RunOptions } from "./tools";
 
 // What the worker does with FFmpeg: read a file's properties, extract its audio for
 // transcription, and render a clip (cut, reframe, optional burned-in subtitles). Every
@@ -15,6 +17,24 @@ export interface MediaTools {
   readonly ffmpeg: string;
   readonly ffprobe: string;
   readonly threads: number;
+  /**
+   * Pass 42: where FFmpeg runs. Set (staging, production): every run goes to the isolated
+   * media runner (runner-client.ts) — never to a local process. Unset: a local process
+   * (development, tests), which tools.ts refuses once CREATOR_MEDIA_RUNNER_SOCKET is set.
+   */
+  readonly run?: MediaRun;
+}
+
+/** Runs one FFmpeg/ffprobe command where `tools` says. */
+export function runTool(
+  tools: MediaTools,
+  tool: MediaToolName,
+  args: readonly string[],
+  options: RunOptions,
+): Promise<{ readonly stdout: string }> {
+  return tools.run === undefined
+    ? runMediaTool(tools[tool], args, options)
+    : tools.run(tool, args, options);
 }
 
 export interface MediaInfo {
@@ -90,8 +110,9 @@ export async function probeMedia(
     readonly container?: Container;
   },
 ): Promise<MediaInfo> {
-  const { stdout } = await runMediaTool(
-    tools.ffprobe,
+  const { stdout } = await runTool(
+    tools,
+    "ffprobe",
     [
       "-v",
       "error",
@@ -145,8 +166,9 @@ export async function encodeAudioPiece(
   piece: { readonly startMs: number; readonly durationMs: number },
   options: { readonly timeoutMs: number; readonly signal?: AbortSignal },
 ): Promise<void> {
-  await runMediaTool(
-    tools.ffmpeg,
+  await runTool(
+    tools,
+    "ffmpeg",
     [
       "-nostdin",
       "-hide_banner",
@@ -193,8 +215,9 @@ export async function extractAudio(
     readonly container?: Container;
   },
 ): Promise<void> {
-  await runMediaTool(
-    tools.ffmpeg,
+  await runTool(
+    tools,
+    "ffmpeg",
     [
       "-nostdin",
       "-hide_banner",
@@ -355,8 +378,9 @@ export async function renderClip(tools: MediaTools, request: RenderRequest): Pro
     );
   }
   const durationSeconds = ((request.endMs - request.startMs) / 1000).toFixed(3);
-  await runMediaTool(
-    tools.ffmpeg,
+  await runTool(
+    tools,
+    "ffmpeg",
     [
       "-nostdin",
       "-hide_banner",

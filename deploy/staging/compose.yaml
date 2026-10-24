@@ -1,7 +1,7 @@
 # Flexibx staging on one Docker host (Pass 13). docs/runbooks/STAGING_CREATOR_STUDIO.md § 3.
 #
 # What runs here: the web app, the Creator Studio worker, and a scheduler; plus one-off
-# jobs (migrate, check, backup) under the `jobs` profile. What does NOT run here, by design:
+# jobs (migrate, check, backup) under the `jobs` profile; `media` runs FFmpeg for the worker. What does NOT run here, by design:
 # PostgreSQL, the S3-compatible bucket and the alert destination — managed, private
 # services the owner provides (never the production ones), reached through the URLs in
 # staging.env. The same five services map one-to-one onto any container platform.
@@ -10,7 +10,7 @@
 #   docker compose -f deploy/staging/compose.yaml build
 #   export FLEXIBX_TAG=<release>   # required: an immutable tag (e.g. the commit), never "latest"
 #   docker compose -f deploy/staging/compose.yaml run --rm migrate      # once per release
-#   docker compose -f deploy/staging/compose.yaml up -d app worker scheduler
+#   docker compose -f deploy/staging/compose.yaml up -d app media worker scheduler
 #   docker compose -f deploy/staging/compose.yaml run --rm check        # must say PASSED
 #
 # Secrets come only from staging.env at run time: none is in an image, a build argument
@@ -41,6 +41,13 @@ x-logging: &logging
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "5" }
+
+# Pass 42: where FFmpeg runs. The worker holds every credential; FFmpeg, which parses
+# customer files and carries open CVEs (FFMPEG_RISK_DECISION.md), runs only in `media` —
+# another container with no env file, no network, its own PID namespace and a read-only
+# root — reached through a Unix socket on the shared `work` volume
+# (docs/runbooks/MEDIA_ISOLATION.md). Same path in every service that reaches the runner.
+x-media-runner-socket: &media-runner-socket /work/.media-runner/runner.sock
 
 # Long-running services hold no Linux capability and cannot gain privileges (setuid
 # binaries are inert), and a fork bomb stops at the PID cap. The worker also decodes
@@ -77,8 +84,60 @@ services:
     memswap_limit: 2g
     cpus: 2
     pids_limit: 256
+    environment:
+      # Pass 42: FFmpeg runs only in `media`; without it this worker does not start.
+      CREATOR_MEDIA_RUNNER_SOCKET: *media-runner-socket
+    depends_on:
+      media:
+        condition: service_healthy
     volumes:
       # Scratch space: about 3x the largest allowed source (CREATOR_MAX_UPLOAD_MB).
+      - work:/work
+
+  # Pass 42: the isolated media runner — FFmpeg and ffprobe for the worker, and nothing else.
+  # No env file (it refuses to start if a credential reaches its environment), no network,
+  # read-only root, its own process namespace (the worker's /proc is not visible), the
+  # worker image with another command. Shares only `work` with the worker.
+  media:
+    <<: [*logging, *hardening]
+    image: ${FLEXIBX_REGISTRY:-flexibx}/worker:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "--import",
+        "tsx",
+        "--import",
+        "./scripts/video-retention/register.mjs",
+        "scripts/creator/media-runner.ts",
+      ]
+    environment:
+      MEDIA_RUNNER_LISTEN: *media-runner-socket
+      MEDIA_RUNNER_WORK_ROOT: /work
+      MEDIA_RUNNER_CONCURRENCY: "2"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get({socketPath:process.env.MEDIA_RUNNER_LISTEN,path:'/health'},(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
       - work:/work
 
   scheduler:
@@ -126,6 +185,8 @@ services:
     environment:
       # The gate reaches the app the way the worker does, inside this network.
       STAGING_CHECK_APP_URL: http://app:3000
+      # Pass 42: the preflight's FFmpeg checks go to the runner, proving it answers.
+      CREATOR_MEDIA_RUNNER_SOCKET: *media-runner-socket
     # `pnpm staging:check --send-test-alert` without pnpm (not in the image): node runs it.
     command:
       [

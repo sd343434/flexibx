@@ -103,6 +103,8 @@ export function classifyFailure(error: unknown, timedOut: boolean): StepFailure 
   }
   if (error instanceof MediaToolError) {
     if (error.code === "timeout") return new StepFailure("step_timeout", true);
+    // Pass 42: the isolated media runner is unreachable — retried later, never run locally.
+    if (error.code === "unavailable") return new StepFailure("ffmpeg_failed", true);
     return new StepFailure("ffmpeg_failed", error.code === "not_found");
   }
   if (isAppError(error)) {

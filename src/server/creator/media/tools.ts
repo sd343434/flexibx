@@ -12,10 +12,14 @@ import type { Readable } from "node:stream";
 //   never make FFmpeg open a network address or another local file.
 // - A hard timeout and an AbortSignal: on either, the process is killed (SIGKILL) and
 //   the run rejects. Output kept in memory is capped.
+// - Pass 42: a process configured for the isolated media runner
+//   (CREATOR_MEDIA_RUNNER_SOCKET set: the production worker) never runs FFmpeg itself —
+//   this local path refuses, so a broken runner stops processing instead of silently
+//   falling back to FFmpeg inside the worker, next to its credentials.
 
 export class MediaToolError extends Error {
   constructor(
-    readonly code: "timeout" | "aborted" | "failed" | "not_found",
+    readonly code: "timeout" | "aborted" | "failed" | "not_found" | "unavailable",
     readonly exitCode: number | null = null,
     /** The last part of stderr, for logs only (may name codecs, never secrets). */
     readonly detail = "",
@@ -41,6 +45,10 @@ export function runMediaTool(
   options: RunOptions,
 ): Promise<{ readonly stdout: string }> {
   return new Promise((resolve, reject) => {
+    if ((process.env.CREATOR_MEDIA_RUNNER_SOCKET ?? "") !== "") {
+      reject(new MediaToolError("unavailable", null, "local execution disabled: media runner"));
+      return;
+    }
     if (options.signal?.aborted === true) {
       reject(new MediaToolError("aborted"));
       return;

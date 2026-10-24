@@ -93,6 +93,7 @@ function deps(overrides: Partial<PreflightDeps> = {}) {
     http: memoryHttp(storage),
     appOrigin: "https://staging.example.com",
     provider: { configured: "disabled", externalApproved: false, nodeEnv: "production" },
+    mediaRunner: true,
     ...overrides,
   };
   return { deps: base, storage };
@@ -123,6 +124,7 @@ describe("Creator Studio staging preflight", () => {
       "bucket_cors",
       "bucket_lifecycle",
       "ai_provider",
+      "media_isolation",
     ]);
     // Only probe objects of the reserved workspace were written, and all were deleted.
     const keys = [...storage.objects.keys(), ...storage.uploads.keys()];
@@ -238,6 +240,21 @@ describe("Creator Studio staging preflight", () => {
       provider: { configured: "openai", externalApproved: false, nodeEnv: "production" },
     });
     expect(statusOf((await runPreflight(unapproved.deps)).results, "ai_provider")).toBe("fail");
+  });
+
+  it("refuses FFmpeg beside the credentials in production (Pass 42)", async () => {
+    const local = deps({ mediaRunner: false });
+    const refused = await runPreflight(local.deps);
+    expect(statusOf(refused.results, "media_isolation")).toBe("fail");
+    expect(refused.ok).toBe(false);
+    const development = deps({
+      mediaRunner: false,
+      provider: { configured: "disabled", externalApproved: false, nodeEnv: "development" },
+    });
+    expect(statusOf((await runPreflight(development.deps)).results, "media_isolation")).toBe(
+      "warn",
+    );
+    expect(statusOf((await runPreflight(deps().deps)).results, "media_isolation")).toBe("pass");
   });
 });
 

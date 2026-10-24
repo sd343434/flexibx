@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { setTimeout as wait } from "node:timers/promises";
 
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -38,20 +39,18 @@ export interface WorkerOptions {
    * largest allowed source needs — twice its size plus the step margin, as a job checks).
    */
   readonly minFreeBytes?: number;
+  /**
+   * Pass 42: whether FFmpeg can run now (the isolated media runner answers). While it says
+   * no, the worker claims nothing — a job is not burnt through its attempts by a runner
+   * that is down — and the heartbeat reports the failed phase `media_runner`.
+   */
+  readonly mediaReady?: () => Promise<boolean>;
 }
 
+// Ends early on abort and leaves no listener behind (Pass 42: the hand-made version kept
+// one abort listener per poll, the leak Pass 41 fixed in the watchdog).
 const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
+  wait(ms, undefined, { signal }).catch(() => undefined);
 
 export async function runWorker(
   deps: CreatorDeps,
@@ -66,6 +65,7 @@ export async function runWorker(
   const minFreeBytes =
     options.minFreeBytes ?? 2 * deps.limits.maxUploadBytes + SCRATCH_MARGIN_BYTES;
   let diskLow = false;
+  let mediaReady = true;
   const beat = async () => {
     const failed = [...failedPhases];
     failedPhases.clear();
@@ -114,6 +114,17 @@ export async function runWorker(
           "Storage deletion sweep failed",
         );
       }
+    }
+    const ready = options.mediaReady === undefined ? true : await options.mediaReady();
+    if (ready !== mediaReady) {
+      mediaReady = ready;
+      if (ready) deps.logger?.info({}, "Media runner reachable: claiming jobs again");
+      else deps.logger?.error({}, "Media runner unreachable: no job is claimed until it answers");
+    }
+    if (!ready) {
+      failedPhases.add("media_runner");
+      await sleep(options.pollMs ?? 5000, options.signal);
+      continue;
     }
     let worked;
     try {

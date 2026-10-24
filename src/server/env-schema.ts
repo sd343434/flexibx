@@ -225,6 +225,10 @@ export function parseVideoEnv(source: EnvSource): VideoEnv {
  *   `ffmpeg` / `ffprobe` on PATH). CREATOR_FFMPEG_THREADS (1–16, default 2) caps the
  *   threads of one FFmpeg run. CREATOR_WORK_DIR: scratch space for the worker (default
  *   the OS temporary directory).
+ * - CREATOR_MEDIA_RUNNER_SOCKET (Pass 42): the isolated media runner's Unix socket. Set:
+ *   FFmpeg runs only there (no credentials, no network) and never inside the worker; a
+ *   production worker refuses to start without it (docs/runbooks/MEDIA_ISOLATION.md).
+ *   Must be inside CREATOR_WORK_DIR's volume, absolute.
  */
 export const creatorEnvSchema = z
   .object({
@@ -294,6 +298,13 @@ export const creatorEnvSchema = z
       z.coerce.number().int().min(1).max(16).default(2),
     ),
     CREATOR_WORK_DIR: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+    CREATOR_MEDIA_RUNNER_SOCKET: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .regex(/^\/[\w./-]{1,200}$/, "must be an absolute socket path")
+        .optional(),
+    ),
   })
   .refine(
     (env) => env.CREATOR_AI_PROVIDER !== "openai" || env.CREATOR_EXTERNAL_PROCESSING === "approved",

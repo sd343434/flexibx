@@ -5,7 +5,9 @@
 //   pnpm creator:worker
 //
 // Needs the server environment (DATABASE_URL, storage, CREATOR_*) and FFmpeg/ffprobe on
-// PATH (or CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH). SIGTERM/SIGINT interrupt the job
+// PATH (or CREATOR_FFMPEG_PATH / CREATOR_FFPROBE_PATH) — or, required in production
+// (Pass 42), the isolated media runner (CREATOR_MEDIA_RUNNER_SOCKET): FFmpeg then never
+// runs in this process's container, and no job is claimed while the runner is down. SIGTERM/SIGINT interrupt the job
 // in progress (its FFmpeg process is killed and the job handed back to the queue) and stop
 // the worker; if the process is killed outright, another worker resumes the job once its
 // lease expires. Signals must reach this process: pnpm does not pass SIGTERM on, so the
@@ -17,8 +19,11 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { mediaRunnerReady } from "@/server/creator/media/runner-client";
+import { mediaIsolationProblem } from "@/server/creator/media/runner-env";
 import { runWorker } from "@/server/creator/worker";
 import { getCreatorDeps } from "@/server/creator/runtime";
+import { getCreatorEnv } from "@/server/env";
 import { getSystemDb } from "@/server/db/client";
 import { logger } from "@/server/logger";
 import { alert } from "@/server/monitoring/alerts";
@@ -50,6 +55,11 @@ async function watchScheduler(signal: AbortSignal): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Pass 42: a production worker without the isolated media runner does not start.
+  const env = getCreatorEnv();
+  const problem = mediaIsolationProblem(env);
+  if (problem !== null) throw new Error(problem);
+  const socket = env.CREATOR_MEDIA_RUNNER_SOCKET;
   const stop = new AbortController();
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.once(signal, () => {
@@ -59,7 +69,10 @@ async function main(): Promise<void> {
   }
   const watchdog = watchScheduler(stop.signal);
   try {
-    const { jobs } = await runWorker(getCreatorDeps(), getSystemDb(), { signal: stop.signal });
+    const { jobs } = await runWorker(getCreatorDeps(), getSystemDb(), {
+      signal: stop.signal,
+      ...(socket === undefined ? {} : { mediaReady: () => mediaRunnerReady(socket) }),
+    });
     logger.info({ jobs }, "Creator worker stopped");
   } finally {
     // Also when the worker fails: a pending watchdog timer must not keep the process alive.

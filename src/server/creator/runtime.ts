@@ -9,6 +9,7 @@ import { logger } from "../logger";
 import { getStorageRouter } from "../storage/providers";
 
 import { limitsFromEnv, type CreatorDeps } from "./config";
+import { createRemoteMediaRun } from "./media/runner-client";
 import { ruleBasedClipSuggester } from "./providers/clip-suggester";
 import { providersFromEnv } from "./runtime-env";
 
@@ -29,6 +30,10 @@ export function getCreatorDeps(): CreatorDeps {
       ffmpeg: env.CREATOR_FFMPEG_PATH,
       ffprobe: env.CREATOR_FFPROBE_PATH,
       threads: env.CREATOR_FFMPEG_THREADS,
+      // Pass 42: FFmpeg in the isolated media runner, never next to these credentials.
+      ...(env.CREATOR_MEDIA_RUNNER_SOCKET === undefined
+        ? {}
+        : { run: createRemoteMediaRun(env.CREATOR_MEDIA_RUNNER_SOCKET) }),
     },
     credits: { trialPeriodCredits: creditsSettingsFromEnv().trialPeriodCredits },
     limits: limitsFromEnv(env),
