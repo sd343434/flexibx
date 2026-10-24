@@ -1,6 +1,8 @@
 // Platform-admin multi-factor authentication through the real entry points (page server
 // actions, Better Auth two-factor plugin, admin pages and actions) on the real database.
 // TOTP codes are computed here from the setup key exactly as an authenticator app would.
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,7 +15,7 @@ import {
   submitTwoFactor,
 } from "@/app/[locale]/(auth)/actions";
 import AdminLayout from "@/app/[locale]/admin/layout";
-import { addCreditsAdminAction } from "@/server/admin/credits-admin-actions";
+import { addCreditsAdminAction, changePlanAdminAction } from "@/server/admin/credits-admin-actions";
 import {
   changeWriteProviderAction,
   getStorageAdminPageView,
@@ -190,6 +192,32 @@ describe("platform admin MFA gate", () => {
     browser.jar.clear();
     expect(await adminPage()).toBe(NOT_FOUND);
     expect(await adminAccess()).toBe("NOT_FOUND");
+  });
+
+  // Pass 40: the only paths that add credits or change a plan. A signed-in customer with
+  // two-factor — whatever workspaces they own — sending a well-formed request is refused
+  // before the input is read, and nothing reaches the ledger.
+  it("a customer cannot add credits or change a plan, even with a valid request", async () => {
+    const customer = await newAccount();
+    await passwordStep(customer.email);
+    await enroll();
+    const workspaceId = randomUUID();
+    const results = [
+      await addCreditsAdminAction({
+        workspaceId,
+        kind: "PURCHASE",
+        amount: 1000,
+        externalRef: "INV-1",
+        note: "",
+        requestKey: randomUUID(),
+      }),
+      await changePlanAdminAction({ workspaceId, expectedVersion: 0, planCode: "growth" }),
+    ];
+    expect(results.map((result) => (result.ok ? "ok" : result.error.code))).toEqual([
+      "NOT_FOUND",
+      "NOT_FOUND",
+    ]);
+    expect(await system.creditLedgerEntry.count()).toBe(0);
   });
 
   it("enrolls with password + first code; only the new session gets admin access", async () => {
