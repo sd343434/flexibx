@@ -4,7 +4,7 @@
 // deletion queue with failures and retries, data export, provider checkpoints and
 // unknown outcomes (no double charge), external-processing consent, and ops-status.
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -734,6 +734,67 @@ describe("provider results, charges and consent", () => {
     const page = await getProject(deps, ctx, projectId);
     expect(page.provider).toMatchObject({ external: true, region: "US", simulated: false });
   }, 60_000);
+});
+
+// Pass 41: FFmpeg never auto-detects a customer file. Each media step passes the demuxer of
+// the stored, sniffed container; a source without a known container is refused before any
+// FFmpeg runs. Wrappers log every call's arguments, then run the real tools.
+describe("demuxer pinning in the job steps", () => {
+  function loggingTools() {
+    const log = join(media, `calls-${String(Date.now())}.log`);
+    const wrap = (tool: string) => {
+      const path = join(media, `${tool}-logged`);
+      writeFileSync(
+        path,
+        `#!/usr/bin/env bash\nprintf '%s\\n' "${tool} $*" >> "${log}"\nexec ${tool} "$@"\n`,
+      );
+      chmodSync(path, 0o755);
+      return path;
+    };
+    const calls = () =>
+      readFileSync(log, { encoding: "utf8", flag: "a+" })
+        .split("\n")
+        .filter((line) => line !== "");
+    return { tools: { ...TOOLS, ffmpeg: wrap("ffmpeg"), ffprobe: wrap("ffprobe") }, calls };
+  }
+
+  it("verify and transcription pin the demuxer; an unknown container means no FFmpeg at all", async () => {
+    const ctx = await createTenant(system);
+    const logged = loggingTools();
+    const { deps } = harness({ tools: logged.tools });
+    const { projectId } = await verifiedProject(deps, ctx);
+    await requestTranscription(deps, ctx, projectId, { language: null, requestKey: "pinned" });
+    expect(await workOnce(deps, system)).toMatchObject({ outcome: { status: "succeeded" } });
+    // Every call that reads the customer's file: the probe (verify) and the audio extraction.
+    const reading = logged.calls().filter((call) => call.includes("/source.bin"));
+    expect(reading.map((call) => call.split(" ")[0])).toEqual(["ffprobe", "ffmpeg"]);
+    for (const call of reading) {
+      // "-f mov" comes before the customer file (an input option, not an output one).
+      expect(call, call).toMatch(/ -f mov (-i )?file:\S*\/source\.bin/);
+    }
+
+    // A stored container FFmpeg has no pinned demuxer for (the database already refuses a
+    // verified source without one): the step refuses, FFmpeg never runs.
+    const other = await verifiedProject(deps, ctx);
+    await system.creatorSource.updateMany({
+      where: { projectId: other.projectId },
+      data: { container: "m3u8" },
+    });
+    const before = logged.calls().length;
+    await requestTranscription(deps, ctx, other.projectId, {
+      language: null,
+      requestKey: "unpinned",
+    });
+    expect(await workOnce(deps, system)).toMatchObject({
+      outcome: { status: "failed", failure: "unsupported_format" },
+    });
+    expect(
+      logged
+        .calls()
+        .slice(before)
+        .filter((call) => call.startsWith("ffmpeg")),
+    ).toEqual([]);
+  }, 120_000);
 });
 
 describe("operational status for the Creator Studio", () => {

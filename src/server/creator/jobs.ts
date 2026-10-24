@@ -701,10 +701,15 @@ async function holdForStep(
   });
 }
 
-/** The verified source's container, for FFmpeg's demuxer (media.ts DEMUXERS). */
+/**
+ * The verified source's container, for FFmpeg's demuxer (media.ts DEMUXERS). Fails closed
+ * (Pass 41): without a known container FFmpeg would fall back to auto-detection, which the
+ * pinning exists to prevent — the step fails as `unsupported_format`, never retried.
+ */
 function containerOf(source: { readonly container: string | null }) {
   const container = asContainer(source.container);
-  return container === undefined ? {} : { container };
+  if (container === undefined) throw new StepFailure("unsupported_format", false);
+  return { container };
 }
 
 async function verifiedSource(ctx: StepContext) {
