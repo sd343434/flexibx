@@ -11,3 +11,9 @@ onlyBuiltDependencies:
 ignoredBuiltDependencies:
   - "@parcel/watcher"
   - "@swc/core"
+
+# Security overrides (Pass 40). fast-uri 3.1.8 (prisma → @prisma/dev → @prisma/streams-local
+# → ajv) has CVE-2026-110180, -110306 (MEDIUM), -110095, -110725 (LOW), found by Trivy in
+# the ops image; 3.1.9 (2026-10-19, fastify/fast-uri) is the fix. Drop when ajv resolves it.
+overrides:
+  fast-uri: 3.1.9
