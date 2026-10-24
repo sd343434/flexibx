@@ -64,7 +64,7 @@ echo "no repository, deployment or agent state"
 echo "/backups writable"
 
 for script in scripts/ops/db-backup.sh scripts/ops/db-restore.sh scripts/ops/db-verify.sh \
-  scripts/ops/db-environment.sh; do
+  scripts/ops/db-environment.sh scripts/ops/rehash-session-tokens.sh; do
   bash -n "$script" || fail "$script does not parse"
 done
 echo "ops image check passed"

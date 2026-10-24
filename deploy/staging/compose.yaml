@@ -99,11 +99,24 @@ services:
     image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
     profiles: [jobs]
     # As the owner login; refuses unless the database is marked staging
-    # (scripts/ops/db-environment.sh).
+    # (scripts/ops/db-environment.sh). Then hashes any session token the previous release
+    # stored raw (scripts/ops/rehash-session-tokens.sh, idempotent; SESSION_TOKENS.md).
     entrypoint: ["bash", "-c"]
     command:
       [
-        'export DATABASE_URL="$${OWNER_DATABASE_URL:?OWNER_DATABASE_URL is not set (staging-owner.env)}" && scripts/ops/db-environment.sh assert staging && exec node_modules/.bin/prisma migrate deploy',
+        'export DATABASE_URL="$${OWNER_DATABASE_URL:?OWNER_DATABASE_URL is not set (staging-owner.env)}" && scripts/ops/db-environment.sh assert staging && node_modules/.bin/prisma migrate deploy && REHASH_DATABASE_URL="$$DATABASE_URL" exec scripts/ops/rehash-session-tokens.sh',
+      ]
+
+  # Run once more after `up -d app worker scheduler`: sessions the previous release created
+  # while the switch was in progress are hashed too (Pass 41; SESSION_TOKENS.md).
+  rehash-sessions:
+    <<: *owner-env
+    image: ${FLEXIBX_REGISTRY:-flexibx}/ops:${FLEXIBX_TAG:?set FLEXIBX_TAG to the release tag being deployed}
+    profiles: [jobs]
+    entrypoint: ["bash", "-c"]
+    command:
+      [
+        'export DATABASE_URL="$${OWNER_DATABASE_URL:?OWNER_DATABASE_URL is not set (staging-owner.env)}" && scripts/ops/db-environment.sh assert staging && REHASH_DATABASE_URL="$$DATABASE_URL" exec scripts/ops/rehash-session-tokens.sh',
       ]
 
   check:

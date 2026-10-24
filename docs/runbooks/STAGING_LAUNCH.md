@@ -99,16 +99,21 @@ digests. ECR scans again on push.
 2. The database's logins (`docs/runbooks/DATABASE_ROLES.md` § 2, with the RDS-managed master
    secret): owner, runtime and grant. Write `staging-owner.env` (`OWNER_DATABASE_URL` = the
    owner login, mode 600) from the owner credential's own secret — never the app's env
-   secret (R-4). Compose gives it only to `migrate`, `backup` and `check`
+   secret (R-4). Compose gives it only to `migrate`, `backup`, `check` and `rehash-sessions`
    (`scripts/staging/check-compose-credentials.sh`, CI): the runtime login cannot migrate,
    dump or read `_prisma_migrations` (Pass 37, reproduced).
 3. Mark the database once (owner login):
    `scripts/ops/db-environment.sh mark staging --confirm-database <name>`.
-4. `docker compose run --rm migrate` (as the owner login; refuses an unmarked database).
+4. `docker compose run --rm migrate` (as the owner login; refuses an unmarked database;
+   ends by hashing any session token stored raw — `rehash-session-tokens.sh`, Pass 41).
 5. Apply `scripts/ops/sql/db-roles.sql` (owner login) — **after** the migration, and again
    after every later one. On an empty database it fails (it needs `users`): Pass 37 ran it
    there and got exit 3; after `migrate` it passed.
-6. `docker compose up -d app worker scheduler` (runtime login).
+6. `docker compose up -d app worker scheduler` (runtime login), then
+   `docker compose run --rm rehash-sessions` — **mandatory** whenever the previous release
+   stored raw session tokens (any release before Pass 39, and every roll-forward after a
+   rollback to one): it hashes the sessions written while the switch was in progress
+   (`SESSION_TOKENS.md`). Prints counts only.
 7. `docker compose run --rm check` — must print `STAGING CHECK PASSED` with 0 fail and
    0 not run, including `alert_destination` (a real test alert reached the destination).
 

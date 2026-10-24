@@ -1,4 +1,4 @@
-# Session tokens at rest — deploy, rollback, roll-forward (Pass 40)
+# Session tokens at rest — deploy, rollback, roll-forward (Pass 40, updated Pass 41)
 
 Code: `src/server/auth/session-token-hash.ts` (Pass 39). Migration:
 `prisma/migrations/20261023120000_hash_session_tokens/migration.sql`. The browser cookie
@@ -7,9 +7,12 @@ still carries the raw token (signed with `AUTH_SECRET`); `sessions.token` holds
 
 ## 1. Deploy (forward)
 
-The release's `migrate` job applies the migration with the rest. It hashes every row not
-yet prefixed, in one transaction; users stay signed in. No mass revocation is needed or
-performed. Watch sign-in errors and `SELECT count(*) FROM sessions` for an hour.
+The release's `migrate` job applies the migration (hashing every row not yet prefixed, in
+one transaction) and then runs `scripts/ops/rehash-session-tokens.sh`. After
+`up -d app worker scheduler`, run `docker compose run --rm rehash-sessions` once
+(**mandatory**): the previous release keeps serving until the switch and writes raw tokens
+meanwhile; without it, only those users would be signed out. No mass revocation is needed
+or performed. Watch sign-in errors and `SELECT count(*) FROM sessions` for an hour.
 
 Production: this behaviour change needs **its own owner approval** (it is not implied by an
 approval to deploy staging).
@@ -26,21 +29,27 @@ Redeploy the previous image tag (`up -d`); do not touch the database.
 
 No data is lost. There is no reverse migration: hashes cannot be turned back into tokens.
 
-## 3. Roll forward again after a rollback
+## 3. Roll forward again after a rollback (mandatory step)
 
 Sessions from before the rollback work again (their rows stayed). Sessions created
-**during** the rollback were stored raw and are not found until the hashing statement runs
-again — Prisma will not re-run an applied migration. Run it once, as the owner login, from
-the ops image of the release (idempotent; verified Pass 40 against a scratch database: a raw
-row was hashed, a second run changed nothing):
+**during** the rollback were stored raw; Prisma will not re-run the applied migration, so
+they are found only after the rehash. The same two steps as § 1 do it: `migrate` (ends with
+the rehash) and, after `up -d`, `docker compose run --rm rehash-sessions`.
 
-```bash
-docker compose -f deploy/staging/compose.yaml --profile jobs run --rm --entrypoint bash migrate -c \
-  'psql "$OWNER_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 \
-     -f prisma/migrations/20261023120000_hash_session_tokens/migration.sql'
-```
+`scripts/ops/rehash-session-tokens.sh` (Pass 41): owner login from `REHASH_DATABASE_URL`
+(never on a command line, `lib/pgenv.sh`); asserts nothing itself — the Compose job asserts
+the staging marker first; changes only `sessions.token` of rows not yet prefixed; prints
+`{"status":"OK","rehashed":N,"sessions":M}` and never a token or the URL. Tested in
+`tests/integration/session-rehash-script.test.ts` (sessions from both releases; every
+other column, users and accounts unchanged; second run rehashes 0; unreachable database
+fails without printing the password; two mutants caught).
 
-Skipping it only signs out the users who signed in during the rollback window.
+| Situation                                 | Users keep their session?                          |
+| ----------------------------------------- | -------------------------------------------------- |
+| Forward deploy with both steps            | Yes                                                |
+| Forward deploy, `rehash-sessions` skipped | All but those who signed in during the switch      |
+| Rollback to a pre-Pass-39 release         | **No** — everyone signs in again once              |
+| Roll-forward after a rollback, both steps | Yes (sessions from before and during the rollback) |
 
 ## 4. Emergency: sign everyone out
 

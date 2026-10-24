@@ -408,8 +408,27 @@ describe("ops database scripts keep the URL off the command line", () => {
     expect(leftovers()).toEqual([]);
   });
 
+  // Pass 41: the session-token rehash (roll-forward after a rollback).
+  it("rehash-session-tokens.sh: no URL or password on a command line or in the output", async () => {
+    const result = await run("rehash-session-tokens.sh", [], {
+      REHASH_DATABASE_URL: URL_WITH_PASSWORD,
+    });
+    expect(result.code).toBe(0);
+    expectNoSecretAnywhere(result);
+    const psql = calls().filter((call) => call.tool === "psql");
+    expect(psql).toHaveLength(1);
+    expect(psql[0]?.env).toMatchObject({ PGHOST: "db.internal", PGDATABASE: "flexibx_prod" });
+    expect(leftovers()).toEqual([]);
+  });
+
   it("no ops script passes a connection URL as an argument", () => {
-    for (const name of ["db-backup.sh", "db-restore.sh", "db-verify.sh", "db-schema-objects.sh"]) {
+    for (const name of [
+      "db-backup.sh",
+      "db-restore.sh",
+      "db-verify.sh",
+      "db-schema-objects.sh",
+      "rehash-session-tokens.sh",
+    ]) {
       const source = readFileSync(script(name), "utf8")
         .split("\n")
         .filter((line) => !line.trimStart().startsWith("#"))
