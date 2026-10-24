@@ -24,6 +24,18 @@ export function totp(key: string, offsetSteps = 0): string {
   const value = (hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
   return value.toString().padStart(6, "0");
 }
+/**
+ * The previous step's code, for enrollment (the current code stays unused for a later
+ * step). Computed at least 3 s before a step boundary: crossing one between computing and
+ * verifying would make it two steps old, outside the server's ±1 window ("Invalid code",
+ * seen once in the Pass 41 gates).
+ */
+export async function previousStepCode(key: string): Promise<string> {
+  const left = 30_000 - (Date.now() % 30_000);
+  if (left < 3_000) await new Promise((resolve) => setTimeout(resolve, left + 100));
+  return totp(key, -1);
+}
+
 /** A valid code that is certainly not the current one (and not accepted in the window). */
 export const wrongCode = (key: string) => {
   const valid = new Set([totp(key, -1), totp(key), totp(key, 1)]);

@@ -20,7 +20,7 @@ import {
   repositoryRoot,
   type RoleDatabase,
 } from "./support/role-database";
-import { totp } from "./totp";
+import { previousStepCode, totp } from "./totp";
 
 const run = promisify(execFile);
 const SECRET = "mfa-reset-role-test-auth-secret-0123456789abcdef";
@@ -66,7 +66,7 @@ async function enrolledAccount() {
   });
   if (!("totpURI" in enabled)) throw new Error("no TOTP");
   const key = new URL(enabled.totpURI).searchParams.get("secret") ?? "";
-  await test.auth.api.verifyTOTP({ body: { code: totp(key, -1) }, headers });
+  await test.auth.api.verifyTOTP({ body: { code: await previousStepCode(key) }, headers });
   // A second, independent session (another device).
   await rdb()
     .db("app")

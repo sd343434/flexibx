@@ -15,7 +15,7 @@ import { claimTotpCode } from "@/server/auth/totp-replay";
 import { createTestAuth } from "./auth-harness";
 import { createTestDb, resetDatabase } from "./helpers";
 import { resolveTestDatabaseUrl } from "./test-database";
-import { totp, wrongCode } from "./totp";
+import { previousStepCode, totp, wrongCode } from "./totp";
 
 const { system } = createTestDb();
 const SECRET = "admin-grant-test-auth-secret-0123456789abcdef";
@@ -56,7 +56,7 @@ async function account(options: { enroll?: boolean } = {}) {
   });
   if (!("totpURI" in enabled)) throw new Error("no TOTP");
   const key = new URL(enabled.totpURI).searchParams.get("secret") ?? "";
-  await test.auth.api.verifyTOTP({ body: { code: totp(key, -1) }, headers });
+  await test.auth.api.verifyTOTP({ body: { code: await previousStepCode(key) }, headers });
   return { id: user.id, email, key };
 }
 

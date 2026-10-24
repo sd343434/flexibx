@@ -21,7 +21,7 @@ import { createPrismaClient } from "@/server/db/prisma";
 
 import { createTestAuth } from "./auth-harness";
 import { resolveTestDatabaseUrl } from "./test-database";
-import { totp, wrongCode } from "./totp";
+import { previousStepCode, totp, wrongCode } from "./totp";
 
 const run = promisify(execFile);
 const root = join(import.meta.dirname, "../..");
@@ -192,7 +192,7 @@ async function enrolledAccount() {
   const key = new URL(enabled.totpURI).searchParams.get("secret") ?? "";
   // Enrollment replaces the session: keep the new cookie.
   const confirmed = await test.auth.api.verifyTOTP({
-    body: { code: totp(key, -1) },
+    body: { code: await previousStepCode(key) },
     headers,
     asResponse: true,
   });
