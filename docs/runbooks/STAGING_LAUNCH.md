@@ -113,7 +113,9 @@ digests. ECR scans again on push.
    `docker compose run --rm rehash-sessions` — **mandatory** whenever the previous release
    stored raw session tokens (any release before Pass 39, and every roll-forward after a
    rollback to one): it hashes the sessions written while the switch was in progress
-   (`SESSION_TOKENS.md`). Prints counts only.
+   (`SESSION_TOKENS.md`). Prints counts only. From Pass 42 the worker starts only once
+   the isolated media runner `media` is healthy (Compose starts it first; FFmpeg runs only
+   there, without credentials or network — `MEDIA_ISOLATION.md`).
 7. `docker compose run --rm check` — must print `STAGING CHECK PASSED` with 0 fail and
    0 not run, including `alert_destination` (a real test alert reached the destination).
 
@@ -149,7 +151,9 @@ Until A1–A10 hold, staging is "deployed", not "accepted".
 ## 8. Rollback
 
 - **Application:** `FLEXIBX_TAG=<previous sha> docker compose up -d app worker scheduler`
-  (no database change; migrations are backward-compatible, DEPLOYMENT.md § 4).
+  (no database change; migrations are backward-compatible, DEPLOYMENT.md § 4). Rolling back
+  past Pass 42 also needs `--remove-orphans` with the previous Compose file (stops `media`;
+  that worker runs FFmpeg next to its credentials again — the pre-Pass-42 exposure).
 - **Failed migration:** restore the pre-deploy backup into a new database, mark it, point
   `DATABASE_URL` at it (SERVICE_RESTORE.md); never restore over the live database.
 - **Whole environment (first launch only, no data to keep):** `terraform destroy` after

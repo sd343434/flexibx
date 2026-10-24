@@ -435,6 +435,13 @@ describe("duplicates, limits and the worker", () => {
       where: { name: "creator-worker" },
     });
     expect(beat.failedPhases).toContain("media_runner");
+    const down = await collectOpsStatus(system, new Date());
+    const named = (name: string) => down.checks.find((entry) => entry.name === name);
+    expect(named("creator_worker_media_runner_down")).toMatchObject({
+      value: 1,
+      level: "critical",
+    });
+    expect(named("creator_worker_cleanup_failed")).toMatchObject({ value: 0, level: "ok" });
     ready = true;
     for (let i = 0; i < 300; i += 1) {
       const job = await system.creatorJob.findFirstOrThrow({ where: { kind: "ANALYZE" } });

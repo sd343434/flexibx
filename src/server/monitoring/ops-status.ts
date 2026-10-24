@@ -170,7 +170,10 @@ function creatorWorkerChecks(
   const stale = age === null || age >= CREATOR_WORKER_STALE_SECONDS;
   const phases = stale ? [] : (heartbeat?.failedPhases ?? []);
   const diskLow = phases.includes("disk_low") ? 1 : 0;
-  const cleanupFailed = phases.filter((phase) => phase !== "disk_low").length;
+  const runnerDown = phases.includes("media_runner") ? 1 : 0;
+  const cleanupFailed = phases.filter(
+    (phase) => phase !== "disk_low" && phase !== "media_runner",
+  ).length;
   return [
     {
       name: "creator_worker_last_seen_age_seconds",
@@ -180,6 +183,8 @@ function creatorWorkerChecks(
     },
     // Less scratch space than the largest job needs: jobs fail with worker_disk_full.
     count("creator_worker_disk_low", diskLow, 1, "critical"),
+    // Pass 42: the isolated media runner did not answer; the worker claims no job meanwhile.
+    count("creator_worker_media_runner_down", runnerDown, 1, "critical"),
     // Upload expiry or the storage-deletion sweep failed in the worker's last period.
     count("creator_worker_cleanup_failed", cleanupFailed, 1, "warning"),
   ];

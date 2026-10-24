@@ -69,6 +69,7 @@ export const REQUIRED_OPS_CHECKS = [
   "automation_tick_last_run_failed",
   "alert_delivery_failed",
   "creator_worker_disk_low",
+  "creator_worker_media_runner_down",
   "creator_worker_cleanup_failed",
   "creator_jobs_lease_expired",
   "creator_jobs_past_deadline",

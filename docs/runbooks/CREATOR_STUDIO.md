@@ -391,6 +391,7 @@ never names, ids, keys or text:
 | `creator_storage_deletions_overdue`     | warning                                                                                          |
 | `creator_storage_deletions_failing`     | critical                                                                                         |
 | `creator_worker_disk_low`               | critical: the latest heartbeat reports less free scratch space than the largest job needs        |
+| `creator_worker_media_runner_down`      | critical: the isolated media runner did not answer; no job is claimed (`MEDIA_ISOLATION.md`)     |
 | `creator_worker_cleanup_failed`         | warning: upload expiry or the deletion sweep failed since the previous heartbeat                 |
 | `creator_worker_disk_full_24h`          | warning: steps failed with `worker_disk_full` in the last day                                    |
 | `creator_project_deletions_stuck`       | warning: a deleted project whose files are not all removed after a day                           |
