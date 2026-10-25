@@ -12,7 +12,7 @@
     "dev": "next dev",
     "build": "next build && node scripts/prepare-standalone.mjs",
     "start": "node .next/standalone/server.js",
-    "lint": "next typegen && eslint . --max-warnings=0",
+    "lint": "next typegen && NODE_OPTIONS=--max-old-space-size=4096 eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "next typegen && tsc --noEmit",
@@ -60,6 +60,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "server-only": "0.0.1",
+    "stripe": "23.0.0",
     "tailwind-merge": "3.7.0",
     "zod": "4.6.7"
   },

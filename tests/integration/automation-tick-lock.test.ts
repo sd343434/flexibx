@@ -24,7 +24,14 @@ beforeEach(async () => {
   await resetDatabase(system);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Always release what a test held, even when one of its assertions failed first: a held
+  // gate keeps its tick inside the lock's transaction (up to TICK_LOCK_TIMEOUT_MS), which
+  // would fail every later test of this file on a lock nobody is still checking.
+  for (const open of openGates) open();
+  openGates.clear();
+  await Promise.allSettled(inFlight);
+  inFlight.length = 0;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -59,22 +66,39 @@ function phases(options: { hold?: Promise<void>; onOrchestration?: () => void } 
   return { calls, set };
 }
 
+/** Gates not yet opened, and ticks or lock holders still running: released in afterEach. */
+const openGates = new Set<() => void>();
+const inFlight: Promise<unknown>[] = [];
+
+/** Registers work a test started and may not await (a failed assertion skips the await). */
+function track<T>(promise: Promise<T>): Promise<T> {
+  inFlight.push(promise);
+  return promise;
+}
+
 function gate() {
   let release: (() => void) | undefined;
   const promise = new Promise<void>((resolve) => {
     release = resolve;
   });
-  return {
-    promise,
-    open: () => {
-      release?.();
-    },
+  const open = () => {
+    release?.();
+    openGates.delete(open);
   };
+  openGates.add(open);
+  return { promise, open };
 }
+
+/**
+ * How long a test waits for a tick to take the lock. The lock's transaction may wait up to
+ * 10 s for a connection (`maxWait` in tickLock), so a shorter wait can fail on a slow but
+ * correct start — e.g. late in the full integration suite. Still well inside the 30 s tests.
+ */
+const LOCK_WAIT_MS = 12_000;
 
 /** Waits until the tick's advisory lock is held by some session. */
 async function lockHeld(): Promise<number | null> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < LOCK_WAIT_MS / 20; attempt += 1) {
     const rows = await system.$queryRaw<{ pid: number }[]>`
       SELECT pid FROM pg_locks
       WHERE locktype = 'advisory' AND objid = ${TICK_LOCK_KEY}::oid AND granted`;
@@ -97,7 +121,7 @@ describe("tick single flight", () => {
   it("a tick that finds another running is skipped: no phase runs, no heartbeat", async () => {
     const hold = gate();
     const first = phases({ hold: hold.promise });
-    const running = runScheduledAutomationTick(() => NOW, first.set);
+    const running = track(runScheduledAutomationTick(() => NOW, first.set));
     expect(await lockHeld()).not.toBeNull();
 
     const second = phases();
@@ -147,7 +171,7 @@ describe("tick single flight", () => {
   it("a lock whose session dies is released at once (crash safety)", async () => {
     const hold = gate();
     const lock = tickLock();
-    const holder = lock(() => hold.promise).catch((error: unknown) => error);
+    const holder = track(lock(() => hold.promise).catch((error: unknown) => error));
     const pid = await lockHeld();
     expect(pid).not.toBeNull();
     // The process holding the lock "dies": its database session is terminated.
@@ -291,9 +315,8 @@ describe("tick time budget", () => {
     });
 
     const hold = gate();
-    const running = runtime.runScheduledAutomationTick(
-      () => NOW,
-      phases({ hold: hold.promise }).set,
+    const running = track(
+      runtime.runScheduledAutomationTick(() => NOW, phases({ hold: hold.promise }).set),
     );
     expect(await lockHeld()).not.toBeNull();
     const later = new Date(NOW.getTime() + 600_000);

@@ -121,6 +121,14 @@ export const AUDIT_ACTIONS = [
   "billing.credits_added",
   "billing.plan_changed",
   "billing.auto_recharge",
+  // Card payments for credits (Stripe test mode): a checkout started by an owner; a
+  // verified payment credited, held for review, refunded or disputed (system, no actor).
+  // Metadata: package, credits, amounts in minor units, reasons — never card data.
+  "billing.checkout_started",
+  "billing.payment_credited",
+  "billing.payment_review",
+  "billing.payment_refunded",
+  "billing.payment_disputed",
   // AI Social Manager: agents, channels, replies and what the agents learned.
   "social.agent_saved",
   "social.agent_activated",

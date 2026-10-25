@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   collectReviewInput,
@@ -35,6 +35,10 @@ import type {
   ReviewInput,
 } from "../../scripts/ai-review/types";
 import { serializePhaseStatus, type PhaseStatus } from "../../scripts/phase-status/schema";
+
+// Most tests build real git repositories and run many git processes; on a cold machine
+// (e.g. right after a container restore) that exceeds the unit project's default 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 

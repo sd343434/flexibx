@@ -161,6 +161,8 @@ model Workspace {
   creditHolds             CreditHold[]
   creditLedgerEntries     CreditLedgerEntry[]
   creditRecharges         CreditRecharge[]
+  paymentIntents          PaymentIntent[]
+  paymentEvents           PaymentEvent[]
   socialChannels          SocialChannel[]
   socialAgents            SocialAgent[]
   socialInteractions      SocialInteraction[]
@@ -1936,6 +1938,96 @@ model CreditRecharge {
   @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, createdAt])
   @@map("credit_recharges")
+}
+
+// ── Card payments for credits (Stripe Checkout, test mode only) ───────────────────
+// docs/runbooks/STRIPE_SANDBOX.md. These rows mirror what Flexibx asked the provider for
+// and which provider events it processed; they never prove money moved (the provider is
+// the financial truth). Credits are granted only from a verified provider event.
+
+enum PaymentIntentStatus {
+  /// Saved before the provider is called (no checkout exists yet).
+  CREATED
+  /// Checkout created; waiting for the customer.
+  OPEN
+  /// Checkout completed, payment not settled yet (delayed payment methods).
+  PROCESSING
+  /// Verified payment: credits granted (once).
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  /// A verified event did not match this intent (amount, currency, workspace, package):
+  /// no credit; resolved by hand.
+  NEEDS_REVIEW
+
+  @@map("payment_intent_status")
+}
+
+/// One purchase attempt of a credit package. Amount, currency, credits and package are
+/// fixed by the server when it is created and never change (database trigger).
+model PaymentIntent {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String              @map("workspace_id") @db.Uuid
+  /// Who started the checkout.
+  userId             String?             @map("user_id") @db.Uuid
+  provider           String              @db.VarChar(20)
+  /// Server-side catalog id (src/server/billing/packages.ts).
+  packageId          String              @map("package_id") @db.VarChar(40)
+  credits            Int
+  /// Integer minor units (cents) in `currency` (lower case ISO 4217, "usd").
+  amountMinor        Int                 @map("amount_minor")
+  currency           String              @db.VarChar(3)
+  /// One intent per purchase request; also sent to the provider as its idempotency key.
+  idempotencyKey     String              @unique @map("idempotency_key") @db.VarChar(120)
+  /// The provider's checkout session id (cs_test_…) and payment id (pi_…).
+  providerCheckoutId String?             @unique @map("provider_checkout_id") @db.VarChar(255)
+  providerPaymentId  String?             @unique @map("provider_payment_id") @db.VarChar(255)
+  status             PaymentIntentStatus @default(CREATED)
+  /// Short machine reason of FAILED / NEEDS_REVIEW (never provider text with card data).
+  failureCode        String?             @map("failure_code") @db.VarChar(80)
+  creditedAt         DateTime?           @map("credited_at") @db.Timestamptz(3)
+  /// Refunded so far (minor units) and the credits taken back for it.
+  refundedMinor      Int                 @default(0) @map("refunded_minor")
+  creditsRemoved     Int                 @default(0) @map("credits_removed")
+  /// Credits that should have been taken back but were already spent (owner policy).
+  refundShortfall    Int                 @default(0) @map("refund_shortfall")
+  /// null, OPEN, WON or LOST: an OPEN dispute blocks new checkouts for the workspace.
+  disputeStatus      String?             @map("dispute_status") @db.VarChar(10)
+  expiresAt          DateTime?           @map("expires_at") @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  events    PaymentEvent[]
+
+  @@index([workspaceId, createdAt])
+  @@index([status, createdAt])
+  @@map("payment_intents")
+}
+
+/// Every verified provider event, once (unique provider event id); never edited.
+model PaymentEvent {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        String   @db.VarChar(20)
+  providerEventId String   @map("provider_event_id") @db.VarChar(255)
+  type            String   @db.VarChar(80)
+  /// null when the event matched no intent of ours.
+  workspaceId     String?  @map("workspace_id") @db.Uuid
+  paymentIntentId String?  @map("payment_intent_id") @db.Uuid
+  livemode        Boolean
+  /// SHA-256 of the raw body as received (the body itself is not stored).
+  payloadSha256   String   @map("payload_sha256") @db.VarChar(64)
+  /// What processing did: credited, duplicate_payment, mismatch, ignored, …
+  outcome         String   @db.VarChar(40)
+  receivedAt      DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  workspace     Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  paymentIntent PaymentIntent? @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerEventId])
+  @@index([paymentIntentId])
+  @@index([workspaceId, receivedAt])
+  @@map("payment_events")
 }
 
 // ── AI Social Manager ─────────────────────────────────────────────────────────────

@@ -164,6 +164,11 @@ export interface TickPhases {
   insights?(
     shouldStop?: ShouldStop,
   ): Promise<{ readonly started: number; readonly failed: number }>;
+  /**
+   * Card checkouts left open (webhook lost): their status is looked up at the provider and
+   * applied exactly like the webhook would (absent or not configured: nothing to do).
+   */
+  payments?(now: Date): Promise<{ readonly checked: number; readonly credited: number }>;
 }
 
 /**
@@ -214,6 +219,15 @@ export const DEFAULT_TICK_PHASES: TickPhases = {
       getSystemDb(),
       shouldStop === undefined ? {} : { shouldStop },
     );
+  },
+  // Stripe test-mode checkouts whose webhook never arrived (STRIPE_SANDBOX.md): nothing
+  // when card payments are not configured; an invalid configuration fails the phase.
+  payments: async (now) => {
+    const { getCheckoutProvider } = await import("../billing/checkout-runtime");
+    const provider = getCheckoutProvider();
+    if (provider === null) return { checked: 0, credited: 0 };
+    const { reconcileOpenCheckouts } = await import("../billing/checkout-service");
+    return reconcileOpenCheckouts(getDb(), provider, creditsSettingsFromEnv(), now);
   },
 };
 
@@ -482,6 +496,16 @@ async function runTickPhases(
           noSyncs,
           (shouldStop) => phases.insights?.(shouldStop) ?? Promise.resolve(noSyncs),
         );
+  if (phases.payments !== undefined) {
+    const reconciled = await phase(
+      "payments",
+      { checked: 0, credited: 0 },
+      () => phases.payments?.(now()) ?? Promise.resolve({ checked: 0, credited: 0 }),
+    );
+    if (reconciled.checked > 0) {
+      logger.info({ event: "payments.reconciled", ...reconciled }, "Open card checkouts checked");
+    }
+  }
   const runs: Record<string, number> = {};
   for (const outcome of summary.executed) {
     const key =

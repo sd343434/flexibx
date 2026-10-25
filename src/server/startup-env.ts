@@ -5,6 +5,7 @@ import {
   parseAuthEnv,
   parseAutomationEnv,
   parseBillingEnv,
+  parsePaymentsEnv,
   parseMailEnv,
   parseMonitoringEnv,
   parseServerEnv,
@@ -40,6 +41,7 @@ const GROUPS: readonly (readonly [string, (source: EnvSource) => unknown])[] = [
   ["video retention", parseVideoRetentionEnv],
   ["ads", parseAdsEnv],
   ["billing", parseBillingEnv],
+  ["payments", parsePaymentsEnv],
   ["automation", parseAutomationEnv],
   ["monitoring", parseMonitoringEnv],
 ];

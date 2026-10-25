@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { DEFAULT_LOCALE, isLocale } from "@/i18n/config";
-import { updateCreditSettingsAction } from "@/server/billing/billing-actions";
+import { startCheckoutAction, updateCreditSettingsAction } from "@/server/billing/billing-actions";
 import { CREDIT_FEATURES } from "@/server/billing/pricing";
 
 import type { MarketingFormState } from "../marketing-actions";
@@ -43,4 +44,27 @@ export async function submitCreditSettings(
     `/${isLocale(locale) ? locale : DEFAULT_LOCALE}/w/${encodeURIComponent(slug)}/billing`,
   );
   return { done: true, at: Date.now() };
+}
+
+/**
+ * Opens the card payment page for one credit package (owners). Only the package id and the
+ * form's one-time request key go to the server; on success the browser is sent to the
+ * provider's hosted page, otherwise back here with the reason.
+ */
+export async function submitCheckout(
+  slug: string,
+  locale: string,
+  packageId: string,
+  requestKey: string,
+): Promise<void> {
+  const safeLocale = isLocale(locale) ? locale : DEFAULT_LOCALE;
+  const result = await startCheckoutAction({ slug, locale: safeLocale, packageId, requestKey });
+  if (!result.ok) {
+    const reason = result.error.fields?.[0]?.code ?? "payments_checkout_failed";
+    redirect(
+      `/${safeLocale}/w/${encodeURIComponent(slug)}/billing?checkout=error&reason=${encodeURIComponent(reason)}`,
+    );
+  }
+  // The provider's hosted page (checked to be https on stripe.com by the adapter).
+  redirect(result.data.redirectUrl);
 }

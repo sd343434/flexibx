@@ -98,6 +98,13 @@ export const VALIDATION_CODES = [
   "credits_amount_invalid",
   "credits_plan_unknown",
   "credits_payment_unavailable",
+  // Card payments for credits.
+  "payments_not_configured",
+  "payments_package_unknown",
+  "payments_dispute_open",
+  "payments_checkout_failed",
+  "payments_already_completed",
+  "payments_request_conflict",
   "ads_not_configured",
   "ads_not_connected",
   "ads_oauth_invalid",

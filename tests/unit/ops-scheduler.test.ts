@@ -8,7 +8,10 @@ import type { AddressInfo } from "node:net";
 import type { Readable } from "node:stream";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Each test starts the real script (`node --import tsx`), which may wait up to RUN_DEADLINE_MS.
+vi.setConfig({ testTimeout: 40_000 });
 
 const ROOT = join(import.meta.dirname, "../..");
 const SCRIPT = join(ROOT, "scripts/ops/scheduler.ts");
@@ -33,7 +36,17 @@ async function app(status = 200) {
   return { url: `http://127.0.0.1:${String(port)}`, calls };
 }
 
-function run(env: Record<string, string>, stopAfterMs = 1500) {
+/** Upper bound for one scheduler run; a cold `node --import tsx` start can take seconds. */
+const RUN_DEADLINE_MS = 30_000;
+/** After the expected output appears, how long to keep running (catches extra calls). */
+const SETTLE_MS = 500;
+
+/**
+ * Runs the scheduler until its output shows `done` (then SETTLE_MS more, then SIGTERM),
+ * until it exits by itself, or until RUN_DEADLINE_MS — not for a fixed time, which a slow
+ * start can use up before the first call is made.
+ */
+function run(env: Record<string, string>, done: (out: string) => boolean = () => false) {
   return new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
     const child: ChildProcessByStdio<null, Readable, Readable> = spawn(
       process.execPath,
@@ -46,11 +59,18 @@ function run(env: Record<string, string>, stopAfterMs = 1500) {
     );
     let out = "";
     let err = "";
-    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    let settle: NodeJS.Timeout | undefined;
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+      if (settle === undefined && done(out)) {
+        settle = setTimeout(() => child.kill("SIGTERM"), SETTLE_MS);
+      }
+    });
     child.stderr.on("data", (chunk: Buffer) => (err += chunk.toString()));
-    const timer = setTimeout(() => child.kill("SIGTERM"), stopAfterMs);
+    const deadline = setTimeout(() => child.kill("SIGTERM"), RUN_DEADLINE_MS);
     child.on("close", (code) => {
-      clearTimeout(timer);
+      clearTimeout(deadline);
+      clearTimeout(settle);
       resolve({ code, out, err });
     });
   });
@@ -59,11 +79,14 @@ function run(env: Record<string, string>, stopAfterMs = 1500) {
 describe("ops scheduler", () => {
   it("calls the tick and the retention endpoints with their own secrets, then stops on SIGTERM", async () => {
     const { url, calls } = await app();
-    const result = await run({
-      SCHEDULER_APP_URL: url,
-      AUTOMATION_CRON_SECRET: TICK_SECRET,
-      VIDEO_RETENTION_CRON_SECRET: RETENTION_SECRET,
-    });
+    const result = await run(
+      {
+        SCHEDULER_APP_URL: url,
+        AUTOMATION_CRON_SECRET: TICK_SECRET,
+        VIDEO_RETENTION_CRON_SECRET: RETENTION_SECRET,
+      },
+      (out) => out.split('"status":200').length - 1 >= 2,
+    );
     expect(calls).toEqual(
       expect.arrayContaining([
         { path: "/api/internal/automation-tick", method: "POST", auth: `Bearer ${TICK_SECRET}` },
@@ -89,7 +112,10 @@ describe("ops scheduler", () => {
 
   it("skips an endpoint whose secret is not set, and logs a refused call as a warning", async () => {
     const { url, calls } = await app(404);
-    const result = await run({ SCHEDULER_APP_URL: url, AUTOMATION_CRON_SECRET: TICK_SECRET });
+    const result = await run(
+      { SCHEDULER_APP_URL: url, AUTOMATION_CRON_SECRET: TICK_SECRET },
+      (out) => out.includes('"status":404'),
+    );
     expect(calls.map((call) => call.path)).toEqual(["/api/internal/automation-tick"]);
     expect(result.out).toContain('"msg":"secret not set: endpoint not scheduled"');
     expect(result.out).toContain(

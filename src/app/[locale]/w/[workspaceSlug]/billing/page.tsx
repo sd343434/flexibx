@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { getFormatter, getTranslations } from "next-intl/server";
 
 import { EntityForm, type FieldSpec } from "@/components/marketing/entity-form";
@@ -13,7 +15,10 @@ import { CREDIT_FEATURES } from "@/server/billing/pricing";
 
 import { guardPage, openWorkspacePage, type WorkspaceRouteParams } from "../page-data";
 
-import { submitCreditSettings } from "./actions";
+import { submitCheckout, submitCreditSettings } from "./actions";
+
+const one = (value: string | string[] | undefined) =>
+  typeof value === "string" ? value : undefined;
 
 /**
  * Credits: what the workspace has, what each AI task costs, what it used this period,
@@ -23,13 +28,18 @@ import { submitCreditSettings } from "./actions";
  */
 export default async function BillingRoute({
   params,
+  searchParams,
 }: {
   readonly params: Promise<WorkspaceRouteParams>;
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { locale, workspace } = await openWorkspacePage(params);
   const t = await getTranslations({ locale, namespace: "billing" });
+  const tv = await getTranslations({ locale, namespace: "validation" });
   const format = await getFormatter({ locale });
-  const data = await guardPage(getBillingPage(workspace.slug));
+  const query = await searchParams;
+  const checkoutState = one(query.checkout);
+  const data = await guardPage(getBillingPage(workspace.slug, one(query.intent)));
   if (data === null) return <ForbiddenNotice title={t("title")} message={t("forbidden")} />;
   const number = (value: number) => format.number(value);
   const date = (value: Date) => format.dateTime(value, { dateStyle: "medium" });
@@ -98,6 +108,25 @@ export default async function BillingRoute({
       <Notice testId="billing-provisional">{t("provisional")}</Notice>
       <Notice testId="billing-separation">{t("separation")}</Notice>
 
+      {checkoutState === "success" ? (
+        <Notice testId="checkout-return">
+          {data.checkout?.status === "SUCCEEDED"
+            ? t("buy.credited", { credits: number(data.checkout.credits) })
+            : t("buy.processing")}
+        </Notice>
+      ) : checkoutState === "cancelled" ? (
+        <Notice testId="checkout-return">{t("buy.cancelled")}</Notice>
+      ) : checkoutState === "error" ? (
+        <Notice testId="checkout-return">
+          {(() => {
+            const reason = one(query.reason) ?? "";
+            return /^payments_[a-z_]+$/.test(reason) && tv.has(reason as never)
+              ? tv(reason as "payments_checkout_failed")
+              : tv("payments_checkout_failed");
+          })()}
+        </Notice>
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-3" data-testid="billing-balance">
         <Card title={t("balance.available")}>
           <p className="text-3xl font-bold" data-testid="billing-available">
@@ -133,6 +162,43 @@ export default async function BillingRoute({
           </p>
         </Card>
       </div>
+
+      <Card title={t("buy.title")} testId="billing-buy">
+        <p className="text-sm text-muted-foreground">{t("buy.hint")}</p>
+        {!data.cardCheckout ? (
+          <p className="text-sm text-muted-foreground" data-testid="billing-buy-off">
+            {t("buy.unavailable")}
+          </p>
+        ) : !data.canManage ? (
+          <p className="text-sm text-muted-foreground">{t("buy.ownerOnly")}</p>
+        ) : (
+          <ul className="grid gap-2 sm:grid-cols-3">
+            {data.packages.map((pack) => (
+              <li key={pack.id} className="rounded-md border p-3 text-sm" data-package={pack.id}>
+                <p className="font-semibold">{t("prices.credits", { count: pack.credits })}</p>
+                <p className="text-muted-foreground" dir="ltr">
+                  {format.number(pack.amountMinor / 100, {
+                    style: "currency",
+                    currency: pack.currency.toUpperCase(),
+                  })}
+                </p>
+                <form
+                  action={submitCheckout.bind(null, workspace.slug, locale, pack.id, randomUUID())}
+                >
+                  <button
+                    type="submit"
+                    className="mt-2 rounded-md border px-3 py-1 text-sm font-medium"
+                    data-testid={`buy-${pack.id}`}
+                  >
+                    {t("buy.button")}
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-xs text-muted-foreground">{t("buy.testMode")}</p>
+      </Card>
 
       <Card title={t("prices.title")} testId="billing-prices">
         <p className="text-sm text-muted-foreground">{t("prices.hint")}</p>

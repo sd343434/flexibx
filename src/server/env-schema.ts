@@ -398,6 +398,86 @@ export function parseBillingEnv(source: EnvSource): BillingEnv {
 }
 
 /**
+ * Card payments for credits — Stripe Checkout, **test mode only** (STRIPE_SANDBOX.md).
+ * All three set = checkout on; none set = checkout off (credits are then added by a
+ * platform administrator). Anything in between, or anything that is not test mode, is a
+ * configuration error: the server refuses it instead of guessing.
+ * - STRIPE_MODE: must be `test`. `live` is refused until live payments are approved.
+ * - STRIPE_SECRET_KEY: a test secret or restricted key (`sk_test_…` / `rk_test_…`); a live
+ *   key (`sk_live_…`, `rk_live_…`) is refused.
+ * - STRIPE_WEBHOOK_SECRET: the signing secret of the test webhook endpoint (`whsec_…`).
+ * Values are never logged or shown; errors name the variable and the rule only.
+ */
+export const paymentsEnvSchema = z
+  .object({
+    STRIPE_MODE: optional(z.string().trim()),
+    STRIPE_SECRET_KEY: optional(z.string().trim()),
+    STRIPE_WEBHOOK_SECRET: optional(z.string().trim()),
+  })
+  .superRefine((env, ctx) => {
+    const set = [env.STRIPE_MODE, env.STRIPE_SECRET_KEY, env.STRIPE_WEBHOOK_SECRET].filter(
+      (value) => value !== undefined,
+    ).length;
+    if (set === 0) return;
+    if (set !== 3) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["STRIPE_MODE"],
+        message:
+          "STRIPE_MODE, STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together (or none)",
+      });
+      return;
+    }
+    if (env.STRIPE_MODE !== "test") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["STRIPE_MODE"],
+        message: "must be `test`: live payments are not enabled in this release",
+      });
+    }
+    const key = env.STRIPE_SECRET_KEY ?? "";
+    if (/^(sk|rk)_live_/.test(key)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["STRIPE_SECRET_KEY"],
+        message: "is a live key: only test keys (sk_test_ / rk_test_) are accepted",
+      });
+    } else if (!/^(sk|rk)_test_[A-Za-z0-9]{16,}$/.test(key)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["STRIPE_SECRET_KEY"],
+        message: "must be a Stripe test secret key (sk_test_… or rk_test_…)",
+      });
+    }
+    if (!/^whsec_[A-Za-z0-9+/=]{16,}$/.test(env.STRIPE_WEBHOOK_SECRET ?? "")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["STRIPE_WEBHOOK_SECRET"],
+        message: "must be a Stripe webhook signing secret (whsec_…)",
+      });
+    }
+  })
+  .transform((env) =>
+    env.STRIPE_SECRET_KEY === undefined || env.STRIPE_WEBHOOK_SECRET === undefined
+      ? { stripe: null }
+      : {
+          stripe: {
+            mode: "test" as const,
+            secretKey: env.STRIPE_SECRET_KEY,
+            webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+          },
+        },
+  );
+
+export type PaymentsEnv = z.infer<typeof paymentsEnvSchema>;
+
+export function parsePaymentsEnv(source: EnvSource): PaymentsEnv {
+  const result = paymentsEnvSchema.safeParse(source);
+  if (!result.success) throw new EnvValidationError("payments", result.error.issues);
+  return result.data;
+}
+
+/**
  * AI Marketing Manager scheduler.
  * - AUTOMATION_CRON_SECRET: bearer secret for POST /api/internal/automation-tick, the
  *   endpoint a scheduler calls every few minutes (≥ 32 characters). Unset = the endpoint

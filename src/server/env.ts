@@ -3,6 +3,7 @@ import "server-only";
 import {
   parseAdsEnv,
   parseBillingEnv,
+  parsePaymentsEnv,
   parseAiEnv,
   parseAuthEnv,
   parseServerEnv,
@@ -11,6 +12,7 @@ import {
   parseCreatorEnv,
   type AdsEnv,
   type BillingEnv,
+  type PaymentsEnv,
   type AiEnv,
   type AuthEnv,
   type ServerEnv,
@@ -30,6 +32,7 @@ let videoEnv: VideoEnv | undefined;
 let creatorEnv: CreatorEnv | undefined;
 let adsEnv: AdsEnv | undefined;
 let billingEnv: BillingEnv | undefined;
+let paymentsEnv: PaymentsEnv | undefined;
 
 export function getEnv(): ServerEnv {
   serverEnv ??= parseServerEnv(process.env);
@@ -76,4 +79,10 @@ export function getAdsEnv(): AdsEnv {
 export function getBillingEnv(): BillingEnv {
   billingEnv ??= parseBillingEnv(process.env);
   return billingEnv;
+}
+
+/** Card payment (Stripe, test mode only) settings, validated when checkout is first used. */
+export function getPaymentsEnv(): PaymentsEnv {
+  paymentsEnv ??= parsePaymentsEnv(process.env);
+  return paymentsEnv;
 }

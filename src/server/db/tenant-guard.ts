@@ -57,6 +57,10 @@ export const TENANT_MODELS = {
   CreditHold: { workspaceId: "required", appendOnly: false },
   CreditLedgerEntry: { workspaceId: "required", appendOnly: true },
   CreditRecharge: { workspaceId: "required", appendOnly: false },
+  // Card payments for credits (Stripe Checkout, test mode): the purchase mirror, and the
+  // verified provider events (null workspace when an event matched no intent of ours).
+  PaymentIntent: { workspaceId: "required", appendOnly: false },
+  PaymentEvent: { workspaceId: "nullable", appendOnly: true },
   // AI Social Manager.
   SocialChannel: { workspaceId: "required", appendOnly: false },
   SocialAgent: { workspaceId: "required", appendOnly: false },
@@ -142,6 +146,8 @@ export const TENANT_ROOT_RELATIONS = [
   "creditHolds",
   "creditLedgerEntries",
   "creditRecharges",
+  "paymentIntents",
+  "paymentEvents",
   "socialChannels",
   "socialAgents",
   "socialInteractions",
@@ -178,6 +184,7 @@ export const TENANT_ROOT_RELATIONS = [
  */
 export const APPEND_ONLY_RELATIONS: Readonly<Record<string, readonly string[]>> = {
   CreditHold: ["entries"],
+  PaymentIntent: ["events"],
   VideoGenerationJob: ["ledgerEntries"],
   AgentRun: ["approvals"],
   AgentTask: ["approvals", "approvedDecision"],
