@@ -75,7 +75,9 @@ jobs:
 
   integration:
     name: Integration, build, e2e
-    runs-on: ubuntu-latest
+    # Pinned to the release images' base (Ubuntu 24.04, FFmpeg 6.1.1): the media tests run
+    # against the FFmpeg the worker ships. ubuntu-latest (26.04, FFmpeg 8) differs.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
       postgres:

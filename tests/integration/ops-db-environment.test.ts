@@ -85,7 +85,9 @@ describe("database environment marker", () => {
     for (const args of [["show"], ["assert", "staging"], ["assert", "production"]]) {
       const { out } = run(...args);
       expect(out).not.toContain(url);
-      if (password !== "") expect(out).not.toContain(password);
+      // The database name is meant to be printed and may contain the password (CI uses
+      // flexibx / flexibx_test): look for the password everywhere else.
+      if (password !== "") expect(out.replaceAll(database, "")).not.toContain(password);
     }
   });
 });
